@@ -1,13 +1,269 @@
 {% extends "base.html" %}
 {% block title %}הוצאות קבועות - MakoletChain{% endblock %}
+{% block head %}
+<style>
+    .page-accent { color: #818cf8; }
+    .kpi-card--fixed .kpi-value { font-size: 2.2rem !important; }
+    .kpi-card--fixed { padding: 1.5rem 2rem !important; }
+    .table-card { background: var(--card,#1e293b); border: 1px solid var(--card-border,#334155); border-radius: var(--radius,12px); overflow: hidden; }
+    .table-header { display:flex; align-items:center; justify-content:space-between; padding:1.25rem 1.5rem; border-bottom:1px solid var(--card-border,#334155); }
+    .table-header h2 { font-size:1.15rem; font-weight:600; color:white; display:flex; align-items:center; gap:0.5rem; }
+    .add-form-card {
+        background: linear-gradient(135deg, #162032 0%, #1a1d35 100%);
+        border: 1px solid var(--card-border,#334155); border-radius: var(--radius,12px);
+        padding: 1.5rem 1.75rem; margin-bottom: 1.25rem; display: none;
+    }
+    .add-form-card.open { display: block; }
+    .add-form-card h3 { font-size:1.15rem; font-weight:700; color:white; margin:0 0 1.25rem 0; }
+    .form-row { display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .form-field { display:flex; flex-direction:column; gap:0.4rem; flex:1; min-width:180px; }
+    .form-field label { font-size:0.88rem; font-weight:600; color:#94a3b8; }
+    .form-field input,.form-field select { background:var(--bg,#0f172a); border:1px solid #475569; border-radius:8px; padding:0.6rem 0.85rem; color:white; font-size:1rem; font-family:inherit; }
+    .form-field input:focus,.form-field select:focus { outline:none; border-color:#818cf8; }
+    .toggle-section { margin-bottom:1.25rem; }
+    .toggle-section-label { font-size:0.88rem; font-weight:600; color:#94a3b8; display:block; margin-bottom:0.5rem; }
+    .toggle-row { display:flex; gap:8px; flex-wrap:wrap; }
+    .type-btn { font-size:1rem; font-weight:700; padding:0.65rem 1.25rem; border-radius:10px; cursor:pointer; font-family:inherit; background:rgba(255,255,255,0.04); border:2px solid #334155; color:#94a3b8; transition:all 0.2s; }
+    .type-btn.active-amount { background:rgba(129,140,248,0.15); border-color:rgba(129,140,248,0.5); color:#c7d2fe; }
+    .type-btn.active-percent { background:rgba(251,191,36,0.15); border-color:rgba(251,191,36,0.5); color:#fcd34d; }
+    .type-btn.active-monthly { background:rgba(96,165,250,0.15); border-color:rgba(96,165,250,0.5); color:#93c5fd; }
+    .type-btn.active-onetime { background:rgba(251,146,60,0.15); border-color:rgba(251,146,60,0.5); color:#fdba74; }
+    .fields-amount,.fields-percent { display:none; }
+    .fields-amount.open,.fields-percent.open { display:flex; }
+    .percent-preview { font-size:1rem; color:#86efac; font-weight:600; padding:0.6rem 0; min-height:1.5em; }
+    .form-actions { display:flex; gap:0.75rem; margin-top:0.5rem; }
+    .btn-save-form { font-size:1rem; font-weight:700; padding:0.6rem 1.5rem; background:rgba(129,140,248,0.2); border:1px solid rgba(129,140,248,0.5); border-radius:8px; color:#c7d2fe; cursor:pointer; font-family:inherit; }
+    .btn-save-form:hover { background:rgba(129,140,248,0.35); }
+    .btn-cancel-form { font-size:1rem; padding:0.6rem 1.25rem; background:none; border:1px solid #475569; border-radius:8px; color:#94a3b8; cursor:pointer; font-family:inherit; }
+    .btn-add-main { font-size:1rem; font-weight:700; padding:0.55rem 1.1rem; background:rgba(129,140,248,0.15); border:1px solid rgba(129,140,248,0.45); border-radius:8px; color:#c7d2fe; cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .btn-add-main:hover { background:rgba(129,140,248,0.28); }
+    .type-badge { display:inline-flex; align-items:center; gap:3px; font-size:0.72rem; font-weight:700; border-radius:5px; padding:2px 8px; white-space:nowrap; }
+    .type-badge--monthly { background:rgba(96,165,250,0.15); color:#93c5fd; }
+    .type-badge--onetime { background:rgba(251,146,60,0.15); color:#fdba74; }
+    .type-badge--percent { background:rgba(251,191,36,0.15); color:#fcd34d; }
+    .actions-cell { display:flex; gap:0.5rem; align-items:center; white-space:nowrap; }
+    .btn-icon { background:none; border:none; cursor:pointer; font-size:1.15rem; padding:0.4rem 0.5rem; border-radius:6px; color:#94a3b8; }
+    .btn-icon:hover { background:rgba(255,255,255,0.06); }
+    .btn-save-inline { font-size:0.88rem; font-weight:700; padding:0.4rem 0.75rem; background:rgba(129,140,248,0.15); border:1px solid rgba(129,140,248,0.4); border-radius:6px; color:#c7d2fe; cursor:pointer; font-family:inherit; }
+    .btn-cancel-inline { font-size:0.88rem; padding:0.4rem 0.6rem; background:none; border:1px solid #334155; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; }
+    .btn-delete-icon { background:none; border:none; cursor:pointer; padding:6px 8px; color:#ef4444; border-radius:6px; }
+    .btn-delete-icon:hover { background:rgba(239,68,68,0.15); }
+    .amount-input { width:120px; background:var(--bg,#0f172a); border:1px solid #818cf8; border-radius:6px; padding:0.4rem 0.6rem; color:white; font-size:1rem; font-family:inherit; text-align:left; direction:ltr; }
+    .saved-flash { font-size:0.85rem; color:#86efac; opacity:0; transition:opacity 0.3s; }
+    tfoot td { font-weight:700; font-size:1.05rem; color:#c7d2fe; background:#1a1d35 !important; border-top:2px solid rgba(129,140,248,0.3) !important; padding:14px 16px; }
+    @media (max-width:768px) {
+        .add-form-card { padding:1.25rem 1rem; }
+        .form-field { min-width:100%; }
+        .type-btn { font-size:0.92rem; padding:0.55rem 0.9rem; flex:1; justify-content:center; }
+        .hide-mobile { display:none !important; }
+        .data-table thead th,.data-table tbody td { padding:10px 8px; font-size:0.88rem; }
+        .btn-save-form { flex:1; min-height:44px; }
+        .btn-add-main { min-height:40px; }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<section class="card">
-    <h2 class="section-title">הוצאות קבועות</h2>
-    <div class="empty-state">
-        <div class="icon">🏠</div>
-        <h3>אין הוצאות קבועות עדיין</h3>
-        <p>הוסף הוצאות כמו שכירות, חשמל, ביטוח ועוד</p>
-    </div>
+
+<section class="cards-grid" id="kpi-section">
+    <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
 </section>
+
+<div class="add-form-card" id="add-form-card">
+    <h3>הוצאה חדשה</h3>
+    <div class="form-row">
+        <div class="form-field" style="flex:2">
+            <label for="new-name">שם ההוצאה</label>
+            <input id="new-name" type="text" placeholder="למשל: שכירות, ביטוח, ארנונה" maxlength="80">
+        </div>
+    </div>
+    <div class="toggle-section">
+        <span class="toggle-section-label">כמה?</span>
+        <div class="toggle-row">
+            <button type="button" id="amt-type-fixed" class="type-btn active-amount" onclick="setAmountType('fixed')">₪ סכום קבוע</button>
+            <button type="button" id="amt-type-percent" class="type-btn" onclick="setAmountType('percent')">% מהכנסות</button>
+        </div>
+    </div>
+    <div class="form-row fields-amount open" id="fields-amount">
+        <div class="form-field" style="max-width:220px">
+            <label for="new-amount">סכום (₪)</label>
+            <input id="new-amount" type="number" min="0" step="0.01" placeholder="0.00" style="direction:ltr">
+        </div>
+    </div>
+    <div class="form-row fields-percent" id="fields-percent">
+        <div class="form-field" style="max-width:140px">
+            <label for="new-pct-value">אחוז %</label>
+            <input id="new-pct-value" type="number" min="0" step="0.1" placeholder="5" style="direction:ltr" oninput="updatePreview()">
+        </div>
+        <div class="form-field" style="max-width:200px">
+            <label>&nbsp;</label>
+            <div class="percent-preview" id="percent-preview"></div>
+        </div>
+    </div>
+    <div class="toggle-section">
+        <span class="toggle-section-label">סוג</span>
+        <div class="toggle-row">
+            <button type="button" id="when-monthly" class="type-btn active-monthly" onclick="setWhenType('monthly')">חודשי</button>
+            <button type="button" id="when-onetime" class="type-btn" onclick="setWhenType('onetime')">חד פעמי</button>
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="btn-save-form" onclick="saveNewExpense()">שמור</button>
+        <button class="btn-cancel-form" onclick="toggleAddPanel()">ביטול</button>
+    </div>
+</div>
+
+<div class="table-card">
+    <div class="table-header">
+        <h2><span class="page-accent">🏠</span> רשימת הוצאות קבועות</h2>
+        <div style="display:flex;align-items:center;gap:1rem">
+            <span id="header-total" style="font-size:1rem;color:#94a3b8"></span>
+            <button class="btn-add-main" onclick="toggleAddPanel()">+ הוסף הוצאה</button>
+        </div>
+    </div>
+    <div style="overflow-x:auto">
+        <table class="data-table">
+            <thead><tr><th>שם</th><th>סוג</th><th>סכום חודשי</th><th class="hide-mobile">פעולות</th></tr></thead>
+            <tbody id="expenses-tbody"><tr><td colspan="4"><div class="loading"><div class="spinner"></div><span>טוען...</span></div></td></tr></tbody>
+            <tfoot id="expenses-tfoot"></tfoot>
+        </table>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script>
+'use strict';
+const SELECTED_MONTH = {{ selected_month | tojson }};
+const BRANCH_ID = {{ branch_id | tojson }};
+let allExpenses = [], amountType = 'fixed', whenType = 'monthly', monthIncome = 0;
+
+function setAmountType(t) {
+    amountType = t;
+    document.getElementById('amt-type-fixed').className = 'type-btn' + (t==='fixed' ? ' active-amount' : '');
+    document.getElementById('amt-type-percent').className = 'type-btn' + (t==='percent' ? ' active-percent' : '');
+    document.getElementById('fields-amount').classList.toggle('open', t==='fixed');
+    document.getElementById('fields-percent').classList.toggle('open', t==='percent');
+}
+function setWhenType(t) {
+    whenType = t;
+    document.getElementById('when-monthly').className = 'type-btn' + (t==='monthly' ? ' active-monthly' : '');
+    document.getElementById('when-onetime').className = 'type-btn' + (t==='onetime' ? ' active-onetime' : '');
+}
+function updatePreview() {
+    const pct = parseFloat(document.getElementById('new-pct-value').value) || 0;
+    document.getElementById('percent-preview').textContent = pct > 0 ? `≈ ${formatMoney(monthIncome*pct/100)} החודש` : '';
+}
+
+async function loadExpenses() {
+    const kpi = document.getElementById('kpi-section'), tbody = document.getElementById('expenses-tbody');
+    try {
+        const sRes = await fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (sRes.ok) { const s = await sRes.json(); monthIncome = s.income || 0; }
+        const res = await fetch(`/api/fixed-expenses?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        allExpenses = await res.json();
+        renderKpi(kpi, allExpenses);
+        renderTable(tbody, allExpenses);
+    } catch(err) { console.error(err); kpi.innerHTML = '<p style="color:#ef4444">שגיאה.</p>'; }
+}
+
+function renderKpi(s, exps) {
+    const total = exps.reduce((a,e) => a + e.amount, 0);
+    s.innerHTML = `<div class="kpi-card kpi-card--fixed"><div class="kpi-header"><span class="kpi-label">סה"כ הוצאות קבועות</span></div><span class="kpi-value fixed">${formatMoney(total)}</span><span style="font-size:0.9rem;color:rgba(241,245,249,0.5)">${exps.length} רשומות</span></div>`;
+}
+
+function getTypeBadge(e) {
+    const isPct = e.pct_value && e.pct_value > 0;
+    return (isPct ? '<span class="type-badge type-badge--percent">%</span> ' : '<span class="type-badge type-badge--monthly">₪</span> ') +
+        (e.expense_type==='monthly' ? '<span class="type-badge type-badge--monthly">חודשי</span>' : '<span class="type-badge type-badge--onetime">חד פעמי</span>');
+}
+
+function renderTable(tbody, exps) {
+    if (!exps.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#94a3b8">אין הוצאות. לחץ "+ הוסף הוצאה".</td></tr>'; updateTotals(exps); return; }
+    tbody.innerHTML = exps.map(e => `
+    <tr id="row-${e.id}">
+        <td style="font-weight:600">${e.name}</td>
+        <td>${getTypeBadge(e)}</td>
+        <td class="money fixed" style="font-size:1rem">
+            <span id="display-${e.id}">${formatMoney(e.amount)}</span>
+            <input class="amount-input" id="input-${e.id}" type="number" min="0" step="0.01" value="${e.amount}" style="display:none">
+        </td>
+        <td class="hide-mobile"><div class="actions-cell">
+            <button class="btn-icon" onclick="startEdit(${e.id})" id="btn-edit-${e.id}">✏️</button>
+            <button class="btn-save-inline" onclick="saveEdit(${e.id})" id="btn-save-${e.id}" style="display:none">שמור</button>
+            <button class="btn-cancel-inline" onclick="cancelEdit(${e.id})" id="btn-cancel-${e.id}" style="display:none">ביטול</button>
+            <button onclick="deleteExpense(${e.id})" class="btn-delete-icon">🗑️</button>
+            <span class="saved-flash" id="flash-${e.id}">נשמר ✓</span>
+        </div></td>
+    </tr>`).join('');
+    updateTotals(exps);
+}
+
+function updateTotals(exps) {
+    const total = exps.reduce((a,e) => a + e.amount, 0);
+    document.getElementById('expenses-tfoot').innerHTML = `<tr><td colspan="2">סה"כ</td><td class="money" style="color:#c7d2fe">${formatMoney(total)}</td><td class="hide-mobile"></td></tr>`;
+    document.getElementById('header-total').textContent = `סה"כ: ${formatMoney(total)}`;
+}
+
+function toggleAddPanel() { const p = document.getElementById('add-form-card'); p.classList.toggle('open'); if (p.classList.contains('open')) document.getElementById('new-name').focus(); }
+
+async function saveNewExpense() {
+    const name = document.getElementById('new-name').value.trim();
+    if (!name) { document.getElementById('new-name').focus(); return; }
+    let body = { name, branch_id: BRANCH_ID, month: SELECTED_MONTH, expense_type: whenType };
+    if (amountType === 'percent') {
+        const pv = parseFloat(document.getElementById('new-pct-value').value) || 0;
+        if (pv <= 0) return;
+        body.amount = monthIncome * pv / 100;
+        body.pct_value = pv;
+    } else { body.amount = parseFloat(document.getElementById('new-amount').value) || 0; }
+    try {
+        const res = await fetch('/api/fixed-expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await loadExpenses();
+        document.getElementById('new-name').value = ''; document.getElementById('new-amount').value = '';
+        document.getElementById('add-form-card').classList.remove('open');
+    } catch(err) { console.error(err); alert('שגיאה.'); }
+}
+
+async function deleteExpense(id) {
+    const exp = allExpenses.find(e => e.id === id);
+    if (!confirm(`למחוק את "${exp.name}"?`)) return;
+    try {
+        const res = await fetch(`/api/fixed-expenses/${id}`, { method:'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        allExpenses = allExpenses.filter(e => e.id !== id);
+        renderTable(document.getElementById('expenses-tbody'), allExpenses);
+    } catch(err) { console.error(err); alert('שגיאה.'); }
+}
+
+function startEdit(id) {
+    document.getElementById(`display-${id}`).style.display='none'; document.getElementById(`input-${id}`).style.display='';
+    document.getElementById(`btn-edit-${id}`).style.display='none'; document.getElementById(`btn-save-${id}`).style.display='';
+    document.getElementById(`btn-cancel-${id}`).style.display=''; document.getElementById(`input-${id}`).focus();
+}
+function cancelEdit(id) {
+    const e = allExpenses.find(x => x.id===id); document.getElementById(`input-${id}`).value=e.amount;
+    document.getElementById(`display-${id}`).style.display=''; document.getElementById(`input-${id}`).style.display='none';
+    document.getElementById(`btn-edit-${id}`).style.display=''; document.getElementById(`btn-save-${id}`).style.display='none';
+    document.getElementById(`btn-cancel-${id}`).style.display='none';
+}
+async function saveEdit(id) {
+    const amount = parseFloat(document.getElementById(`input-${id}`).value);
+    if (isNaN(amount) || amount < 0) return;
+    try {
+        const res = await fetch(`/api/fixed-expenses/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({amount}) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const e = allExpenses.find(x => x.id===id); e.amount = amount;
+        document.getElementById(`display-${id}`).textContent = formatMoney(amount);
+        cancelEdit(id); updateTotals(allExpenses);
+        const f = document.getElementById(`flash-${id}`); f.style.opacity='1'; setTimeout(()=>{f.style.opacity='0';},2000);
+    } catch(err) { console.error(err); alert('שגיאה.'); }
+}
+
+loadExpenses();
+</script>
 {% endblock %}

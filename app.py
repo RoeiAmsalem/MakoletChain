@@ -365,6 +365,130 @@ def api_live_sales():
     return jsonify({'amount': None, 'transactions': None, 'last_updated': None})
 
 
+@app.route('/api/employees', methods=['GET'])
+@login_required
+def api_employees_list():
+    """List employees for a branch + month."""
+    branch_id = _get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, employee_name, hours, rate, locked FROM employee_hours "
+        "WHERE branch_id = ? AND month = ?",
+        (branch_id, month)
+    ).fetchall()
+    return jsonify({'employees': [dict(r) for r in rows]})
+
+
+@app.route('/api/employees', methods=['POST'])
+@login_required
+def api_employees_create():
+    """Add a new employee entry for a branch + month."""
+    data = request.get_json()
+    branch_id = data.get('branch_id', _get_branch_id())
+    month = data.get('month', _now_il().strftime('%Y-%m'))
+    name = data.get('employee_name', '').strip()
+    rate = float(data.get('rate', 0))
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    db = get_db()
+    db.execute(
+        "INSERT INTO employee_hours (branch_id, month, employee_name, hours, rate) VALUES (?, ?, ?, 0, ?)",
+        (branch_id, month, name, rate)
+    )
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/employees/<int:emp_id>', methods=['PUT'])
+@login_required
+def api_employees_update(emp_id):
+    """Update an employee entry."""
+    data = request.get_json()
+    db = get_db()
+    row = db.execute("SELECT * FROM employee_hours WHERE id = ?", (emp_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    name = data.get('employee_name', row['employee_name'])
+    rate = float(data.get('rate', row['rate']))
+    hours = float(data.get('hours', row['hours']))
+    db.execute(
+        "UPDATE employee_hours SET employee_name = ?, rate = ?, hours = ? WHERE id = ?",
+        (name, rate, hours, emp_id)
+    )
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/employees/<int:emp_id>', methods=['DELETE'])
+@login_required
+def api_employees_delete(emp_id):
+    """Delete an employee entry."""
+    db = get_db()
+    db.execute("DELETE FROM employee_hours WHERE id = ?", (emp_id,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/fixed-expenses', methods=['GET'])
+@login_required
+def api_fixed_expenses_list():
+    """List fixed expenses for a branch + month."""
+    branch_id = _get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, name, amount, expense_type, pct_value, locked FROM fixed_expenses "
+        "WHERE branch_id = ? AND month = ?",
+        (branch_id, month)
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/fixed-expenses', methods=['POST'])
+@login_required
+def api_fixed_expenses_create():
+    """Add a new fixed expense."""
+    data = request.get_json()
+    branch_id = data.get('branch_id', _get_branch_id())
+    month = data.get('month', _now_il().strftime('%Y-%m'))
+    name = data.get('name', '').strip()
+    amount = float(data.get('amount', 0))
+    expense_type = data.get('expense_type', 'monthly')
+    pct_value = data.get('pct_value')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    db = get_db()
+    db.execute(
+        "INSERT INTO fixed_expenses (branch_id, month, name, amount, expense_type, pct_value) VALUES (?, ?, ?, ?, ?, ?)",
+        (branch_id, month, name, amount, expense_type, pct_value)
+    )
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/fixed-expenses/<int:exp_id>', methods=['PUT'])
+@login_required
+def api_fixed_expenses_update(exp_id):
+    """Update a fixed expense amount."""
+    data = request.get_json()
+    amount = float(data.get('amount', 0))
+    db = get_db()
+    db.execute("UPDATE fixed_expenses SET amount = ? WHERE id = ?", (amount, exp_id))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/fixed-expenses/<int:exp_id>', methods=['DELETE'])
+@login_required
+def api_fixed_expenses_delete(exp_id):
+    """Delete a fixed expense."""
+    db = get_db()
+    db.execute("DELETE FROM fixed_expenses WHERE id = ?", (exp_id,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'project': 'MakoletChain'})

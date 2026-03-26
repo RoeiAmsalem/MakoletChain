@@ -1,7 +1,7 @@
 """
 BilBoy agent (branch-aware) — fetches goods documents from BilBoy API.
 
-Doc types: 2 (delivery note), 3 (invoice), 5 (return note)
+Doc types: 2 (delivery note), 3 (invoice), 4 (credit invoice), 5 (return note)
 Full month delete + reinsert (clean sync).
 NEVER include docs where supplier matches branch.franchise_supplier.
 """
@@ -16,7 +16,7 @@ import requests
 
 API_BASE = "https://app.billboy.co.il:5050/api"
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
-ALLOWED_DOC_TYPES = {2, 3, 5}
+ALLOWED_DOC_TYPES = {2, 3, 4, 5}
 
 
 def _get_db():
