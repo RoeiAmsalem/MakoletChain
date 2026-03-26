@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MakoletChain{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="navbar-top">
+        <a href="/" class="navbar-brand" style="text-decoration:none; display:flex; align-items:center; gap:0.75rem;">
+            <img src="{{ url_for('static', filename='makolet_logo.png') }}"
+                 alt="רשת המכולה"
+                 style="height:42px; width:auto; object-fit:contain; filter:invert(1) hue-rotate(180deg);">
+            <span class="store-name">{{ branch_name }}</span>
+        </a>
+        <button class="hamburger" id="hamburger" aria-label="תפריט">&#9776;</button>
+    </div>
+    <nav>
+        <ul class="navbar-nav">
+            <li><a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a></li>
+            <li class="nav-dropdown">
+                <a href="/fixed-expenses" class="dropdown-toggle {% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות ▾</a>
+                <ul class="dropdown-menu">
+                    <li><a href="/fixed-expenses">הוצאות קבועות</a></li>
+                </ul>
+            </li>
+            <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
+        </ul>
+    </nav>
+    <div class="navbar-end">
+        <div style="display:flex; align-items:center; gap:6px; font-size:0.9rem; direction:ltr;">
+            <a href="?month={{ prev_month }}" style="color:#aaa; text-decoration:none; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08);">‹</a>
+            <span style="color:white; font-weight:600; min-width:80px; text-align:center;">{{ month_display }}</span>
+            {% if next_month %}
+            <a href="?month={{ next_month }}" style="color:#aaa; text-decoration:none; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08);">›</a>
+            {% else %}
+            <span style="color:#444; padding:2px 6px;">›</span>
+            {% endif %}
+            {% if show_today_btn %}
+            <a href="?month={{ current_month }}" title="חזור לחודש נוכחי" style="color:#f59e0b; text-decoration:none; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.15); font-size:0.8rem; font-weight:600;">היום</a>
+            {% endif %}
+            <span style="margin-right:6px;border-right:1px solid rgba(255,255,255,0.15);height:16px;display:inline-block"></span>
+            <button id="vm-prorated" onclick="setViewMode('prorated')" style="font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.12);color:white;white-space:nowrap;">יחסי</button>
+            <button id="vm-full" onclick="setViewMode('full')" style="font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;border:1px solid rgba(255,255,255,0.15);background:none;color:rgba(255,255,255,0.45);white-space:nowrap;">מלא</button>
+        </div>
+    </div>
+    <div class="mobile-nav" id="mobile-nav">
+        <a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a>
+        <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
+        <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
+    </div>
+    <div class="month-switcher-mobile">
+        <a href="?month={{ prev_month }}">‹</a>
+        <span class="month-label">{{ month_display }}</span>
+        {% if next_month %}
+        <a href="?month={{ next_month }}">›</a>
+        {% else %}
+        <span class="month-disabled">›</span>
+        {% endif %}
+        {% if show_today_btn %}
+        <a href="?month={{ current_month }}" style="color:#f59e0b; text-decoration:none; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.15); font-size:0.8rem; font-weight:600;">היום</a>
+        {% endif %}
+    </div>
+</nav>
+
+<main class="main-content">
+    {% block content %}{% endblock %}
+</main>
+
+<script>
+function setViewMode(mode) {
+    localStorage.setItem('view_mode', mode);
+    applyViewMode();
+}
+function applyViewMode() {
+    const mode = localStorage.getItem('view_mode') || 'prorated';
+    const btnPro = document.getElementById('vm-prorated');
+    const btnFull = document.getElementById('vm-full');
+    if (!btnPro) return;
+    if (mode === 'full') {
+        btnFull.style.background = 'rgba(255,255,255,0.12)'; btnFull.style.color = 'white';
+        btnPro.style.background = 'none'; btnPro.style.color = 'rgba(255,255,255,0.45)';
+    } else {
+        btnPro.style.background = 'rgba(255,255,255,0.12)'; btnPro.style.color = 'white';
+        btnFull.style.background = 'none'; btnFull.style.color = 'rgba(255,255,255,0.45)';
+    }
+}
+applyViewMode();
+
+document.getElementById('hamburger').addEventListener('click', function() {
+    document.getElementById('mobile-nav').classList.toggle('open');
+});
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

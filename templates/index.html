@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}מסך בית - MakoletChain{% endblock %}
+{% block head %}
+<style>
+    @media (max-width: 768px) {
+        .mobile-view-toggle { display: flex !important; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- KPI Cards -->
+<section class="cards-grid" id="kpi-section">
+    <div class="kpi-card kpi-card--live" id="live-tile">
+        <div class="kpi-header">
+            <span class="kpi-icon"><span class="live-dot"></span></span>
+            <span class="kpi-label">היום בזמן אמת</span>
+        </div>
+        <span class="kpi-value" id="live-amount">אין נתונים</span>
+        <div class="kpi-sub" id="live-sub" style="font-size:0.85rem; color:#94a3b8; margin-top:4px;"></div>
+        <div class="kpi-sub" id="live-updated" style="font-size:0.75rem; color:#64748b; margin-top:2px;"></div>
+    </div>
+
+    <div class="kpi-card kpi-card--neutral" id="profit-tile">
+        <div class="kpi-header">
+            <span class="kpi-icon">💰</span>
+            <span class="kpi-label" id="profit-label">רווח משוער</span>
+        </div>
+        <span class="kpi-value" id="profit-value">₪ 0.00</span>
+        <span class="kpi-badge estimated" id="profit-badge">משוער</span>
+    </div>
+
+    <div class="kpi-card kpi-card--income" style="cursor:pointer" onclick="location.href='/sales'">
+        <div class="kpi-header">
+            <span class="kpi-icon">📈</span>
+            <span class="kpi-label">הכנסות</span>
+        </div>
+        <span class="kpi-value profit" id="income-value">₪ 0.00</span>
+    </div>
+
+    <div class="kpi-card kpi-card--goods" style="cursor:pointer" onclick="location.href='/goods'">
+        <div class="kpi-header">
+            <span class="kpi-icon">🛒</span>
+            <span class="kpi-label">סחורה (BilBoy)</span>
+        </div>
+        <span class="kpi-value" style="color:#fff" id="goods-value">₪ 0.00</span>
+    </div>
+
+    <div class="kpi-card kpi-card--fixed" style="cursor:pointer" onclick="location.href='/fixed-expenses'" id="fixed-tile">
+        <div class="kpi-header">
+            <span class="kpi-icon">🏠</span>
+            <span class="kpi-label">הוצאות קבועות</span>
+        </div>
+        <span class="kpi-value fixed" id="fixed-value">₪ 0.00</span>
+    </div>
+
+    <div class="kpi-card kpi-card--salary" style="cursor:pointer" onclick="location.href='/employees'">
+        <div class="kpi-header">
+            <span class="kpi-icon">👷</span>
+            <span class="kpi-label">שכר עובדים</span>
+        </div>
+        <span class="kpi-value salary" id="salary-value">₪ 0.00</span>
+    </div>
+</section>
+
+<!-- Bar Chart: last 6 months -->
+<section class="card chart-card">
+    <h2 class="section-title">השוואת רווח – 6 חודשים אחרונים</h2>
+    <div class="chart-wrapper" id="chart-wrapper">
+        <canvas id="profit-chart"></canvas>
+    </div>
+</section>
+
+<!-- Monthly Breakdown Table -->
+<section class="card">
+    <h2 class="section-title">פירוט חודשי – 6 חודשים אחרונים</h2>
+    <div style="overflow-x: auto">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>חודש</th>
+                    <th>הכנסות</th>
+                    <th>סחורה</th>
+                    <th class="hide-mobile">הוצאות קבועות</th>
+                    <th class="hide-mobile">שכר</th>
+                    <th>רווח</th>
+                    <th>סטטוס</th>
+                </tr>
+            </thead>
+            <tbody id="history-tbody">
+                <tr>
+                    <td colspan="7" style="text-align:center;color:var(--text-muted);padding:2rem">אין נתונים עדיין</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script>
+'use strict';
+const SELECTED_MONTH = {{ selected_month | tojson }};
+const BRANCH_ID = {{ branch_id | tojson }};
+
+async function loadSummary() {
+    try {
+        const res = await fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        document.getElementById('income-value').textContent = formatMoney(d.income || 0);
+        document.getElementById('goods-value').textContent = formatMoney(d.goods || 0);
+        document.getElementById('fixed-value').textContent = formatMoney(d.fixed || 0);
+        document.getElementById('salary-value').textContent = formatMoney(d.salary || 0);
+        document.getElementById('profit-value').textContent = formatMoney(d.profit || 0);
+    } catch (err) {
+        console.error('summary:', err);
+    }
+}
+
+async function loadHistory() {
+    try {
+        const res = await fetch(`/api/history?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const months = await res.json();
+        if (months.length) {
+            buildProfitBarChart('profit-chart', months.map(m => m.label), months.map(m => m.profit));
+            const tbody = document.getElementById('history-tbody');
+            tbody.innerHTML = months.map(m => {
+                const cls = m.profit >= 0 ? 'profit' : 'loss';
+                return `<tr>
+                    <td>${m.label}</td>
+                    <td class="money profit">${formatMoney(m.income)}</td>
+                    <td class="money loss">${formatMoney(m.goods)}</td>
+                    <td class="money fixed hide-mobile">${formatMoney(m.fixed)}</td>
+                    <td class="money salary hide-mobile">${formatMoney(m.salary)}</td>
+                    <td class="money ${cls}">${formatMoney(m.profit)}</td>
+                    <td><span class="kpi-badge estimated">משוער</span></td>
+                </tr>`;
+            }).join('');
+        }
+    } catch (err) {
+        console.error('history:', err);
+    }
+}
+
+loadSummary();
+loadHistory();
+if (typeof loadLiveSales === 'function') loadLiveSales();
+</script>
+{% endblock %}
