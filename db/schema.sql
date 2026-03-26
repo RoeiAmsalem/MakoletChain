@@ -86,4 +86,4 @@ CREATE TABLE IF NOT EXISTS live_sales (
 
 -- Insert branch 126 (empty data, credentials TBD)
 INSERT OR IGNORE INTO branches (id, name, city, aviv_user_id, gmail_label, franchise_supplier)
-VALUES (126, 'מכולת אינשטיין', 'תל אביב', 'S33834', 'אינשטיין', 'זיכיונות המכולת בע"מ');
+VALUES (126, 'מכולת אינשטיין', 'תל אביב', 'S33834', 'איינשטיין', 'זיכיונות המכולת בע"מ');

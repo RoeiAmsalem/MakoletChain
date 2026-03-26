@@ -87,19 +87,38 @@ def _extract_z_pdf(msg) -> bytes | None:
 
 
 def _extract_total_from_pdf(pdf_bytes: bytes) -> float | None:
-    import fitz  # PyMuPDF
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    for page in doc:
-        text = page.get_text()
-        match = TOTAL_PATTERN_RTL.search(text)
-        if match:
-            doc.close()
-            return float(match.group(1).replace(",", ""))
-        match = TOTAL_PATTERN_LTR.search(text)
-        if match:
-            doc.close()
-            return float(match.group(1).replace(",", ""))
-    doc.close()
+    import io
+    # Try pdfplumber first (matches MakoletDashboard's working parser)
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                match = TOTAL_PATTERN_RTL.search(text)
+                if match:
+                    return float(match.group(1).replace(",", ""))
+                match = TOTAL_PATTERN_LTR.search(text)
+                if match:
+                    return float(match.group(1).replace(",", ""))
+    except ImportError:
+        pass
+    # Fallback to PyMuPDF
+    try:
+        import fitz
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        for page in doc:
+            text = page.get_text()
+            match = TOTAL_PATTERN_RTL.search(text)
+            if match:
+                doc.close()
+                return float(match.group(1).replace(",", ""))
+            match = TOTAL_PATTERN_LTR.search(text)
+            if match:
+                doc.close()
+                return float(match.group(1).replace(",", ""))
+        doc.close()
+    except ImportError:
+        pass
     return None
 
 
