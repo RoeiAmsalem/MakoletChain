@@ -37,6 +37,7 @@
             <span class="kpi-label">הכנסות</span>
         </div>
         <span class="kpi-value profit" id="income-value">₪ 0.00</span>
+        <div id="income-live-sub" style="font-size:0.8rem; color:#86efac; margin-top:4px;"></div>
     </div>
 
     <div class="kpi-card kpi-card--goods" style="cursor:pointer" onclick="location.href='/goods'">
@@ -116,9 +117,18 @@ async function loadSummary() {
         document.getElementById('goods-value').textContent = formatMoney(d.goods || 0);
         document.getElementById('fixed-value').textContent = formatMoney(d.fixed || 0);
         document.getElementById('salary-value').textContent = formatMoney(d.salary || 0);
+
+        // Show live income subtitle
+        const liveSub = document.getElementById('income-live-sub');
+        if (liveSub && d.live_amount_today && !d.has_z) {
+            liveSub.textContent = 'כולל ' + formatMoney(d.live_amount_today) + ' מהיום (לייב)';
+        } else if (liveSub) {
+            liveSub.textContent = '';
+        }
+
+        // Color the profit tile green/red
         const profitVal = d.profit || 0;
         document.getElementById('profit-value').textContent = formatMoney(profitVal);
-        // Color the profit tile green/red
         const profitTile = document.getElementById('profit-tile');
         const profitValue = document.getElementById('profit-value');
         if (profitVal >= 0) {

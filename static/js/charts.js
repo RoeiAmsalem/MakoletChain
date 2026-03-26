@@ -99,6 +99,8 @@ function loadLiveSales() {
                 document.getElementById('live-sub').textContent = '';
                 document.getElementById('live-updated').textContent = '';
             }
+            // Also refresh summary tiles (income includes live data)
+            if (typeof loadSummary === 'function') loadSummary();
         })
         .catch(() => {
             const el = document.getElementById('live-amount');

@@ -301,14 +301,33 @@ def api_summary():
         (branch_id, month)
     ).fetchone()[0]
 
-    profit = income - goods - fixed - salary
-
-    # Live sales (today)
+    # Live income logic: if current month and today has no Z-report, add live amount
     today = _now_il().strftime('%Y-%m-%d')
-    live_row = db.execute(
-        'SELECT amount, transactions, last_updated FROM live_sales WHERE branch_id = ? AND date = ?',
-        (branch_id, today)
-    ).fetchone()
+    current_month = _now_il().strftime('%Y-%m')
+    has_z = False
+    live_amount_today = 0
+
+    if month == current_month:
+        z_row = db.execute(
+            "SELECT id FROM daily_sales WHERE branch_id = ? AND date = ?",
+            (branch_id, today)
+        ).fetchone()
+        has_z = z_row is not None
+
+        live_row = db.execute(
+            'SELECT amount, transactions, last_updated FROM live_sales WHERE branch_id = ? AND date = ?',
+            (branch_id, today)
+        ).fetchone()
+
+        if live_row and live_row['amount']:
+            live_amount_today = live_row['amount']
+            # If no Z-report for today, add live amount to income
+            if not has_z:
+                income += live_amount_today
+    else:
+        live_row = None
+
+    profit = income - goods - fixed - salary
 
     live = None
     if live_row:
@@ -325,6 +344,8 @@ def api_summary():
         'salary': salary,
         'profit': profit,
         'live': live,
+        'has_z': has_z,
+        'live_amount_today': live_amount_today,
         'branch_id': branch_id,
         'month': month,
     })
