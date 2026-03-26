@@ -116,7 +116,18 @@ async function loadSummary() {
         document.getElementById('goods-value').textContent = formatMoney(d.goods || 0);
         document.getElementById('fixed-value').textContent = formatMoney(d.fixed || 0);
         document.getElementById('salary-value').textContent = formatMoney(d.salary || 0);
-        document.getElementById('profit-value').textContent = formatMoney(d.profit || 0);
+        const profitVal = d.profit || 0;
+        document.getElementById('profit-value').textContent = formatMoney(profitVal);
+        // Color the profit tile green/red
+        const profitTile = document.getElementById('profit-tile');
+        const profitValue = document.getElementById('profit-value');
+        if (profitVal >= 0) {
+            profitTile.className = 'kpi-card kpi-card--profit';
+            profitValue.className = 'kpi-value profit';
+        } else {
+            profitTile.className = 'kpi-card kpi-card--loss';
+            profitValue.className = 'kpi-value loss';
+        }
     } catch (err) {
         console.error('summary:', err);
     }

@@ -22,12 +22,9 @@
     <nav>
         <ul class="navbar-nav">
             <li><a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a></li>
-            <li class="nav-dropdown">
-                <a href="/fixed-expenses" class="dropdown-toggle {% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות ▾</a>
-                <ul class="dropdown-menu">
-                    <li><a href="/fixed-expenses">הוצאות קבועות</a></li>
-                </ul>
-            </li>
+            <li><a href="/sales" class="{% if active_page == 'sales' %}active{% endif %}">הכנסות</a></li>
+            <li><a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a></li>
+            <li><a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a></li>
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
         </ul>
     </nav>
@@ -50,6 +47,8 @@
     </div>
     <div class="mobile-nav" id="mobile-nav">
         <a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a>
+        <a href="/sales" class="{% if active_page == 'sales' %}active{% endif %}">הכנסות</a>
+        <a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a>
         <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
     </div>

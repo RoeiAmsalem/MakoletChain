@@ -1,10 +1,16 @@
+import io
 import os
 import sqlite3
 from datetime import datetime, date
 from functools import wraps
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, g, render_template, request, session, redirect, url_for
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+from flask import Flask, jsonify, g, render_template, request, session, redirect, url_for, send_file, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -201,6 +207,37 @@ def sales():
 @login_required
 def goods():
     ctx = _page_context('goods')
+    branch_id = ctx['branch_id']
+    month = ctx['selected_month']
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, doc_date, supplier, ref_number, amount, doc_type "
+        "FROM goods_documents WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ? "
+        "ORDER BY doc_date DESC, id DESC",
+        (branch_id, month)
+    ).fetchall()
+    docs = [dict(r) for r in rows]
+
+    total = sum(d['amount'] for d in docs)
+    total_before_vat = round(total / 1.17, 2)
+    invoices_total = sum(d['amount'] for d in docs if d['doc_type'] == 3)
+    delivery_total = sum(d['amount'] for d in docs if d['doc_type'] == 2)
+    returns_total = sum(d['amount'] for d in docs if d['doc_type'] in (4, 5))
+    count = len(docs)
+
+    # Add before_vat to each doc
+    for d in docs:
+        d['amount_before_vat'] = round(d['amount'] / 1.17, 2)
+
+    ctx.update({
+        'docs': docs,
+        'total': total,
+        'total_before_vat': total_before_vat,
+        'invoices_total': invoices_total,
+        'delivery_total': delivery_total,
+        'returns_total': returns_total,
+        'count': count,
+    })
     return render_template('goods.html', **ctx)
 
 
@@ -487,6 +524,95 @@ def api_fixed_expenses_delete(exp_id):
     db.execute("DELETE FROM fixed_expenses WHERE id = ?", (exp_id,))
     db.commit()
     return jsonify({'ok': True})
+
+
+PDF_BASE = os.path.join(os.path.dirname(__file__), 'data', 'pdfs')
+
+
+@app.route('/api/sales')
+@login_required
+def api_sales():
+    """Return daily sales for a branch + month."""
+    branch_id = _get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    rows = db.execute(
+        "SELECT date, amount, transactions, source FROM daily_sales "
+        "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date DESC",
+        (branch_id, month)
+    ).fetchall()
+    sales = [dict(r) for r in rows]
+
+    total = sum(s['amount'] for s in sales)
+    days = len(sales)
+    avg = round(total / days, 2) if days else 0
+    highest = max((s['amount'] for s in sales), default=0)
+    lowest = min((s['amount'] for s in sales), default=0)
+
+    # Check which dates have PDFs
+    pdf_dir = os.path.join(PDF_BASE, str(branch_id))
+    for s in sales:
+        pdf_path = os.path.join(pdf_dir, f"z_{s['date']}.pdf")
+        s['has_pdf'] = os.path.isfile(pdf_path)
+
+    return jsonify({
+        'sales': sales,
+        'total': total,
+        'avg': avg,
+        'highest': highest,
+        'lowest': lowest,
+        'days': days,
+    })
+
+
+@app.route('/api/sales/pdf/<sale_date>')
+@login_required
+def api_sales_pdf(sale_date):
+    """Serve the original PDF for a Z-report."""
+    branch_id = _get_branch_id()
+    pdf_path = os.path.join(PDF_BASE, str(branch_id), f"z_{sale_date}.pdf")
+    if not os.path.isfile(pdf_path):
+        abort(404)
+    return send_file(pdf_path, mimetype='application/pdf')
+
+
+@app.route('/api/sales/pdf-image/<sale_date>/<int:page>')
+@login_required
+def api_sales_pdf_image(sale_date, page):
+    """Render a PDF page as PNG image using PyMuPDF."""
+    branch_id = _get_branch_id()
+    pdf_path = os.path.join(PDF_BASE, str(branch_id), f"z_{sale_date}.pdf")
+    if not os.path.isfile(pdf_path):
+        abort(404)
+    if fitz is None:
+        abort(500)
+    try:
+        doc = fitz.open(pdf_path)
+        if page < 0 or page >= len(doc):
+            abort(404)
+        pix = doc[page].get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        doc.close()
+        return send_file(io.BytesIO(img_bytes), mimetype='image/png')
+    except Exception:
+        abort(500)
+
+
+@app.route('/api/sales/pdf-pages/<sale_date>')
+@login_required
+def api_sales_pdf_pages(sale_date):
+    """Return the number of pages in a PDF."""
+    branch_id = _get_branch_id()
+    pdf_path = os.path.join(PDF_BASE, str(branch_id), f"z_{sale_date}.pdf")
+    if not os.path.isfile(pdf_path) or fitz is None:
+        return jsonify({'pages': 0})
+    try:
+        doc = fitz.open(pdf_path)
+        pages = len(doc)
+        doc.close()
+        return jsonify({'pages': pages})
+    except Exception:
+        return jsonify({'pages': 0})
 
 
 @app.route('/health')

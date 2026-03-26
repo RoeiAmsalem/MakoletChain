@@ -1,13 +1,218 @@
 {% extends "base.html" %}
 {% block title %}הכנסות - MakoletChain{% endblock %}
+{% block head %}
+<style>
+    .sales-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+    .btn-pdf {
+        font-size: 0.78rem; font-weight: 600; padding: 0.25rem 0.6rem;
+        background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
+        border-radius: 6px; color: #fca5a5; cursor: pointer; font-family: inherit;
+        transition: background 0.15s;
+    }
+    .btn-pdf:hover { background: rgba(239,68,68,0.3); }
+    .btn-pdf:disabled { opacity: 0.3; cursor: default; }
+    /* PDF Modal */
+    .pdf-overlay {
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+        z-index: 1000; align-items: center; justify-content: center;
+    }
+    .pdf-overlay.open { display: flex; }
+    .pdf-modal {
+        background: #1e293b; border-radius: 12px; max-width: 700px; width: 95%;
+        max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .pdf-modal-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1rem 1.25rem; border-bottom: 1px solid #334155;
+    }
+    .pdf-modal-header h3 { font-size: 1rem; color: white; }
+    .pdf-modal-close {
+        background: none; border: none; color: #94a3b8; font-size: 1.5rem;
+        cursor: pointer; padding: 0; line-height: 1;
+    }
+    .pdf-modal-close:hover { color: white; }
+    .pdf-modal-body {
+        overflow-y: auto; padding: 1rem; display: flex; flex-direction: column;
+        align-items: center; gap: 1rem;
+    }
+    .pdf-modal-body img { max-width: 100%; border-radius: 4px; background: white; }
+    .pdf-nav {
+        display: flex; gap: 0.75rem; align-items: center; padding: 0.75rem 1.25rem;
+        border-top: 1px solid #334155; justify-content: center;
+    }
+    .pdf-nav button {
+        font-size: 0.85rem; padding: 0.3rem 0.7rem; background: rgba(255,255,255,0.08);
+        border: 1px solid #334155; border-radius: 6px; color: #94a3b8; cursor: pointer; font-family: inherit;
+    }
+    .pdf-nav button:hover { background: rgba(255,255,255,0.15); color: white; }
+    .pdf-nav button:disabled { opacity: 0.3; cursor: default; }
+    .pdf-nav span { color: #94a3b8; font-size: 0.85rem; }
+    @media (max-width: 768px) {
+        .sales-kpis { grid-template-columns: 1fr 1fr; }
+        .pdf-modal { max-width: 100%; border-radius: 0; max-height: 100vh; }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
+
+<!-- KPI Cards -->
+<section class="sales-kpis" id="sales-kpis">
+    <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
+</section>
+
+<!-- Sales Table -->
 <section class="card">
-    <h2 class="section-title">דוחות Z יומיים</h2>
-    <div class="empty-state">
-        <div class="icon">📈</div>
-        <h3>אין נתוני הכנסות עדיין</h3>
-        <p>דוחות Z יסונכרנו אוטומטית כשהמערכת תחובר לשירות AVIV</p>
+    <h2 class="section-title">דוחות Z יומיים – <span id="month-label"></span></h2>
+    <div style="overflow-x:auto">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>תאריך</th>
+                    <th>סכום (₪)</th>
+                    <th>עסקאות</th>
+                    <th>מקור</th>
+                    <th>PDF</th>
+                </tr>
+            </thead>
+            <tbody id="sales-tbody">
+                <tr><td colspan="5" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
+            </tbody>
+            <tfoot id="sales-tfoot"></tfoot>
+        </table>
     </div>
 </section>
+
+<!-- PDF Preview Modal -->
+<div class="pdf-overlay" id="pdf-overlay" onclick="if(event.target===this)closePdf()">
+    <div class="pdf-modal">
+        <div class="pdf-modal-header">
+            <h3 id="pdf-title">דוח Z</h3>
+            <button class="pdf-modal-close" onclick="closePdf()">&times;</button>
+        </div>
+        <div class="pdf-modal-body" id="pdf-body">
+            <div class="loading"><div class="spinner"></div><span>טוען PDF...</span></div>
+        </div>
+        <div class="pdf-nav">
+            <button id="pdf-prev" onclick="pdfPage(-1)">‹ הקודם</button>
+            <span id="pdf-page-info">עמוד 1</span>
+            <button id="pdf-next" onclick="pdfPage(1)">הבא ›</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script>
+'use strict';
+const SELECTED_MONTH = {{ selected_month | tojson }};
+const BRANCH_ID = {{ branch_id | tojson }};
+const monthLabel = {{ month_display | tojson }};
+document.getElementById('month-label').textContent = monthLabel;
+
+let pdfState = { date: null, page: 0, total: 0 };
+
+async function loadSales() {
+    const kpis = document.getElementById('sales-kpis');
+    const tbody = document.getElementById('sales-tbody');
+    const tfoot = document.getElementById('sales-tfoot');
+    try {
+        const res = await fetch(`/api/sales?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+
+        // KPI cards
+        kpis.innerHTML = `
+            <div class="kpi-card kpi-card--income">
+                <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">סה"כ הכנסות</span></div>
+                <span class="kpi-value profit">${formatMoney(d.total)}</span>
+                <span style="font-size:0.8rem;color:rgba(241,245,249,0.5)">${d.days} ימים</span>
+            </div>
+            <div class="kpi-card" style="background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">ממוצע ליום</span></div>
+                <span class="kpi-value" style="color:#93c5fd">${formatMoney(d.avg)}</span>
+            </div>
+            <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">🔝</span><span class="kpi-label">יום הכי גבוה</span></div>
+                <span class="kpi-value" style="color:#86efac">${formatMoney(d.highest)}</span>
+            </div>
+            <div class="kpi-card" style="background:linear-gradient(135deg,#7f1d1d,#991b1b);border-color:rgba(239,68,68,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">🔻</span><span class="kpi-label">יום הכי נמוך</span></div>
+                <span class="kpi-value" style="color:#fca5a5">${formatMoney(d.lowest)}</span>
+            </div>`;
+
+        // Table rows
+        if (!d.sales.length) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
+            tfoot.innerHTML = '';
+            return;
+        }
+
+        tbody.innerHTML = d.sales.map(s => {
+            const pdfBtn = s.has_pdf
+                ? `<button class="btn-pdf" onclick="openPdf('${s.date}')">📄 צפה</button>`
+                : '<span style="color:#64748b;font-size:0.8rem">—</span>';
+            return `<tr>
+                <td>${s.date}</td>
+                <td class="money profit" style="direction:ltr;text-align:left;font-weight:600">₪ ${Number(s.amount).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
+                <td style="text-align:center">${s.transactions || '—'}</td>
+                <td><span style="font-size:0.78rem;color:#94a3b8">${s.source || 'z_report'}</span></td>
+                <td>${pdfBtn}</td>
+            </tr>`;
+        }).join('');
+
+        tfoot.innerHTML = `<tr class="tfoot-total" style="font-weight:700;border-top:2px solid #334155;background:#0f172a">
+            <td>סה"כ</td>
+            <td class="money profit" style="direction:ltr;text-align:left;font-weight:700">₪ ${Number(d.total).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
+            <td colspan="3"></td>
+        </tr>`;
+
+    } catch(err) {
+        console.error(err);
+        kpis.innerHTML = '<p style="color:#ef4444;padding:1rem">שגיאה בטעינת נתונים</p>';
+    }
+}
+
+async function openPdf(dateStr) {
+    const overlay = document.getElementById('pdf-overlay');
+    const body = document.getElementById('pdf-body');
+    overlay.classList.add('open');
+    document.getElementById('pdf-title').textContent = `דוח Z — ${dateStr}`;
+    body.innerHTML = '<div class="loading"><div class="spinner"></div><span>טוען PDF...</span></div>';
+
+    try {
+        const res = await fetch(`/api/sales/pdf-pages/${dateStr}?branch_id=${BRANCH_ID}`);
+        const d = await res.json();
+        pdfState = { date: dateStr, page: 0, total: d.pages || 1 };
+        renderPdfPage();
+    } catch(err) {
+        body.innerHTML = '<p style="color:#ef4444">שגיאה בטעינת PDF</p>';
+    }
+}
+
+function renderPdfPage() {
+    const body = document.getElementById('pdf-body');
+    body.innerHTML = `<img src="/api/sales/pdf-image/${pdfState.date}/${pdfState.page}?branch_id=${BRANCH_ID}" alt="Page ${pdfState.page+1}">`;
+    document.getElementById('pdf-page-info').textContent = `עמוד ${pdfState.page+1} מתוך ${pdfState.total}`;
+    document.getElementById('pdf-prev').disabled = pdfState.page <= 0;
+    document.getElementById('pdf-next').disabled = pdfState.page >= pdfState.total - 1;
+}
+
+function pdfPage(delta) {
+    const newPage = pdfState.page + delta;
+    if (newPage < 0 || newPage >= pdfState.total) return;
+    pdfState.page = newPage;
+    renderPdfPage();
+}
+
+function closePdf() {
+    document.getElementById('pdf-overlay').classList.remove('open');
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePdf(); });
+
+loadSales();
+</script>
 {% endblock %}

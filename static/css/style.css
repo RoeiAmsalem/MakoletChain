@@ -414,6 +414,12 @@ body {
 .data-table td.fixed  { color: #c7d2fe; font-weight: 600; }
 .data-table td.salary { color: #93c5fd; font-weight: 600; }
 
+.data-table tfoot td {
+    font-weight: 700;
+    border-top: 2px solid var(--card-border);
+    background: var(--bg) !important;
+}
+
 /* --- Loading Spinner ---------------------------------------- */
 .loading {
     display: flex;
