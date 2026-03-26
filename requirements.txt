@@ -1,0 +1,6 @@
+flask
+gunicorn
+apscheduler
+playwright
+werkzeug
+requests
