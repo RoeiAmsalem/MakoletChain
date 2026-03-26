@@ -6,3 +6,5 @@ db/*.db
 venv/
 .env
 *.log
+data/pdfs/
+logs/

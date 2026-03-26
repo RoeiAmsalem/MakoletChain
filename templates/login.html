@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>התחברות - MakoletChain</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+        .login-card {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 2.5rem;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        .login-card h1 {
+            text-align: center;
+            color: white;
+            margin-bottom: 0.5rem;
+            font-size: 1.5rem;
+        }
+        .login-card .subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
+        .login-card label {
+            display: block;
+            color: #94a3b8;
+            font-size: 0.85rem;
+            margin-bottom: 0.3rem;
+        }
+        .login-card input {
+            width: 100%;
+            padding: 0.7rem 1rem;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.05);
+            color: white;
+            font-size: 1rem;
+            margin-bottom: 1.2rem;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        .login-card input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .login-card button {
+            width: 100%;
+            padding: 0.8rem;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .login-card button:hover { opacity: 0.9; }
+        .error-msg {
+            background: rgba(239,68,68,0.15);
+            color: #ef4444;
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-size: 0.85rem;
+            text-align: center;
+        }
+        .logo-container {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .logo-container img {
+            height: 60px;
+            filter: invert(1) hue-rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="רשת המכולה">
+        </div>
+        <h1>התחברות</h1>
+        <p class="subtitle">רשת המכולה — מערכת ניהול</p>
+
+        {% if error %}
+        <div class="error-msg">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="/login">
+            <label for="email">אימייל</label>
+            <input type="email" id="email" name="email" required autofocus placeholder="your@email.com" dir="ltr">
+
+            <label for="password">סיסמה</label>
+            <input type="password" id="password" name="password" required placeholder="••••••••" dir="ltr">
+
+            <button type="submit">כניסה</button>
+        </form>
+    </div>
+</body>
+</html>

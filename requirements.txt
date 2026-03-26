@@ -4,3 +4,4 @@ apscheduler
 playwright
 werkzeug
 requests
+pymupdf
