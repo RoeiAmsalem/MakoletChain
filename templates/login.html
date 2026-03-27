@@ -6,14 +6,18 @@
     <title>התחברות - MakoletChain</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; overflow: hidden; }
         .login-card {
-            background: var(--surface);
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.08);
             border-radius: 16px;
             padding: 2.5rem;
             width: 100%;
             max-width: 380px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+            position: relative;
+            z-index: 1;
         }
         .login-card h1 {
             text-align: center;
@@ -33,7 +37,8 @@
             font-size: 0.85rem;
             margin-bottom: 0.3rem;
         }
-        .login-card input {
+        .login-card input[type="email"],
+        .login-card input[type="password"] {
             width: 100%;
             padding: 0.7rem 1rem;
             border: 1px solid rgba(255,255,255,0.1);
@@ -44,10 +49,31 @@
             margin-bottom: 1.2rem;
             box-sizing: border-box;
             font-family: inherit;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
-        .login-card input:focus {
+        .login-card input[type="email"]:focus,
+        .login-card input[type="password"]:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99,102,241,0.2);
             outline: none;
-            border-color: var(--accent);
+        }
+        .remember-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1.2rem;
+        }
+        .remember-row input[type="checkbox"] {
+            accent-color: #6366f1;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        .remember-row label {
+            margin-bottom: 0;
+            cursor: pointer;
+            color: #94a3b8;
+            font-size: 0.85rem;
         }
         .login-card button {
             width: 100%;
@@ -60,38 +86,45 @@
             font-weight: 600;
             cursor: pointer;
             font-family: inherit;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
         }
-        .login-card button:hover { opacity: 0.9; }
+        .login-card button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(99,102,241,0.35);
+        }
         .error-msg {
-            background: rgba(239,68,68,0.15);
             color: #ef4444;
-            padding: 0.6rem 1rem;
-            border-radius: 8px;
-            margin-bottom: 1rem;
             font-size: 0.85rem;
             text-align: center;
+            margin-top: 8px;
         }
         .logo-container {
             text-align: center;
             margin-bottom: 1.5rem;
+            text-shadow: 0 0 30px rgba(99, 102, 241, 0.4);
         }
         .logo-container img {
             height: 60px;
             filter: invert(1) hue-rotate(180deg);
         }
+        .bg-orb {
+            position: fixed;
+            border-radius: 50%;
+            z-index: 0;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
+    <div class="bg-orb" style="width:300px; height:300px; background:rgba(99,102,241,0.08); filter:blur(80px); top:10%; left:10%;"></div>
+    <div class="bg-orb" style="width:250px; height:250px; background:rgba(139,92,246,0.06); filter:blur(80px); bottom:15%; right:15%;"></div>
+
     <div class="login-card">
         <div class="logo-container">
-            <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="רשת המכולה">
+            <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="רשת המכולת">
         </div>
         <h1>התחברות</h1>
-        <p class="subtitle">רשת המכולה — מערכת ניהול</p>
-
-        {% if error %}
-        <div class="error-msg">{{ error }}</div>
-        {% endif %}
+        <p class="subtitle">רשת המכולת — מערכת ניהול</p>
 
         <form method="POST" action="/login">
             <label for="email">אימייל</label>
@@ -100,8 +133,17 @@
             <label for="password">סיסמה</label>
             <input type="password" id="password" name="password" required placeholder="••••••••" dir="ltr">
 
+            <div class="remember-row">
+                <input type="checkbox" id="remember" name="remember" value="1">
+                <label for="remember">זכור אותי</label>
+            </div>
+
             <button type="submit">כניסה</button>
         </form>
+
+        {% if error %}
+        <div class="error-msg">{{ error }}</div>
+        {% endif %}
     </div>
 </body>
 </html>

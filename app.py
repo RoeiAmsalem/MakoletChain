@@ -1,7 +1,7 @@
 import io
 import os
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -97,6 +97,10 @@ def login():
     user = db.execute("SELECT * FROM users WHERE email = ? AND active = 1", (email,)).fetchone()
 
     if user and check_password_hash(user['password_hash'], password):
+        if request.form.get('remember'):
+            session.permanent = True
+            app.permanent_session_lifetime = timedelta(days=30)
+
         session['user_id'] = user['id']
         session['user_name'] = user['name']
         session['user_role'] = user['role']
