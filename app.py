@@ -578,6 +578,10 @@ def api_sales():
     txn_days = [s['transactions'] for s in sales if s['transactions']]
     avg_daily_txn = round(sum(txn_days) / len(txn_days)) if txn_days else 0
 
+    # Monthly average transaction value: total income / total transactions
+    total_txns = sum(txn_days)
+    avg_txn_value = round(total / total_txns) if total_txns else 0
+
     # Check which dates have PDFs
     pdf_dir = os.path.join(PDF_BASE, str(branch_id))
     for s in sales:
@@ -592,6 +596,7 @@ def api_sales():
         'lowest': lowest,
         'days': days,
         'avg_daily_txn': avg_daily_txn,
+        'avg_txn_value': avg_txn_value,
     })
 
 

@@ -146,6 +146,10 @@ async function loadSales() {
             <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
                 <div class="kpi-header"><span class="kpi-icon">🧾</span><span class="kpi-label">ממוצע עסקאות יומי</span></div>
                 <span class="kpi-value" style="color:#86efac">${d.avg_daily_txn} עסקאות/יום</span>
+            </div>
+            <div class="kpi-card" style="background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">ממוצע לעסקה</span></div>
+                <span class="kpi-value" style="color:#93c5fd">₪ ${d.avg_txn_value}</span>
             </div>`;
 
         // Table rows
