@@ -676,6 +676,28 @@ def ops():
     return render_template('ops.html')
 
 
+def _to_il_time(utc_str):
+    """Convert UTC datetime string from SQLite to Israel time HH:MM:SS."""
+    if not utc_str:
+        return ''
+    try:
+        from datetime import timezone
+        dt = datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        il_dt = dt.astimezone(IL_TZ)
+        return il_dt.strftime('%H:%M:%S')
+    except Exception:
+        return utc_str
+
+
+def _convert_run_times(row_dict):
+    """Convert started_at and finished_at to Israel time in a dict."""
+    row_dict['started_at'] = _to_il_time(row_dict.get('started_at'))
+    row_dict['finished_at'] = _to_il_time(row_dict.get('finished_at'))
+    return row_dict
+
+
 @app.route('/api/ops-status')
 @_ceo_required
 def api_ops_status():
@@ -685,17 +707,19 @@ def api_ops_status():
     branches = []
     for b in branches_rows:
         bid = b['id']
-        # Last run per agent in last 24h
+        # Last run per agent — exactly one row per agent
         agents_data = {}
         for agent in ('bilboy', 'gmail', 'aviv_live'):
             row = db.execute(
                 "SELECT status, message, started_at, duration_seconds, docs_count, amount "
                 "FROM agent_runs WHERE branch_id=? AND agent=? "
-                "ORDER BY id DESC LIMIT 1",
+                "ORDER BY started_at DESC LIMIT 1",
                 (bid, agent)
             ).fetchone()
             if row:
-                agents_data[agent] = dict(row)
+                d = dict(row)
+                d['started_at'] = _to_il_time(d.get('started_at'))
+                agents_data[agent] = d
             else:
                 agents_data[agent] = None
 
@@ -719,18 +743,18 @@ def api_ops_status():
     runs = db.execute(
         "SELECT ar.*, b.name as branch_name FROM agent_runs ar "
         "LEFT JOIN branches b ON ar.branch_id = b.id "
-        "ORDER BY ar.id DESC LIMIT 20"
+        "ORDER BY ar.started_at DESC LIMIT 20"
     ).fetchall()
-    agent_runs = [dict(r) for r in runs]
+    agent_runs = [_convert_run_times(dict(r)) for r in runs]
 
     # Alerts — errors and warnings from last 7 days
     alerts_rows = db.execute(
         "SELECT ar.*, b.name as branch_name FROM agent_runs ar "
         "LEFT JOIN branches b ON ar.branch_id = b.id "
         "WHERE ar.status IN ('error', 'warning') AND ar.started_at >= datetime('now', '-7 days') "
-        "ORDER BY ar.id DESC LIMIT 20"
+        "ORDER BY ar.started_at DESC LIMIT 20"
     ).fetchall()
-    alerts = [dict(r) for r in alerts_rows]
+    alerts = [_convert_run_times(dict(r)) for r in alerts_rows]
 
     return jsonify({
         'branches': branches,
@@ -781,17 +805,49 @@ def ops_run_agent():
 @app.route('/ops/logs/<int:branch_id>/<agent>')
 @_ceo_required
 def ops_logs(branch_id, agent):
+    import re as _re
     if agent not in ('bilboy', 'gmail', 'aviv_live'):
         abort(400)
+
+    # Get branch name for modal title
+    db = get_db()
+    brow = db.execute('SELECT name FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    branch_name = brow['name'] if brow else f'#{branch_id}'
+
     log_path = os.path.join(os.path.dirname(__file__), 'logs', f'{agent}_{branch_id}.log')
     if not os.path.isfile(log_path):
-        return jsonify({'lines': ['No log file found.']})
+        return jsonify({'branch_name': branch_name, 'lines': [{'message': 'אין קובץ לוגים.', 'level': 'default'}]})
     try:
         with open(log_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        return jsonify({'lines': lines[-50:]})
+            raw_lines = f.readlines()
+
+        # Reverse (most recent first), limit to 30
+        raw_lines = list(reversed(raw_lines))[:30]
+
+        # Strip timestamp + log level, classify
+        log_strip_re = _re.compile(r'^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+\s+(INFO|WARNING|ERROR|DEBUG)\s+')
+        result = []
+        for line in raw_lines:
+            line = line.rstrip('\n')
+            if not line.strip():
+                continue
+            msg = log_strip_re.sub('', line)
+
+            lower = msg.lower()
+            if any(kw in lower for kw in ('error', 'נכשל', 'failed', 'exception')):
+                level = 'error'
+            elif any(kw in lower for kw in ('warning', 'diff', '⚠', 'mismatch')):
+                level = 'warning'
+            elif any(kw in lower for kw in ('success', '✅', ' ok', 'complete', 'saved')):
+                level = 'success'
+            else:
+                level = 'default'
+
+            result.append({'message': msg, 'level': level})
+
+        return jsonify({'branch_name': branch_name, 'lines': result})
     except Exception as e:
-        return jsonify({'lines': [f'Error reading log: {e}']})
+        return jsonify({'branch_name': branch_name, 'lines': [{'message': f'שגיאה: {e}', 'level': 'error'}]})
 
 
 @app.route('/health')

@@ -266,16 +266,30 @@ async function runAgent(branchId, agent, btn) {
     }
 }
 
+const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
+
 async function openLogs(branchId, agent) {
     document.getElementById('log-title').textContent = `לוגים — ${AGENT_LABELS[agent]} #${branchId}`;
-    document.getElementById('log-content').textContent = 'טוען...';
+    document.getElementById('log-content').innerHTML = '<span style="color:var(--text-muted)">טוען...</span>';
     document.getElementById('log-modal').classList.add('open');
     try {
         const resp = await fetch(`/ops/logs/${branchId}/${agent}`);
         const data = await resp.json();
-        document.getElementById('log-content').textContent = (data.lines || []).join('');
+        if (data.branch_name) {
+            document.getElementById('log-title').textContent = `לוגים — ${AGENT_LABELS[agent]} · ${data.branch_name}`;
+        }
+        const lines = data.lines || [];
+        if (!lines.length) {
+            document.getElementById('log-content').innerHTML = '<span style="color:var(--text-muted)">אין לוגים</span>';
+            return;
+        }
+        document.getElementById('log-content').innerHTML = lines.map(l => {
+            const color = LOG_COLORS[l.level] || LOG_COLORS.default;
+            const escaped = (l.message || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return `<span style="color:${color}">${escaped}</span>`;
+        }).join('\n');
     } catch (e) {
-        document.getElementById('log-content').textContent = 'שגיאה בטעינת לוגים: ' + e.message;
+        document.getElementById('log-content').innerHTML = `<span style="color:#fca5a5">שגיאה בטעינת לוגים: ${e.message}</span>`;
     }
 }
 
