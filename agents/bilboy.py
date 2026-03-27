@@ -9,10 +9,13 @@ NEVER include docs where supplier matches branch.franchise_supplier.
 import logging
 import os
 import sqlite3
+import time
 from datetime import date, datetime
 from pathlib import Path
 
 import requests
+
+from utils.notify import notify
 
 API_BASE = "https://app.billboy.co.il:5050/api"
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
@@ -66,6 +69,17 @@ def run_bilboy(branch_id: int) -> dict:
     """
     log = _setup_logger(branch_id)
     log.info("Starting BilBoy sync for branch %d", branch_id)
+    t0 = time.time()
+
+    # Insert agent_runs start
+    conn_run = _get_db()
+    cur = conn_run.execute(
+        "INSERT INTO agent_runs (branch_id, agent, started_at, status) VALUES (?, 'bilboy', datetime('now'), 'running')",
+        (branch_id,)
+    )
+    run_id = cur.lastrowid
+    conn_run.commit()
+    conn_run.close()
 
     try:
         branch = _get_branch_config(branch_id)
@@ -199,17 +213,46 @@ def run_bilboy(branch_id: int) -> dict:
         conn.close()
 
         diff = abs(db_total - total_amount)
-        if diff > 10:
+        status = 'success'
+        message = f"{len(records)} docs, ₪{total_amount:,.0f}"
+        if diff > 500:
+            status = 'warning'
+            message = f"{len(records)} docs, ₪{total_amount:,.0f} — פער ₪{diff:,.0f}"
+            log.warning("RECONCILIATION MISMATCH: DB=%.2f API=%.2f diff=%.2f",
+                        db_total, total_amount, diff)
+            notify("⚠️ BilBoy diff", f"סניף {branch_id} — פער ₪{diff:.0f}")
+        elif diff > 10:
             log.warning("RECONCILIATION MISMATCH: DB=%.2f API=%.2f diff=%.2f",
                         db_total, total_amount, diff)
         else:
             log.info("Reconciliation OK: DB=%.2f API=%.2f", db_total, total_amount)
+
+        duration = time.time() - t0
+        conn_fin = _get_db()
+        conn_fin.execute(
+            "UPDATE agent_runs SET finished_at=datetime('now'), status=?, docs_count=?, amount=?, message=?, duration_seconds=? WHERE id=?",
+            (status, len(records), total_amount, message, round(duration, 1), run_id)
+        )
+        conn_fin.commit()
+        conn_fin.close()
 
         log.info("BilBoy sync complete: %d docs, total=%.2f", len(records), total_amount)
         return {'success': True, 'docs_count': len(records), 'total_amount': total_amount}
 
     except Exception as e:
         log.error("BilBoy sync failed: %s", e, exc_info=True)
+        duration = time.time() - t0
+        try:
+            conn_err = _get_db()
+            conn_err.execute(
+                "UPDATE agent_runs SET finished_at=datetime('now'), status='error', message=?, duration_seconds=? WHERE id=?",
+                (str(e)[:500], round(duration, 1), run_id)
+            )
+            conn_err.commit()
+            conn_err.close()
+        except Exception:
+            pass
+        notify("❌ BilBoy נכשל", f"סניף {branch_id} — {e}")
         return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': str(e)}
 
 

@@ -26,6 +26,9 @@
             <li><a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a></li>
             <li><a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a></li>
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
+            {% if session.get('user_role') == 'ceo' %}
+            <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
+            {% endif %}
         </ul>
     </nav>
     <div class="navbar-end">
@@ -51,6 +54,9 @@
         <a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a>
         <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
+        {% if session.get('user_role') == 'ceo' %}
+        <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
+        {% endif %}
     </div>
     <div class="month-switcher-mobile">
         <a href="?month={{ prev_month }}">‹</a>

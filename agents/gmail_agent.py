@@ -12,9 +12,12 @@ import logging
 import os
 import re
 import sqlite3
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from utils.notify import notify
 
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 IMAP_HOST = "imap.gmail.com"
@@ -150,6 +153,17 @@ def run_gmail_sync(branch_id: int) -> dict:
     """
     log = _setup_logger(branch_id)
     log.info("Starting Gmail sync for branch %d", branch_id)
+    t0 = time.time()
+
+    # Insert agent_runs start
+    conn_run = _get_db()
+    cur = conn_run.execute(
+        "INSERT INTO agent_runs (branch_id, agent, started_at, status) VALUES (?, 'gmail', datetime('now'), 'running')",
+        (branch_id,)
+    )
+    run_id = cur.lastrowid
+    conn_run.commit()
+    conn_run.close()
 
     try:
         branch = _get_branch_config(branch_id)
@@ -286,11 +300,39 @@ def run_gmail_sync(branch_id: int) -> dict:
         conn.close()
         mail.logout()
 
+        duration = time.time() - t0
+        status = 'success'
+        message = f"{new_reports} דוחות חדשים, {skipped} דילוגים"
+        if new_reports == 0 and skipped == 0:
+            status = 'warning'
+            message = "אין Z-report"
+            notify("⚠️ אין Z-report", f"סניף {branch_id} — לא נמצאו דוחות ב-7 ימים אחרונים")
+
+        conn_fin = _get_db()
+        conn_fin.execute(
+            "UPDATE agent_runs SET finished_at=datetime('now'), status=?, docs_count=?, message=?, duration_seconds=? WHERE id=?",
+            (status, new_reports, message, round(duration, 1), run_id)
+        )
+        conn_fin.commit()
+        conn_fin.close()
+
         log.info("Gmail sync complete: %d new, %d skipped", new_reports, skipped)
         return {'success': True, 'new_reports': new_reports, 'skipped': skipped}
 
     except Exception as e:
         log.error("Gmail sync failed: %s", e, exc_info=True)
+        duration = time.time() - t0
+        try:
+            conn_err = _get_db()
+            conn_err.execute(
+                "UPDATE agent_runs SET finished_at=datetime('now'), status='error', message=?, duration_seconds=? WHERE id=?",
+                (str(e)[:500], round(duration, 1), run_id)
+            )
+            conn_err.commit()
+            conn_err.close()
+        except Exception:
+            pass
+        notify("❌ Gmail נכשל", f"סניף {branch_id} — {e}")
         return {'success': False, 'new_reports': 0, 'skipped': 0, 'error': str(e)}
 
 

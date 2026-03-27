@@ -10,9 +10,12 @@ import logging
 import os
 import re
 import sqlite3
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from utils.notify import notify
 
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 STATUS_URL = "https://bi-aviv.web.app/status"
@@ -226,10 +229,33 @@ def run_aviv_live(branch_id: int) -> dict:
     Returns {success, amount, transactions}.
     """
     log = _setup_logger(branch_id)
+    t0 = time.time()
 
     if not _is_store_hours():
         log.info("Outside store hours, skipping")
+        # Log skipped run
+        try:
+            conn_skip = _get_db()
+            conn_skip.execute(
+                "INSERT INTO agent_runs (branch_id, agent, started_at, finished_at, status, message, duration_seconds) "
+                "VALUES (?, 'aviv_live', datetime('now'), datetime('now'), 'skipped', 'מחוץ לשעות פעילות', 0)",
+                (branch_id,)
+            )
+            conn_skip.commit()
+            conn_skip.close()
+        except Exception:
+            pass
         return {'success': True, 'amount': 0, 'transactions': 0}
+
+    # Insert agent_runs start
+    conn_run = _get_db()
+    cur = conn_run.execute(
+        "INSERT INTO agent_runs (branch_id, agent, started_at, status) VALUES (?, 'aviv_live', datetime('now'), 'running')",
+        (branch_id,)
+    )
+    run_id = cur.lastrowid
+    conn_run.commit()
+    conn_run.close()
 
     try:
         branch = _get_branch_config(branch_id)
@@ -272,11 +298,39 @@ def run_aviv_live(branch_id: int) -> dict:
         conn.commit()
         conn.close()
 
+        duration = time.time() - t0
+        status = 'success'
+        message = f"₪{data['amount']:,.0f} ({data['transactions']} tx)"
+        if data['amount'] == 0 and _is_store_hours():
+            status = 'warning'
+            message = "סכום 0 בשעות פעילות"
+            notify("⚠️ Aviv Live 0", f"סניף {branch_id} — סכום 0 בשעות פעילות")
+
+        conn_fin = _get_db()
+        conn_fin.execute(
+            "UPDATE agent_runs SET finished_at=datetime('now'), status=?, amount=?, message=?, duration_seconds=? WHERE id=?",
+            (status, data['amount'], message, round(duration, 1), run_id)
+        )
+        conn_fin.commit()
+        conn_fin.close()
+
         log.info("Saved: ₪%.2f (%d tx)", data['amount'], data['transactions'])
         return {'success': True, 'amount': data['amount'], 'transactions': data['transactions']}
 
     except Exception as e:
         log.error("Aviv live scrape failed: %s", e, exc_info=True)
+        duration = time.time() - t0
+        try:
+            conn_err = _get_db()
+            conn_err.execute(
+                "UPDATE agent_runs SET finished_at=datetime('now'), status='error', message=?, duration_seconds=? WHERE id=?",
+                (str(e)[:500], round(duration, 1), run_id)
+            )
+            conn_err.commit()
+            conn_err.close()
+        except Exception:
+            pass
+        notify("❌ Aviv Live נכשל", f"סניף {branch_id} — {e}")
         return {'success': False, 'amount': 0, 'transactions': 0, 'error': str(e)}
 
 

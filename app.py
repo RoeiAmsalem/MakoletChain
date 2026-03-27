@@ -1,10 +1,15 @@
 import io
 import os
 import sqlite3
+import subprocess
+import time
 from datetime import datetime, date, timedelta
 from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+load_dotenv()
 
 try:
     import fitz  # PyMuPDF
@@ -652,6 +657,141 @@ def api_sales_pdf_pages(sale_date):
         return jsonify({'pages': pages})
     except Exception:
         return jsonify({'pages': 0})
+
+
+def _ceo_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        if session.get('user_role') != 'ceo':
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/ops')
+@_ceo_required
+def ops():
+    return render_template('ops.html')
+
+
+@app.route('/api/ops-status')
+@_ceo_required
+def api_ops_status():
+    db = get_db()
+    # Branches
+    branches_rows = db.execute('SELECT id, name, city, active FROM branches WHERE active = 1').fetchall()
+    branches = []
+    for b in branches_rows:
+        bid = b['id']
+        # Last run per agent in last 24h
+        agents_data = {}
+        for agent in ('bilboy', 'gmail', 'aviv_live'):
+            row = db.execute(
+                "SELECT status, message, started_at, duration_seconds, docs_count, amount "
+                "FROM agent_runs WHERE branch_id=? AND agent=? "
+                "ORDER BY id DESC LIMIT 1",
+                (bid, agent)
+            ).fetchone()
+            if row:
+                agents_data[agent] = dict(row)
+            else:
+                agents_data[agent] = None
+
+        # Determine overall status
+        statuses = [a['status'] for a in agents_data.values() if a]
+        if 'error' in statuses:
+            overall = 'error'
+        elif 'warning' in statuses:
+            overall = 'warning'
+        elif statuses:
+            overall = 'ok'
+        else:
+            overall = 'unknown'
+
+        branches.append({
+            'id': bid, 'name': b['name'], 'city': b['city'],
+            'status': overall, 'agents': agents_data,
+        })
+
+    # Recent agent runs
+    runs = db.execute(
+        "SELECT ar.*, b.name as branch_name FROM agent_runs ar "
+        "LEFT JOIN branches b ON ar.branch_id = b.id "
+        "ORDER BY ar.id DESC LIMIT 20"
+    ).fetchall()
+    agent_runs = [dict(r) for r in runs]
+
+    # Alerts — errors and warnings from last 7 days
+    alerts_rows = db.execute(
+        "SELECT ar.*, b.name as branch_name FROM agent_runs ar "
+        "LEFT JOIN branches b ON ar.branch_id = b.id "
+        "WHERE ar.status IN ('error', 'warning') AND ar.started_at >= datetime('now', '-7 days') "
+        "ORDER BY ar.id DESC LIMIT 20"
+    ).fetchall()
+    alerts = [dict(r) for r in alerts_rows]
+
+    return jsonify({
+        'branches': branches,
+        'agent_runs': agent_runs,
+        'alerts': alerts,
+    })
+
+
+@app.route('/ops/run-agent', methods=['POST'])
+@_ceo_required
+def ops_run_agent():
+    data = request.get_json()
+    branch_id = data.get('branch_id')
+    agent = data.get('agent')
+
+    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live'):
+        return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
+
+    t0 = time.time()
+    try:
+        if agent == 'bilboy':
+            from agents.bilboy import run_bilboy
+            result = run_bilboy(int(branch_id))
+            msg = f"{result.get('docs_count', 0)} docs, ₪{result.get('total_amount', 0):,.0f}"
+        elif agent == 'gmail':
+            from agents.gmail_agent import run_gmail_sync
+            result = run_gmail_sync(int(branch_id))
+            msg = f"{result.get('new_reports', 0)} דוחות חדשים"
+        else:
+            from agents.aviv_live import run_aviv_live
+            result = run_aviv_live(int(branch_id))
+            msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
+
+        duration = round(time.time() - t0, 1)
+        status = 'success' if result.get('success') else 'error'
+        if not result.get('success'):
+            msg = result.get('error', 'Unknown error')
+
+        from utils.notify import notify
+        notify(f"{'✅' if status == 'success' else '❌'} {agent}", f"סניף {branch_id} — {msg}")
+        return jsonify({'status': status, 'message': msg, 'duration': duration})
+
+    except Exception as e:
+        duration = round(time.time() - t0, 1)
+        return jsonify({'status': 'error', 'message': str(e), 'duration': duration})
+
+
+@app.route('/ops/logs/<int:branch_id>/<agent>')
+@_ceo_required
+def ops_logs(branch_id, agent):
+    if agent not in ('bilboy', 'gmail', 'aviv_live'):
+        abort(400)
+    log_path = os.path.join(os.path.dirname(__file__), 'logs', f'{agent}_{branch_id}.log')
+    if not os.path.isfile(log_path):
+        return jsonify({'lines': ['No log file found.']})
+    try:
+        with open(log_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        return jsonify({'lines': lines[-50:]})
+    except Exception as e:
+        return jsonify({'lines': [f'Error reading log: {e}']})
 
 
 @app.route('/health')

@@ -84,6 +84,19 @@ CREATE TABLE IF NOT EXISTS live_sales (
   PRIMARY KEY (branch_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  branch_id INTEGER NOT NULL,
+  agent TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  status TEXT DEFAULT 'running',
+  docs_count INTEGER DEFAULT 0,
+  amount REAL DEFAULT 0,
+  message TEXT,
+  duration_seconds REAL DEFAULT 0
+);
+
 -- Insert branch 126 (empty data, credentials TBD)
 INSERT OR IGNORE INTO branches (id, name, city, aviv_user_id, gmail_label, franchise_supplier)
 VALUES (126, 'מכולת אינשטיין', 'תל אביב', 'S33834', 'איינשטיין', 'זיכיונות המכולת בע"מ');

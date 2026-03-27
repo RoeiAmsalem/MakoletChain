@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בקרה — MakoletChain</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .ops-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+        .ops-header h1 { font-size:1.5rem; font-weight:700; }
+        .btn-refresh { background:rgba(99,102,241,0.2); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:0.5rem 1rem; cursor:pointer; font-family:inherit; font-size:0.85rem; font-weight:600; transition:background 0.15s; }
+        .btn-refresh:hover { background:rgba(99,102,241,0.35); }
+
+        /* Branch cards */
+        .branch-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); gap:1rem; margin-bottom:2rem; }
+        .branch-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); }
+        .branch-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+        .branch-name { font-size:1.1rem; font-weight:700; }
+        .branch-meta { font-size:0.8rem; color:var(--text-secondary); }
+        .status-dot { display:inline-block; width:12px; height:12px; border-radius:50%; }
+        .status-dot.ok { background:#22c55e; }
+        .status-dot.warning { background:#f59e0b; }
+        .status-dot.error { background:#ef4444; }
+        .status-dot.unknown { background:#64748b; }
+
+        .agent-rows { display:flex; flex-direction:column; gap:0.5rem; margin-bottom:1rem; }
+        .agent-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.4rem 0.6rem; background:rgba(255,255,255,0.03); border-radius:6px; }
+        .agent-name { font-weight:600; min-width:70px; }
+        .agent-msg { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .agent-badge { font-size:0.75rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:999px; }
+        .agent-badge.success { background:rgba(34,197,94,0.2); color:#86efac; }
+        .agent-badge.warning { background:rgba(245,158,11,0.2); color:#fde68a; }
+        .agent-badge.error { background:rgba(239,68,68,0.2); color:#fca5a5; }
+        .agent-badge.running { background:rgba(99,102,241,0.2); color:#a5b4fc; }
+        .agent-badge.skipped { background:rgba(100,116,139,0.2); color:#94a3b8; }
+        .agent-time { font-size:0.75rem; color:var(--text-muted); min-width:50px; text-align:left; }
+
+        .branch-actions { display:flex; gap:0.5rem; flex-wrap:wrap; }
+        .btn-action { background:rgba(255,255,255,0.06); border:1px solid var(--card-border); border-radius:6px; padding:0.35rem 0.75rem; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; font-family:inherit; transition:background 0.15s, color 0.15s; }
+        .btn-action:hover { background:rgba(255,255,255,0.12); color:white; }
+        .btn-action:disabled { opacity:0.5; cursor:not-allowed; }
+        .btn-action .spin { display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,0.2); border-top-color:white; border-radius:50%; animation:spin 0.8s linear infinite; margin-left:4px; }
+
+        /* Timeline */
+        .section-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); margin-bottom:1.5rem; }
+        .section-card h2 { font-size:1.1rem; font-weight:700; margin-bottom:1rem; }
+        .timeline { display:flex; flex-direction:column; gap:0.4rem; }
+        .timeline-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.4rem 0.6rem; border-radius:6px; background:rgba(255,255,255,0.02); }
+        .timeline-time { font-size:0.75rem; color:var(--text-muted); min-width:120px; direction:ltr; text-align:right; }
+        .timeline-branch { font-weight:600; min-width:100px; }
+        .timeline-agent { min-width:70px; color:var(--text-secondary); }
+        .timeline-msg { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+        /* Alerts */
+        .alert-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.5rem 0.75rem; border-radius:6px; margin-bottom:0.4rem; }
+        .alert-row.error { background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.15); }
+        .alert-row.warning { background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.15); }
+        .alert-msg { flex:1; }
+        .alert-time { font-size:0.75rem; color:var(--text-muted); }
+
+        /* Log modal */
+        .modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:1000; align-items:center; justify-content:center; }
+        .modal-overlay.open { display:flex; }
+        .modal-box { background:var(--surface); border:1px solid var(--card-border); border-radius:var(--radius); width:90%; max-width:800px; max-height:80vh; display:flex; flex-direction:column; }
+        .modal-header { display:flex; align-items:center; justify-content:space-between; padding:1rem 1.25rem; border-bottom:1px solid var(--card-border); }
+        .modal-header h3 { font-size:1rem; font-weight:700; }
+        .modal-close { background:none; border:none; color:var(--text-secondary); font-size:1.25rem; cursor:pointer; padding:0.25rem; }
+        .modal-body { padding:1rem 1.25rem; overflow-y:auto; flex:1; }
+        .log-pre { font-family:'Courier New', monospace; font-size:0.78rem; line-height:1.6; color:var(--text-secondary); white-space:pre-wrap; word-break:break-all; margin:0; }
+
+        /* Toast */
+        .toast { position:fixed; bottom:2rem; left:50%; transform:translateX(-50%); padding:0.75rem 1.5rem; border-radius:8px; font-size:0.9rem; font-weight:600; z-index:2000; opacity:0; transition:opacity 0.3s; pointer-events:none; }
+        .toast.show { opacity:1; }
+        .toast.success { background:#065f46; color:#86efac; border:1px solid rgba(34,197,94,0.3); }
+        .toast.error { background:#7f1d1d; color:#fca5a5; border:1px solid rgba(239,68,68,0.3); }
+
+        @media (max-width: 768px) {
+            .branch-grid { grid-template-columns:1fr; }
+            .ops-header { flex-direction:column; gap:0.75rem; align-items:flex-start; }
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="navbar-top">
+        <a href="/" class="navbar-brand" style="text-decoration:none; display:flex; align-items:center; gap:0.75rem;">
+            <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="MakoletChain" style="height:42px; width:auto; object-fit:contain; filter:invert(1) hue-rotate(180deg);">
+            <span class="store-name">בקרת תפעול</span>
+        </a>
+        <a href="/" style="color:var(--text-secondary); text-decoration:none; font-size:0.85rem;">← חזרה לדשבורד</a>
+    </div>
+</nav>
+
+<main class="main-content">
+    <div class="ops-header">
+        <h1>בקרת תפעול</h1>
+        <button class="btn-refresh" onclick="loadOpsData()">רענן</button>
+    </div>
+
+    <!-- SECTION 1: Branch Cards -->
+    <div class="branch-grid" id="branch-grid">
+        <div class="loading"><div class="spinner"></div> טוען נתונים...</div>
+    </div>
+
+    <!-- SECTION 2: Nightly Run Timeline -->
+    <div class="section-card">
+        <h2>ציר זמן — הרצות אחרונות</h2>
+        <div class="timeline" id="timeline">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+
+    <!-- SECTION 3: Alerts -->
+    <div class="section-card">
+        <h2>התראות — 7 ימים אחרונים</h2>
+        <div id="alerts">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+</main>
+
+<!-- Log Modal -->
+<div class="modal-overlay" id="log-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3 id="log-title">לוגים</h3>
+            <button class="modal-close" onclick="closeLogModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <pre class="log-pre" id="log-content">טוען...</pre>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live' };
+const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
+
+function formatMoney(n) {
+    if (!n) return '₪0';
+    return '₪' + Number(n).toLocaleString('he-IL', {maximumFractionDigits: 0});
+}
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    setTimeout(() => t.className = 'toast', 3000);
+}
+
+function renderBranches(branches) {
+    const grid = document.getElementById('branch-grid');
+    if (!branches || !branches.length) {
+        grid.innerHTML = '<div style="color:var(--text-muted);padding:2rem;text-align:center;">אין סניפים פעילים</div>';
+        return;
+    }
+    grid.innerHTML = branches.map(b => {
+        const agentRows = ['bilboy', 'gmail', 'aviv_live'].map(agent => {
+            const a = b.agents[agent];
+            if (!a) return `<div class="agent-row"><span class="agent-name">${AGENT_LABELS[agent]}</span><span class="agent-msg">לא רץ</span><span class="agent-badge skipped">–</span></div>`;
+            const badge = a.status || 'unknown';
+            const icon = STATUS_ICONS[badge] || '?';
+            const time = a.started_at ? a.started_at.split(' ')[1] || '' : '';
+            const dur = a.duration_seconds ? `${a.duration_seconds}s` : '';
+            return `<div class="agent-row">
+                <span class="agent-name">${AGENT_LABELS[agent]}</span>
+                <span class="agent-msg">${a.message || ''}</span>
+                <span class="agent-badge ${badge}">${icon}</span>
+                <span class="agent-time">${time} ${dur}</span>
+            </div>`;
+        }).join('');
+
+        return `<div class="branch-card">
+            <div class="branch-card-header">
+                <div>
+                    <span class="status-dot ${b.status}"></span>
+                    <span class="branch-name">${b.name}</span>
+                    <span class="branch-meta">#${b.id} · ${b.city || ''}</span>
+                </div>
+            </div>
+            <div class="agent-rows">${agentRows}</div>
+            <div class="branch-actions">
+                <button class="btn-action" onclick="runAgent(${b.id},'bilboy',this)">הרץ BilBoy</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'gmail',this)">הרץ Gmail</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'aviv_live',this)">הרץ Aviv</button>
+                <button class="btn-action" onclick="openLogs(${b.id},'bilboy')">לוגים BB</button>
+                <button class="btn-action" onclick="openLogs(${b.id},'gmail')">לוגים GM</button>
+                <button class="btn-action" onclick="openLogs(${b.id},'aviv_live')">לוגים AV</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderTimeline(runs) {
+    const el = document.getElementById('timeline');
+    if (!runs || !runs.length) {
+        el.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">אין הרצות אחרונות</div>';
+        return;
+    }
+    el.innerHTML = runs.map(r => {
+        const badge = r.status || 'unknown';
+        return `<div class="timeline-row">
+            <span class="status-dot ${badge}" style="width:8px;height:8px;flex-shrink:0;"></span>
+            <span class="timeline-time">${r.started_at || ''}</span>
+            <span class="timeline-branch">${r.branch_name || '#' + r.branch_id}</span>
+            <span class="timeline-agent">${AGENT_LABELS[r.agent] || r.agent}</span>
+            <span class="timeline-msg">${r.message || ''}</span>
+        </div>`;
+    }).join('');
+}
+
+function renderAlerts(alerts) {
+    const el = document.getElementById('alerts');
+    if (!alerts || !alerts.length) {
+        el.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">אין התראות</div>';
+        return;
+    }
+    el.innerHTML = alerts.map(a => {
+        return `<div class="alert-row ${a.status}">
+            <span class="status-dot ${a.status}" style="width:8px;height:8px;flex-shrink:0;"></span>
+            <span class="alert-msg"><strong>${a.branch_name || '#' + a.branch_id}</strong> · ${AGENT_LABELS[a.agent] || a.agent} — ${a.message || ''}</span>
+            <span class="alert-time">${a.started_at || ''}</span>
+        </div>`;
+    }).join('');
+}
+
+async function loadOpsData() {
+    try {
+        const resp = await fetch('/api/ops-status');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        renderBranches(data.branches);
+        renderTimeline(data.agent_runs);
+        renderAlerts(data.alerts);
+    } catch (e) {
+        console.error('Failed to load ops data:', e);
+    }
+}
+
+async function runAgent(branchId, agent, btn) {
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.innerHTML = orig + ' <span class="spin"></span>';
+    try {
+        const resp = await fetch('/ops/run-agent', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({branch_id: branchId, agent: agent})
+        });
+        const data = await resp.json();
+        if (data.status === 'success') {
+            showToast(`${AGENT_LABELS[agent]} #${branchId}: ${data.message} (${data.duration}s)`, 'success');
+        } else {
+            showToast(`${AGENT_LABELS[agent]} #${branchId}: ${data.message}`, 'error');
+        }
+        loadOpsData();
+    } catch (e) {
+        showToast(`שגיאה: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function openLogs(branchId, agent) {
+    document.getElementById('log-title').textContent = `לוגים — ${AGENT_LABELS[agent]} #${branchId}`;
+    document.getElementById('log-content').textContent = 'טוען...';
+    document.getElementById('log-modal').classList.add('open');
+    try {
+        const resp = await fetch(`/ops/logs/${branchId}/${agent}`);
+        const data = await resp.json();
+        document.getElementById('log-content').textContent = (data.lines || []).join('');
+    } catch (e) {
+        document.getElementById('log-content').textContent = 'שגיאה בטעינת לוגים: ' + e.message;
+    }
+}
+
+function closeLogModal() {
+    document.getElementById('log-modal').classList.remove('open');
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeLogModal();
+});
+
+// Initial load + auto-refresh every 60s
+loadOpsData();
+setInterval(loadOpsData, 60000);
+</script>
+</body>
+</html>
