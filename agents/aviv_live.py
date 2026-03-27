@@ -2,7 +2,8 @@
 Aviv POS live scraper (branch-aware) — uses Playwright to scrape bi-aviv.web.app/status.
 
 Reads credentials from branches table. Saves to live_sales with branch_id.
-Store hours: 06:30–23:30 Israel time (zoneinfo, NOT pytz).
+Day-aware store hours (zoneinfo, NOT pytz):
+  Sun–Thu 06:30–23:30, Fri 06:30–19:00, Sat 16:30–23:30
 """
 
 import logging
@@ -48,10 +49,22 @@ def _setup_logger(branch_id: int) -> logging.Logger:
     return logger
 
 
+STORE_SCHEDULE = {
+    0: (6, 30, 23, 30),   # Monday
+    1: (6, 30, 23, 30),   # Tuesday
+    2: (6, 30, 23, 30),   # Wednesday
+    3: (6, 30, 23, 30),   # Thursday
+    4: (6, 30, 19, 0),    # Friday — closes early
+    5: (16, 30, 23, 30),  # Saturday — opens late
+    6: (6, 30, 23, 30),   # Sunday
+}
+
+
 def _is_store_hours() -> bool:
     now = datetime.now(IL_TZ)
-    start = now.replace(hour=6, minute=30, second=0, microsecond=0)
-    end = now.replace(hour=23, minute=30, second=0, microsecond=0)
+    sh, sm, eh, em = STORE_SCHEDULE[now.weekday()]
+    start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    end = now.replace(hour=eh, minute=em, second=0, microsecond=0)
     return start <= now <= end
 
 

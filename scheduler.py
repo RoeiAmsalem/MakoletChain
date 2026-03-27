@@ -72,17 +72,11 @@ def nightly_sync():
 scheduler = BlockingScheduler(timezone=IL_TZ)
 
 
-# Every 5 minutes during store hours only (06:00-23:25 IL, last fire done by 23:30)
+# Every 5 minutes 06:00-23:55 IL — the inner day-aware check handles precise windows
+# Widest window: Sun-Thu 06:30-23:30, Fri 06:30-19:00, Sat 16:30-23:30
 @scheduler.scheduled_job('cron', hour='6-23', minute='*/5', id='aviv_live')
 def scheduled_aviv():
-    now = datetime.now(IL_TZ)
-    # Double protection: skip if before 06:30 or after 23:30
-    start = now.replace(hour=6, minute=30, second=0, microsecond=0)
-    end = now.replace(hour=23, minute=30, second=0, microsecond=0)
-    if start <= now <= end:
-        run_aviv_all()
-    else:
-        log.debug("Outside store hours, skipping aviv_live")
+    run_aviv_all()
 
 
 # Nightly 02:00 IL: bilboy + gmail for all branches
