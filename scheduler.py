@@ -72,10 +72,11 @@ def nightly_sync():
 scheduler = BlockingScheduler(timezone=IL_TZ)
 
 
-# Every 5 minutes: aviv_live for all branches (within store hours)
-@scheduler.scheduled_job('interval', minutes=5, id='aviv_live')
+# Every 5 minutes during store hours only (06:00-22:55 IL, last fire done by 23:05)
+@scheduler.scheduled_job('cron', hour='6-22', minute='*/5', id='aviv_live')
 def scheduled_aviv():
     now = datetime.now(IL_TZ)
+    # Double protection: skip if before 06:30 or after 23:05
     start = now.replace(hour=6, minute=30, second=0, microsecond=0)
     end = now.replace(hour=23, minute=5, second=0, microsecond=0)
     if start <= now <= end:

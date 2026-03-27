@@ -29,6 +29,8 @@ AVIV_SENDER_EMAIL = os.environ.get('AVIV_SENDER_EMAIL', 'avivpost@avivpos.co.il'
 TOTAL_PATTERN_RTL = re.compile(r'([\d,]+\.?\d*)\s*₪\s*:כ"הס')
 # LTR: סה"כ: ₪ 12377.92
 TOTAL_PATTERN_LTR = re.compile(r'סה["\u05f4]כ[:\s]+₪?\s*([\d,]+\.?\d*)')
+# Transaction count: "200 תואקסע תומכ" (RTL for "כמות עסקאות 200")
+TRANSACTIONS_PATTERN = re.compile(r'(\d+)\s*תואקסע\s*תומכ')
 
 
 def _get_db():
@@ -86,40 +88,58 @@ def _extract_z_pdf(msg) -> bytes | None:
     return None
 
 
-def _extract_total_from_pdf(pdf_bytes: bytes) -> float | None:
+def _extract_total_from_pdf(pdf_bytes: bytes) -> tuple[float | None, int]:
+    """Extract total amount and transaction count from Z-report PDF.
+    Returns (total, transactions)."""
     import io
+    total = None
+    transactions = 0
+    full_text = ""
+
     # Try pdfplumber first (matches MakoletDashboard's working parser)
     try:
         import pdfplumber
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for page in pdf.pages:
                 text = page.extract_text() or ""
-                match = TOTAL_PATTERN_RTL.search(text)
-                if match:
-                    return float(match.group(1).replace(",", ""))
-                match = TOTAL_PATTERN_LTR.search(text)
-                if match:
-                    return float(match.group(1).replace(",", ""))
+                full_text += text + "\n"
+                if total is None:
+                    match = TOTAL_PATTERN_RTL.search(text)
+                    if match:
+                        total = float(match.group(1).replace(",", ""))
+                    else:
+                        match = TOTAL_PATTERN_LTR.search(text)
+                        if match:
+                            total = float(match.group(1).replace(",", ""))
     except ImportError:
         pass
-    # Fallback to PyMuPDF
-    try:
-        import fitz
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        for page in doc:
-            text = page.get_text()
-            match = TOTAL_PATTERN_RTL.search(text)
-            if match:
-                doc.close()
-                return float(match.group(1).replace(",", ""))
-            match = TOTAL_PATTERN_LTR.search(text)
-            if match:
-                doc.close()
-                return float(match.group(1).replace(",", ""))
-        doc.close()
-    except ImportError:
-        pass
-    return None
+
+    # Fallback to PyMuPDF if pdfplumber didn't find total
+    if total is None:
+        try:
+            import fitz
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            for page in doc:
+                text = page.get_text()
+                full_text += text + "\n"
+                if total is None:
+                    match = TOTAL_PATTERN_RTL.search(text)
+                    if match:
+                        total = float(match.group(1).replace(",", ""))
+                    else:
+                        match = TOTAL_PATTERN_LTR.search(text)
+                        if match:
+                            total = float(match.group(1).replace(",", ""))
+            doc.close()
+        except ImportError:
+            pass
+
+    # Extract transaction count from full text
+    tx_match = TRANSACTIONS_PATTERN.search(full_text)
+    if tx_match:
+        transactions = int(tx_match.group(1))
+
+    return total, transactions
 
 
 def run_gmail_sync(branch_id: int) -> dict:
@@ -209,8 +229,8 @@ def run_gmail_sync(branch_id: int) -> dict:
                 log.warning("No Z PDF found for %s", date_str)
                 continue
 
-            # Parse total from PDF
-            total = _extract_total_from_pdf(pdf_bytes)
+            # Parse total and transactions from PDF
+            total, transactions = _extract_total_from_pdf(pdf_bytes)
             if total is None:
                 log.warning("Could not parse total from PDF for %s", date_str)
                 continue
@@ -224,13 +244,13 @@ def run_gmail_sync(branch_id: int) -> dict:
             # Insert into daily_sales
             conn.execute(
                 "INSERT OR IGNORE INTO daily_sales (branch_id, date, amount, transactions, source) "
-                "VALUES (?, ?, ?, 0, 'z_report')",
-                (branch_id, date_str, total)
+                "VALUES (?, ?, ?, ?, 'z_report')",
+                (branch_id, date_str, total, transactions)
             )
             conn.commit()
             existing.add(date_str)
             new_reports += 1
-            log.info("Saved Z-report for %s: %.2f", date_str, total)
+            log.info("Saved Z-report for %s: %.2f (%d transactions)", date_str, total, transactions)
 
         conn.close()
         mail.logout()
