@@ -38,7 +38,7 @@ RTL Hebrew UI, dark theme #0d1526
 - Deploy always restarts BOTH services
 - deep_test.py must pass after every change
 - BilBoy: never include supplier "זיכיונות המכולת בע"מ" in goods docs
-- Live scraper hours: 06:30–23:05 Israel time
+- Live scraper hours: 06:30–23:30 Israel time
 
 ## Team
 - Claude (claude.ai) = Architect

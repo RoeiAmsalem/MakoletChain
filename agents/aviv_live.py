@@ -2,14 +2,14 @@
 Aviv POS live scraper (branch-aware) — uses Playwright to scrape bi-aviv.web.app/status.
 
 Reads credentials from branches table. Saves to live_sales with branch_id.
-Store hours: 06:30–23:05 Israel time (zoneinfo, NOT pytz).
+Store hours: 06:30–23:30 Israel time (zoneinfo, NOT pytz).
 """
 
 import logging
 import os
 import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -51,7 +51,7 @@ def _setup_logger(branch_id: int) -> logging.Logger:
 def _is_store_hours() -> bool:
     now = datetime.now(IL_TZ)
     start = now.replace(hour=6, minute=30, second=0, microsecond=0)
-    end = now.replace(hour=23, minute=5, second=0, microsecond=0)
+    end = now.replace(hour=23, minute=30, second=0, microsecond=0)
     return start <= now <= end
 
 
@@ -143,6 +143,70 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
     }
 
 
+def handle_zero_detection(branch_id: int, conn, logger: logging.Logger):
+    """
+    Called when Aviv BI returns amount=0.
+    If previous fetch was > 0 → store closed, save provisional Z-report.
+    If before 23:30 → pause scraper for 2 hours (early closure).
+    """
+    now = datetime.now(IL_TZ)
+    today = now.date().isoformat()
+
+    # Get last non-zero amount for today
+    row = conn.execute(
+        'SELECT amount, fetched_at FROM live_sales '
+        'WHERE branch_id=? AND date=? AND amount > 0 '
+        'ORDER BY fetched_at DESC LIMIT 1',
+        (branch_id, today)
+    ).fetchone()
+
+    if not row:
+        return  # Never had data today, nothing to save
+
+    last_amount = row['amount']
+
+    # Save provisional Z-report to daily_sales (only if no real Z-report exists)
+    existing = conn.execute(
+        'SELECT source FROM daily_sales WHERE branch_id=? AND date=?',
+        (branch_id, today)
+    ).fetchone()
+
+    if not existing:
+        conn.execute(
+            'INSERT OR REPLACE INTO daily_sales '
+            '(branch_id, date, amount, transactions, source) '
+            'VALUES (?, ?, ?, 0, ?)',
+            (branch_id, today, last_amount, 'live_provisional')
+        )
+        conn.commit()
+        logger.info(
+            "Branch %d: Zero detected, saved provisional ₪%.2f for %s",
+            branch_id, last_amount, today
+        )
+    elif existing['source'] == 'live_provisional':
+        # Update provisional with latest best amount
+        conn.execute(
+            'UPDATE daily_sales SET amount=? WHERE branch_id=? AND date=?',
+            (last_amount, branch_id, today)
+        )
+        conn.commit()
+
+    # Early closure detection: if before 23:30 → pause 2 hours
+    end_normal = now.replace(hour=23, minute=30, second=0, microsecond=0)
+    if now < end_normal:
+        conn.execute(
+            'INSERT OR REPLACE INTO live_sales '
+            '(branch_id, date, amount, transactions, last_updated, fetched_at) '
+            'VALUES (?, ?, 0, 0, ?, ?)',
+            (branch_id, today, 'PAUSED', datetime.now(IL_TZ).isoformat())
+        )
+        conn.commit()
+        logger.info(
+            "Branch %d: Early closure detected at %s, pausing 2 hours",
+            branch_id, now.strftime('%H:%M')
+        )
+
+
 def run_aviv_live(branch_id: int) -> dict:
     """
     Scrape Aviv POS live sales for a branch.
@@ -160,10 +224,32 @@ def run_aviv_live(branch_id: int) -> dict:
             log.warning("No aviv_user_id for branch %d", branch_id)
             return {'success': False, 'amount': 0, 'transactions': 0, 'error': 'no credentials'}
 
+        # Check if paused due to early closure
+        conn = _get_db()
+        today = date.today().isoformat()
+        pause_row = conn.execute(
+            'SELECT last_updated, fetched_at FROM live_sales '
+            'WHERE branch_id=? AND date=? ORDER BY fetched_at DESC LIMIT 1',
+            (branch_id, today)
+        ).fetchone()
+
+        if pause_row and pause_row['last_updated'] == 'PAUSED':
+            paused_at = datetime.fromisoformat(pause_row['fetched_at'])
+            if datetime.now(IL_TZ) - paused_at < timedelta(hours=2):
+                log.info("Branch %d: Scraper paused (early closure), skipping", branch_id)
+                conn.close()
+                return {'success': True, 'amount': 0, 'transactions': 0, 'skipped': 'paused'}
+            # 2 hours passed → resume normally
+
         data = _scrape(branch, log)
 
+        # Zero detection: if amount is 0 and we previously had data
+        if data['amount'] == 0:
+            handle_zero_detection(branch_id, conn, log)
+            conn.close()
+            return {'success': True, 'amount': 0, 'transactions': 0, 'zero_detected': True}
+
         # Save to DB
-        conn = _get_db()
         conn.execute(
             "INSERT OR REPLACE INTO live_sales (branch_id, date, amount, transactions, last_updated, fetched_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",

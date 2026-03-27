@@ -218,10 +218,16 @@ def run_gmail_sync(branch_id: int) -> dict:
 
             date_str = email_date.isoformat()
 
-            # Skip if already in DB
+            # Skip if already in DB (but allow overwriting provisionals)
             if date_str in existing:
-                skipped += 1
-                continue
+                prov_row = conn.execute(
+                    "SELECT source FROM daily_sales WHERE branch_id=? AND date=?",
+                    (branch_id, date_str)
+                ).fetchone()
+                if prov_row and prov_row['source'] != 'live_provisional':
+                    skipped += 1
+                    continue
+                # Provisional exists — continue to overwrite with real Z-report
 
             # Extract PDF
             pdf_bytes = _extract_z_pdf(msg)
@@ -241,7 +247,32 @@ def run_gmail_sync(branch_id: int) -> dict:
             with open(pdf_path, 'wb') as f:
                 f.write(pdf_bytes)
 
-            # Insert into daily_sales
+            # Check if a provisional existed for this date
+            provisional = conn.execute(
+                "SELECT amount FROM daily_sales "
+                "WHERE branch_id=? AND date=? AND source='live_provisional'",
+                (branch_id, date_str)
+            ).fetchone()
+
+            if provisional:
+                diff = abs(total - provisional['amount'])
+                pct = (diff / total * 100) if total else 0
+                log.info(
+                    "Branch %d date %s: Z=₪%.2f, Provisional=₪%.2f, diff=₪%.2f (%.1f%%)",
+                    branch_id, date_str, total, provisional['amount'], diff, pct
+                )
+                if diff > 500:
+                    log.warning(
+                        "LARGE DIFF branch %d %s: Z vs provisional diff ₪%.2f",
+                        branch_id, date_str, diff
+                    )
+                # Delete provisional before inserting real Z-report
+                conn.execute(
+                    "DELETE FROM daily_sales WHERE branch_id=? AND date=? AND source='live_provisional'",
+                    (branch_id, date_str)
+                )
+
+            # Insert real Z-report
             conn.execute(
                 "INSERT OR IGNORE INTO daily_sales (branch_id, date, amount, transactions, source) "
                 "VALUES (?, ?, ?, ?, 'z_report')",
