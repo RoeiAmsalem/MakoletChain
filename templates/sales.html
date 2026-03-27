@@ -71,12 +71,13 @@
                     <th>תאריך</th>
                     <th>סכום (₪)</th>
                     <th>עסקאות</th>
+                    <th>ממוצע לעסקה</th>
                     <th>מקור</th>
                     <th>PDF</th>
                 </tr>
             </thead>
             <tbody id="sales-tbody">
-                <tr><td colspan="5" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
+                <tr><td colspan="6" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
             </tbody>
             <tfoot id="sales-tfoot"></tfoot>
         </table>
@@ -141,11 +142,15 @@ async function loadSales() {
             <div class="kpi-card" style="background:linear-gradient(135deg,#7f1d1d,#991b1b);border-color:rgba(239,68,68,0.25)">
                 <div class="kpi-header"><span class="kpi-icon">🔻</span><span class="kpi-label">יום הכי נמוך</span></div>
                 <span class="kpi-value" style="color:#fca5a5">${formatMoney(d.lowest)}</span>
+            </div>
+            <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">🧾</span><span class="kpi-label">ממוצע עסקאות יומי</span></div>
+                <span class="kpi-value" style="color:#86efac">${d.avg_daily_txn} עסקאות/יום</span>
             </div>`;
 
         // Table rows
         if (!d.sales.length) {
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
             tfoot.innerHTML = '';
             return;
         }
@@ -154,10 +159,12 @@ async function loadSales() {
             const pdfBtn = s.has_pdf
                 ? `<button class="btn-pdf" onclick="openPdf('${s.date}')">📄 צפה</button>`
                 : '<span style="color:#64748b;font-size:0.8rem">—</span>';
+            const avgTxn = s.avg_per_txn != null ? `₪ ${s.avg_per_txn}` : '—';
             return `<tr>
                 <td>${s.date}</td>
                 <td class="money profit" style="direction:ltr;text-align:left;font-weight:600">₪ ${Number(s.amount).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
                 <td style="text-align:center">${s.transactions || '—'}</td>
+                <td style="text-align:center">${avgTxn}</td>
                 <td><span style="font-size:0.78rem;color:#94a3b8">${s.source || 'z_report'}</span></td>
                 <td>${pdfBtn}</td>
             </tr>`;
@@ -166,7 +173,7 @@ async function loadSales() {
         tfoot.innerHTML = `<tr class="tfoot-total" style="font-weight:700;border-top:2px solid #334155;background:#0f172a">
             <td>סה"כ</td>
             <td class="money profit" style="direction:ltr;text-align:left;font-weight:700">₪ ${Number(d.total).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
-            <td colspan="3"></td>
+            <td colspan="4"></td>
         </tr>`;
 
     } catch(err) {

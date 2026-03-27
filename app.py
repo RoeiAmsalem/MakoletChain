@@ -570,6 +570,14 @@ def api_sales():
     highest = max((s['amount'] for s in sales), default=0)
     lowest = min((s['amount'] for s in sales), default=0)
 
+    # Per-row average per transaction
+    for s in sales:
+        s['avg_per_txn'] = round(s['amount'] / s['transactions']) if s['transactions'] else None
+
+    # Average daily transaction count (only days with transactions)
+    txn_days = [s['transactions'] for s in sales if s['transactions']]
+    avg_daily_txn = round(sum(txn_days) / len(txn_days)) if txn_days else 0
+
     # Check which dates have PDFs
     pdf_dir = os.path.join(PDF_BASE, str(branch_id))
     for s in sales:
@@ -583,6 +591,7 @@ def api_sales():
         'highest': highest,
         'lowest': lowest,
         'days': days,
+        'avg_daily_txn': avg_daily_txn,
     })
 
 
