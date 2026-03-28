@@ -251,10 +251,14 @@ async function loadEmployees() {
 
         document.getElementById('kpi-salary').textContent = formatMoney(d.salary_cost || 0);
         const badgeEl = document.getElementById('kpi-salary-badge');
-        if (d.csv_processed && d.salary_cost > 0) {
-            badgeEl.innerHTML = '<span class="status-badge badge-approved">מאושר</span>';
+        if (d.salary_source === 'csv') {
+            badgeEl.innerHTML = '<span class="status-badge badge-approved">מאושר CSV</span>'
+                + `<div style="margin-top:0.2rem">מבוסס על ${(d.salary_hours || 0).toFixed(1)} שעות</div>`;
         } else if (d.salary_cost > 0) {
-            badgeEl.innerHTML = '<span class="status-badge badge-estimated">משוער</span>';
+            badgeEl.innerHTML = '<span class="status-badge badge-estimated">משוער</span>'
+                + '<div style="margin-top:0.2rem">הערכה בלבד</div>';
+        } else {
+            badgeEl.innerHTML = '<div style="margin-top:0.2rem;color:var(--text-muted)">אין נתונים</div>';
         }
 
         const activeCount = ALL_EMPLOYEES.length;

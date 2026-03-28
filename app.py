@@ -630,15 +630,31 @@ def api_employees_list():
             emp['hours'] = 0
             emp['salary'] = 0
 
-    # Calculate salary cost
-    total_salary = sum(e['salary'] for e in employees)
-    if csv_processed and total_salary > 0:
-        salary_cost = total_salary
-    else:
-        # Estimate from employees with rates
+    # Calculate salary cost — prefer CSV totals over Aviv live hours
+    csv_totals = db.execute(
+        "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary "
+        "FROM employee_hours WHERE branch_id = ? AND month = ?",
+        (branch_id, month)
+    ).fetchone()
+
+    if csv_processed and csv_totals['salary'] > 0:
+        salary_cost = csv_totals['salary']
+        salary_hours = csv_totals['hours']
+        salary_source = 'csv'
+    elif csv_processed and csv_totals['hours'] > 0:
+        # CSV hours exist but no salary (rates not set yet) — estimate from rates
         rates = [e['hourly_rate'] for e in employees if e['hourly_rate'] > 0]
-        weighted_rate = sum(rates) / len(rates) if rates else 0
-        salary_cost = hours_this_month * weighted_rate if weighted_rate else 0
+        avg_rate = sum(rates) / len(rates) if rates else 0
+        salary_cost = csv_totals['hours'] * avg_rate if avg_rate else 0
+        salary_hours = csv_totals['hours']
+        salary_source = 'estimate'
+    else:
+        # No CSV — estimate from Aviv live hours × average rate
+        rates = [e['hourly_rate'] for e in employees if e['hourly_rate'] > 0]
+        avg_rate = sum(rates) / len(rates) if rates else 0
+        salary_cost = hours_this_month * avg_rate if avg_rate else 0
+        salary_hours = hours_this_month
+        salary_source = 'estimate'
 
     # History: last 6 months
     year, mon = map(int, month.split('-'))
@@ -670,6 +686,8 @@ def api_employees_list():
         'avg_hourly_rate': avg_hourly_rate,
         'hours_updated_at': hours_updated_at,
         'salary_cost': salary_cost,
+        'salary_hours': salary_hours,
+        'salary_source': salary_source,
         'csv_processed': csv_processed,
         'history': history,
     })
