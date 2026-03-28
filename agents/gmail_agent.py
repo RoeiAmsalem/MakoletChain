@@ -13,7 +13,7 @@ import os
 import re
 import sqlite3
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -143,6 +143,182 @@ def _extract_total_from_pdf(pdf_bytes: bytes) -> tuple[float | None, int]:
         transactions = int(tx_match.group(1))
 
     return total, transactions
+
+
+def _parse_attendance_csv(csv_text: str) -> list[dict]:
+    """Parse Aviv attendance CSV into employee records.
+
+    CSV columns: עובד, יום בשבוע, תאריך כניסה, תאריך יציאה, הערות, כמות שעות
+    Employee rows start with 'ID NAME', continuation rows have empty first col.
+    Summary rows: סה''כ שורות N  with total hours as HH:MM in last column.
+    """
+    employees = []
+    current_name = None
+    current_hours = 0.0
+
+    for line in csv_text.strip().splitlines():
+        cols = line.split(',')
+        if len(cols) < 6:
+            continue
+
+        first_col = cols[0].strip()
+        hours_col = cols[-1].strip()
+
+        # Summary row for current employee
+        if first_col.startswith("סה''כ שורות") or first_col.startswith('סה"כ שורות'):
+            if current_name and hours_col:
+                # Parse HH:MM format
+                try:
+                    parts = hours_col.split(':')
+                    h = int(parts[0])
+                    m = int(parts[1]) if len(parts) > 1 else 0
+                    current_hours = h + m / 60.0
+                except (ValueError, IndexError):
+                    pass
+                employees.append({
+                    'name': current_name,
+                    'total_hours': round(current_hours, 2),
+                })
+            current_name = None
+            current_hours = 0.0
+            continue
+
+        # New employee row (starts with digit = employee ID)
+        if first_col and first_col[0].isdigit():
+            # Extract name: "382 רועי אמסלם" -> "רועי אמסלם"
+            parts = first_col.split(None, 1)
+            if len(parts) >= 2:
+                current_name = parts[1].strip()
+            continue
+
+    return employees
+
+
+def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
+    """Search for attendance CSV emails, parse and save employee hours."""
+    gmail_label = branch.get('gmail_label') or ''
+    if not gmail_label:
+        return None
+
+    # Determine current month
+    now_il = datetime.now(ZoneInfo('Asia/Jerusalem'))
+    current_month = now_il.strftime('%Y-%m')
+
+    # Check if already processed this month
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM employee_hours WHERE branch_id=? AND month=?",
+        (branch_id, current_month)
+    ).fetchone()['cnt']
+    if count > 0:
+        log.info("Attendance CSV already processed for %s (%d employees)", current_month, count)
+        conn.close()
+        return "already processed"
+
+    # Search for attendance emails in last 35 days
+    since_str = (date.today() - timedelta(days=35)).strftime("%d-%b-%Y")
+    criteria = f'(SUBJECT "נוכחות באקסל" SINCE "{since_str}")'
+    status, data = mail.search(None, criteria)
+
+    if status != "OK" or not data or not data[0]:
+        # Try broader search
+        criteria = f'(SINCE "{since_str}")'
+        status, data = mail.search(None, criteria)
+        if status != "OK" or not data or not data[0]:
+            log.info("No attendance CSV emails found")
+            conn.close()
+            return None
+
+    msg_ids = data[0].split()
+    log.info("Scanning %d emails for attendance CSV", len(msg_ids))
+
+    csv_content = None
+    for msg_id in reversed(msg_ids):  # Most recent first
+        status, msg_data = mail.fetch(msg_id, "(RFC822)")
+        if status != "OK":
+            continue
+
+        msg = email.message_from_bytes(msg_data[0][1])
+        subject = str(email.header.make_header(email.header.decode_header(msg.get("Subject", ""))))
+
+        # Must match branch label and contain attendance keyword
+        if gmail_label not in subject:
+            continue
+        if 'נוכחות' not in subject:
+            continue
+
+        # Look for CSV attachment
+        for part in msg.walk():
+            fn_raw = part.get_filename()
+            if not fn_raw:
+                continue
+            decoded_parts = email.header.decode_header(fn_raw)
+            filename = ""
+            for p, enc in decoded_parts:
+                if isinstance(p, bytes):
+                    filename += p.decode(enc or "utf-8", errors="replace")
+                else:
+                    filename += p
+
+            if '.csv' not in filename.lower():
+                continue
+
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+
+            # Try decoding
+            for enc in ['utf-8', 'windows-1255', 'iso-8859-8']:
+                try:
+                    csv_content = payload.decode(enc)
+                    break
+                except (UnicodeDecodeError, LookupError):
+                    continue
+
+            if csv_content:
+                log.info("Found attendance CSV: %s (%d bytes)", filename, len(payload))
+                break
+
+        if csv_content:
+            break
+
+    if not csv_content:
+        log.info("No attendance CSV attachment found")
+        conn.close()
+        return None
+
+    # Parse CSV
+    employees = _parse_attendance_csv(csv_content)
+    if not employees:
+        log.warning("Could not parse any employees from attendance CSV")
+        conn.close()
+        return None
+
+    # Calculate totals
+    total_hours_all = sum(e['total_hours'] for e in employees)
+
+    # We don't have salary in the CSV, so store hours only (salary=0)
+    # avg_rate will be calculated when salary data is available
+    for emp in employees:
+        conn.execute(
+            "INSERT OR REPLACE INTO employee_hours "
+            "(branch_id, month, employee_name, total_hours, total_salary, source) "
+            "VALUES (?, ?, ?, ?, 0, 'csv')",
+            (branch_id, current_month, emp['name'], emp['total_hours'])
+        )
+
+    # Update branch hours
+    conn.execute(
+        "UPDATE branches SET hours_this_month=?, hours_updated_at=? WHERE id=?",
+        (total_hours_all, now_il.isoformat(), branch_id)
+    )
+    conn.commit()
+    conn.close()
+
+    msg = f"📊 נוכחות: {len(employees)} עובדים, {total_hours_all:.1f} שעות"
+    log.info(msg)
+    return msg
 
 
 def run_gmail_sync(branch_id: int) -> dict:
@@ -302,6 +478,14 @@ def run_gmail_sync(branch_id: int) -> dict:
             log.info("Saved Z-report for %s: %.2f (%d transactions)", date_str, total, transactions)
 
         conn.close()
+
+        # ── Attendance CSV parsing ──────────────────────────────
+        attendance_msg = None
+        try:
+            attendance_msg = _sync_attendance_csv(mail, branch, branch_id, log)
+        except Exception as e:
+            log.error("Attendance CSV sync failed: %s", e, exc_info=True)
+
         mail.logout()
 
         duration = time.time() - t0

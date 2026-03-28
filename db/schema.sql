@@ -68,10 +68,12 @@ CREATE TABLE IF NOT EXISTS employee_hours (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   branch_id INTEGER NOT NULL REFERENCES branches(id),
   month TEXT NOT NULL,
-  employee_name TEXT,
-  hours REAL DEFAULT 0,
-  rate REAL DEFAULT 0,
-  locked INTEGER DEFAULT 0
+  employee_name TEXT NOT NULL,
+  total_hours REAL DEFAULT 0,
+  total_salary REAL DEFAULT 0,
+  source TEXT DEFAULT 'csv',
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(branch_id, month, employee_name)
 );
 
 CREATE TABLE IF NOT EXISTS live_sales (

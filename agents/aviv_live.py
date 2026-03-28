@@ -161,7 +161,13 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
                 transactions = int(tx_match.group(1))
             last_updated = datetime.now(IL_TZ).strftime("%H:%M %d/%m/%y")
 
-        log.info("Scraped: amount=₪%.2f, tx=%d, last_updated=%s", amount, transactions, last_updated)
+        # Scrape employee hours from same page
+        employee_hours = 0.0
+        hours_pattern = re.compile(r'שעות עובדים מתחילת החודש[^\d]*([\d,]+\.?\d*)')
+        hours_match = hours_pattern.search(raw_text)
+        if hours_match:
+            employee_hours = float(hours_match.group(1).replace(',', ''))
+        log.info("Scraped: amount=₪%.2f, tx=%d, hours=%.2f, last_updated=%s", amount, transactions, employee_hours, last_updated)
         browser.close()
 
     return {
@@ -170,6 +176,7 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
         'transactions': transactions,
         'last_updated': last_updated,
         'fetched_at': datetime.now(IL_TZ).isoformat(),
+        'employee_hours': employee_hours,
     }
 
 
@@ -297,6 +304,17 @@ def run_aviv_live(branch_id: int) -> dict:
             (branch_id, data['date'], data['amount'], data['transactions'],
              data['last_updated'], data['fetched_at'])
         )
+
+        # Save employee hours to branches table
+        if data.get('employee_hours', 0) > 0:
+            conn.execute(
+                '''UPDATE branches SET
+                    hours_this_month = ?,
+                    hours_updated_at = ?
+                    WHERE id = ?''',
+                (data['employee_hours'], datetime.now(IL_TZ).isoformat(), branch_id)
+            )
+
         conn.commit()
         conn.close()
 

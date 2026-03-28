@@ -429,12 +429,24 @@ def api_summary():
         (branch_id, month)
     ).fetchone()[0]
 
-    # Salary
-    salary = db.execute(
-        "SELECT COALESCE(SUM(hours * rate), 0) FROM employee_hours "
-        "WHERE branch_id = ? AND month = ?",
+    # Salary — prefer CSV data (total_salary), fallback to estimate
+    csv_salary = db.execute(
+        "SELECT COALESCE(SUM(total_salary), 0) as s, COUNT(*) as cnt FROM employee_hours "
+        "WHERE branch_id = ? AND month = ? AND source = 'csv'",
         (branch_id, month)
-    ).fetchone()[0]
+    ).fetchone()
+    if csv_salary['cnt'] > 0 and csv_salary['s'] > 0:
+        salary = csv_salary['s']
+    else:
+        # Estimate: hours_this_month × avg_hourly_rate from branches
+        branch_row = db.execute(
+            "SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id = ?",
+            (branch_id,)
+        ).fetchone()
+        if branch_row and branch_row['avg_hourly_rate'] and branch_row['avg_hourly_rate'] > 0:
+            salary = (branch_row['hours_this_month'] or 0) * branch_row['avg_hourly_rate']
+        else:
+            salary = 0
 
     # Live income logic: if current month and today has no Z-report, add live amount
     today = _now_il().strftime('%Y-%m-%d')
@@ -521,10 +533,16 @@ def api_history():
             "SELECT COALESCE(SUM(amount), 0) FROM fixed_expenses WHERE branch_id = ? AND month = ?",
             (branch_id, ms)
         ).fetchone()[0]
-        sal = db.execute(
-            "SELECT COALESCE(SUM(hours * rate), 0) FROM employee_hours WHERE branch_id = ? AND month = ?",
+        csv_sal = db.execute(
+            "SELECT COALESCE(SUM(total_salary), 0) as s, COUNT(*) as cnt FROM employee_hours "
+            "WHERE branch_id = ? AND month = ? AND source = 'csv'",
             (branch_id, ms)
-        ).fetchone()[0]
+        ).fetchone()
+        if csv_sal['cnt'] > 0 and csv_sal['s'] > 0:
+            sal = csv_sal['s']
+        else:
+            br = db.execute("SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id=?", (branch_id,)).fetchone()
+            sal = ((br['hours_this_month'] or 0) * (br['avg_hourly_rate'] or 0)) if br and ms == _now_il().strftime('%Y-%m') else 0
         profit = inc - gds - fix - sal
         result.append({
             'label': m['label'],
@@ -561,16 +579,76 @@ def api_live_sales():
 @app.route('/api/employees', methods=['GET'])
 @login_required
 def api_employees_list():
-    """List employees for a branch + month."""
+    """List employees for a branch + month, plus KPI data."""
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
+
+    # Employee breakdown from CSV
     rows = db.execute(
-        "SELECT id, employee_name, hours, rate, locked FROM employee_hours "
-        "WHERE branch_id = ? AND month = ?",
+        "SELECT id, employee_name, total_hours, total_salary, source FROM employee_hours "
+        "WHERE branch_id = ? AND month = ? ORDER BY total_hours DESC",
         (branch_id, month)
     ).fetchall()
-    return jsonify({'employees': [dict(r) for r in rows]})
+    employees = [dict(r) for r in rows]
+
+    # Branch KPI data
+    branch_row = db.execute(
+        "SELECT hours_this_month, avg_hourly_rate, hours_updated_at FROM branches WHERE id = ?",
+        (branch_id,)
+    ).fetchone()
+
+    hours_this_month = branch_row['hours_this_month'] if branch_row else 0
+    avg_hourly_rate = branch_row['avg_hourly_rate'] if branch_row else 0
+    csv_processed = len(employees) > 0
+    total_hours_csv = sum(e['total_hours'] for e in employees)
+    total_salary_csv = sum(e['total_salary'] for e in employees)
+
+    # Estimated salary cost
+    if csv_processed and total_salary_csv > 0:
+        salary_cost = total_salary_csv
+    elif hours_this_month and avg_hourly_rate:
+        salary_cost = hours_this_month * avg_hourly_rate
+    else:
+        salary_cost = 0
+
+    # History: last 6 months
+    year, mon = map(int, month.split('-'))
+    history = []
+    for i in range(5, -1, -1):
+        m = mon - i
+        y = year
+        while m <= 0:
+            m += 12
+            y -= 1
+        m_str = f'{y:04d}-{m:02d}'
+        h_row = db.execute(
+            "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
+            "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ?",
+            (branch_id, m_str)
+        ).fetchone()
+        h_hours = h_row['hours']
+        h_salary = h_row['salary']
+        h_source = 'csv' if h_row['cnt'] > 0 else 'משוער'
+        h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
+        history.append({
+            'month': m_str,
+            'hours': h_hours,
+            'salary': h_salary,
+            'avg_rate': h_rate,
+            'source': h_source,
+        })
+
+    return jsonify({
+        'employees': employees,
+        'hours_this_month': hours_this_month or 0,
+        'avg_hourly_rate': avg_hourly_rate or 0,
+        'salary_cost': salary_cost,
+        'csv_processed': csv_processed,
+        'total_hours': total_hours_csv,
+        'total_salary': total_salary_csv,
+        'history': history,
+    })
 
 
 @app.route('/api/employees', methods=['POST'])
@@ -581,13 +659,15 @@ def api_employees_create():
     branch_id = get_branch_id()
     month = data.get('month', _now_il().strftime('%Y-%m'))
     name = data.get('employee_name', '').strip()
-    rate = float(data.get('rate', 0))
+    hours = float(data.get('total_hours', 0))
+    salary = float(data.get('total_salary', 0))
     if not name:
         return jsonify({'error': 'name required'}), 400
     db = get_db()
     db.execute(
-        "INSERT INTO employee_hours (branch_id, month, employee_name, hours, rate) VALUES (?, ?, ?, 0, ?)",
-        (branch_id, month, name, rate)
+        "INSERT OR REPLACE INTO employee_hours (branch_id, month, employee_name, total_hours, total_salary, source) "
+        "VALUES (?, ?, ?, ?, ?, 'manual')",
+        (branch_id, month, name, hours, salary)
     )
     db.commit()
     return jsonify({'ok': True})
@@ -603,11 +683,11 @@ def api_employees_update(emp_id):
     if not row:
         return jsonify({'error': 'not found'}), 404
     name = data.get('employee_name', row['employee_name'])
-    rate = float(data.get('rate', row['rate']))
-    hours = float(data.get('hours', row['hours']))
+    hours = float(data.get('total_hours', row['total_hours']))
+    salary = float(data.get('total_salary', row['total_salary']))
     db.execute(
-        "UPDATE employee_hours SET employee_name = ?, rate = ?, hours = ? WHERE id = ?",
-        (name, rate, hours, emp_id)
+        "UPDATE employee_hours SET employee_name = ?, total_hours = ?, total_salary = ? WHERE id = ?",
+        (name, hours, salary, emp_id)
     )
     db.commit()
     return jsonify({'ok': True})
@@ -860,9 +940,17 @@ def api_ops_status():
         else:
             overall = 'unknown'
 
+        # Hourly rate info
+        rate_row = db.execute(
+            "SELECT avg_hourly_rate, hours_this_month FROM branches WHERE id = ?",
+            (bid,)
+        ).fetchone()
+
         branches.append({
             'id': bid, 'name': b['name'], 'city': b['city'],
             'status': overall, 'agents': agents_data,
+            'avg_hourly_rate': rate_row['avg_hourly_rate'] if rate_row else 0,
+            'hours_this_month': rate_row['hours_this_month'] if rate_row else 0,
         })
 
     # Recent agent runs
