@@ -390,6 +390,95 @@ def fixed_expenses():
     return render_template('fixed_expenses.html', **ctx)
 
 
+# ── Shared helpers ────────────────────────────────────────────
+
+def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
+    """Single source of truth for salary calculation.
+    Used by both /employees page and /api/summary.
+
+    Returns {'amount', 'source', 'hours', 'label'}
+    """
+    db = get_db()
+
+    # Check if CSV exists for current month with salary data
+    csv_rows = db.execute('''
+        SELECT employee_name, total_hours, total_salary
+        FROM employee_hours
+        WHERE branch_id=? AND month=? AND source='csv'
+    ''', (branch_id, current_month)).fetchall()
+
+    if csv_rows and sum(r['total_salary'] for r in csv_rows) > 0:
+        total = round(sum(r['total_salary'] for r in csv_rows), 2)
+        hours = round(sum(r['total_hours'] for r in csv_rows), 2)
+        return {
+            'amount': total,
+            'source': 'csv',
+            'hours': hours,
+            'label': f'מבוסס על {hours} שעות CSV'
+        }
+
+    # Estimate using per-employee rates × hours
+    employees = db.execute('''
+        SELECT name, hourly_rate FROM employees
+        WHERE branch_id=? AND active=1 AND hourly_rate > 0
+    ''', (branch_id,)).fetchall()
+
+    branch = db.execute(
+        'SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id=?',
+        (branch_id,)
+    ).fetchone()
+
+    hours_this_month = branch['hours_this_month'] if branch else 0
+
+    if not employees or hours_this_month == 0:
+        return {'amount': 0, 'source': 'estimate', 'hours': 0, 'label': 'אין נתונים'}
+
+    # Try weighted rate from last month's CSV hours distribution
+    prev_month = (datetime.strptime(current_month, '%Y-%m').replace(day=1)
+                  - timedelta(days=1)).strftime('%Y-%m')
+
+    prev_rows = db.execute('''
+        SELECT eh.employee_name, eh.total_hours, e.hourly_rate
+        FROM employee_hours eh
+        JOIN employees e ON (
+            e.branch_id = eh.branch_id
+            AND e.active = 1
+        )
+        WHERE eh.branch_id=? AND eh.month=?
+    ''', (branch_id, prev_month)).fetchall()
+
+    if prev_rows:
+        matched = []
+        for row in prev_rows:
+            for emp in employees:
+                emp_tokens = set(emp['name'].split())
+                row_tokens = set(row['employee_name'].replace('איינשטיין', '').replace('אינשטיין', '').split())
+                if len(emp_tokens & row_tokens) >= 2:
+                    matched.append((row['total_hours'], emp['hourly_rate']))
+                    break
+
+        if matched:
+            total_matched_hours = sum(h for h, r in matched)
+            weighted_rate = sum(h * r for h, r in matched) / total_matched_hours if total_matched_hours > 0 else 0
+            amount = round(hours_this_month * weighted_rate, 2)
+            return {
+                'amount': amount,
+                'source': 'estimate',
+                'hours': hours_this_month,
+                'label': f'משוער — {hours_this_month} שעות × ₪{weighted_rate:.2f}'
+            }
+
+    # Fallback: simple average of employee rates
+    avg_rate = sum(e['hourly_rate'] for e in employees) / len(employees)
+    amount = round(hours_this_month * avg_rate, 2)
+    return {
+        'amount': amount,
+        'source': 'estimate',
+        'hours': hours_this_month,
+        'label': f'משוער — {hours_this_month} שעות × ₪{avg_rate:.2f}'
+    }
+
+
 # ── API Routes ───────────────────────────────────────────────
 
 @app.route('/api/branches')
@@ -429,32 +518,9 @@ def api_summary():
         (branch_id, month)
     ).fetchone()[0]
 
-    # Salary — prefer CSV data (total_salary), fallback to estimate
-    csv_salary = db.execute(
-        "SELECT COALESCE(SUM(total_salary), 0) as s, COUNT(*) as cnt FROM employee_hours "
-        "WHERE branch_id = ? AND month = ?",
-        (branch_id, month)
-    ).fetchone()
-    if csv_salary['cnt'] > 0 and csv_salary['s'] > 0:
-        salary = csv_salary['s']
-    else:
-        # Estimate: hours_this_month × weighted avg rate from employees table
-        branch_row = db.execute(
-            "SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id = ?",
-            (branch_id,)
-        ).fetchone()
-        if branch_row and branch_row['avg_hourly_rate'] and branch_row['avg_hourly_rate'] > 0:
-            salary = (branch_row['hours_this_month'] or 0) * branch_row['avg_hourly_rate']
-        else:
-            # Try weighted avg from employees table
-            emp_rate = db.execute(
-                "SELECT AVG(hourly_rate) as r FROM employees WHERE branch_id=? AND active=1 AND hourly_rate>0",
-                (branch_id,)
-            ).fetchone()
-            if emp_rate and emp_rate['r'] and branch_row:
-                salary = (branch_row['hours_this_month'] or 0) * emp_rate['r']
-            else:
-                salary = 0
+    # Salary — single source of truth
+    salary_data = _calculate_salary_cost(branch_id, month)
+    salary = salary_data['amount']
 
     # Live income logic: if current month and today has no Z-report, add live amount
     today = _now_il().strftime('%Y-%m-%d')
@@ -497,6 +563,8 @@ def api_summary():
         'goods': goods,
         'fixed': fixed,
         'salary': salary,
+        'salary_source': salary_data['source'],
+        'salary_label': salary_data['label'],
         'profit': profit,
         'live': live,
         'has_z': has_z,
@@ -541,16 +609,7 @@ def api_history():
             "SELECT COALESCE(SUM(amount), 0) FROM fixed_expenses WHERE branch_id = ? AND month = ?",
             (branch_id, ms)
         ).fetchone()[0]
-        csv_sal = db.execute(
-            "SELECT COALESCE(SUM(total_salary), 0) as s, COUNT(*) as cnt FROM employee_hours "
-            "WHERE branch_id = ? AND month = ?",
-            (branch_id, ms)
-        ).fetchone()
-        if csv_sal['cnt'] > 0 and csv_sal['s'] > 0:
-            sal = csv_sal['s']
-        else:
-            br = db.execute("SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id=?", (branch_id,)).fetchone()
-            sal = ((br['hours_this_month'] or 0) * (br['avg_hourly_rate'] or 0)) if br and ms == _now_il().strftime('%Y-%m') else 0
+        sal = _calculate_salary_cost(branch_id, ms)['amount']
         profit = inc - gds - fix - sal
         result.append({
             'label': m['label'],
@@ -630,31 +689,11 @@ def api_employees_list():
             emp['hours'] = 0
             emp['salary'] = 0
 
-    # Calculate salary cost — prefer CSV totals over Aviv live hours
-    csv_totals = db.execute(
-        "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary "
-        "FROM employee_hours WHERE branch_id = ? AND month = ?",
-        (branch_id, month)
-    ).fetchone()
-
-    if csv_processed and csv_totals['salary'] > 0:
-        salary_cost = csv_totals['salary']
-        salary_hours = csv_totals['hours']
-        salary_source = 'csv'
-    elif csv_processed and csv_totals['hours'] > 0:
-        # CSV hours exist but no salary (rates not set yet) — estimate from rates
-        rates = [e['hourly_rate'] for e in employees if e['hourly_rate'] > 0]
-        avg_rate = sum(rates) / len(rates) if rates else 0
-        salary_cost = csv_totals['hours'] * avg_rate if avg_rate else 0
-        salary_hours = csv_totals['hours']
-        salary_source = 'estimate'
-    else:
-        # No CSV — estimate from Aviv live hours × average rate
-        rates = [e['hourly_rate'] for e in employees if e['hourly_rate'] > 0]
-        avg_rate = sum(rates) / len(rates) if rates else 0
-        salary_cost = hours_this_month * avg_rate if avg_rate else 0
-        salary_hours = hours_this_month
-        salary_source = 'estimate'
+    # Salary — single source of truth
+    salary_data = _calculate_salary_cost(branch_id, month)
+    salary_cost = salary_data['amount']
+    salary_hours = salary_data['hours']
+    salary_source = salary_data['source']
 
     # History: last 6 months
     year, mon = map(int, month.split('-'))
