@@ -900,24 +900,34 @@ def api_ops_health():
 
     svc1 = _run("systemctl is-active makolet-chain")
     svc2 = _run("systemctl is-active makolet-chain-scheduler")
-    disk = _run("df /opt/makolet-chain --output=pcent,used,size | tail -1")
+    disk = _run("df -h /opt/makolet-chain --output=used,size,pcent | tail -1")
     memory = _run("free -m | awk 'NR==2{printf \"%s/%s\", $3, $2}'")
     uptime = _run("uptime -p")
-    last_deploy = _run("git -C /opt/makolet-chain log -1 --format='%ar — %s'")
+    deploy_ago = _run("git -C /opt/makolet-chain log -1 --format='%ar'")
+    deploy_msg = _run("git -C /opt/makolet-chain log -1 --format='%s'")
 
-    # Parse disk percentage
+    # Parse disk: "3.4G  150G   3%"  →  "3.4G / 150G (3%)"
     disk_pct = 0
+    disk_display = disk.strip()
     try:
-        disk_pct = int(disk.split()[0].replace('%', ''))
+        parts = disk.split()
+        used, size, pct = parts[0], parts[1], parts[2]
+        disk_pct = int(pct.replace('%', ''))
+        disk_display = f"{used} / {size} ({pct})"
     except Exception:
         pass
+
+    # Truncate commit message to 30 chars
+    if len(deploy_msg) > 30:
+        deploy_msg = deploy_msg[:30] + '...'
+    last_deploy = f"{deploy_ago} — {deploy_msg}"
 
     services_ok = svc1 == 'active' and svc2 == 'active'
     disk_status = 'ok' if disk_pct < 70 else ('warning' if disk_pct < 90 else 'error')
 
     return jsonify({
         'services': {'app': svc1, 'scheduler': svc2, 'ok': services_ok},
-        'disk': {'raw': disk.strip(), 'pct': disk_pct, 'status': disk_status},
+        'disk': {'raw': disk_display, 'pct': disk_pct, 'status': disk_status},
         'memory': memory,
         'uptime': uptime,
         'last_deploy': last_deploy,
