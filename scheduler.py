@@ -75,9 +75,14 @@ def nightly_sync():
 scheduler = BlockingScheduler(timezone=IL_TZ)
 
 
-# Every 5 minutes 06:00-23:55 IL — the inner day-aware check handles precise windows
-# Widest window: Sun-Thu 06:30-23:30, Fri 06:30-19:00, Sat 16:30-23:30
-@scheduler.scheduled_job('cron', hour='6-23', minute='*/5', id='aviv_live')
+# 06:30–06:55 IL — early window before main cron kicks in
+@scheduler.scheduled_job('cron', hour=6, minute='30,35,40,45,50,55', id='aviv_early')
+def scheduled_aviv_early():
+    run_aviv_all()
+
+
+# 07:00–22:55 IL — main window; inner day-aware guard handles Fri/Sat edges
+@scheduler.scheduled_job('cron', hour='7-22', minute='*/5', id='aviv_live')
 def scheduled_aviv():
     run_aviv_all()
 

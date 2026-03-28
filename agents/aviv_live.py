@@ -233,19 +233,7 @@ def run_aviv_live(branch_id: int) -> dict:
 
     if not _is_store_hours():
         log.info("Outside store hours, skipping")
-        # Log skipped run
-        try:
-            conn_skip = _get_db()
-            conn_skip.execute(
-                "INSERT INTO agent_runs (branch_id, agent, started_at, finished_at, status, message, duration_seconds) "
-                "VALUES (?, 'aviv_live', datetime('now'), datetime('now'), 'skipped', 'מחוץ לשעות פעילות', 0)",
-                (branch_id,)
-            )
-            conn_skip.commit()
-            conn_skip.close()
-        except Exception:
-            pass
-        return {'success': True, 'amount': 0, 'transactions': 0}
+        return {'success': True, 'amount': 0, 'transactions': 0, 'skipped': 'outside_hours'}
 
     # Insert agent_runs start
     conn_run = _get_db()
