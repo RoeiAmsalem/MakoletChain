@@ -94,33 +94,46 @@ def scheduled_nightly():
     nightly_sync()
 
 
-def run_hours_scrape():
-    """Lightweight hours-only scrape for all active branches."""
-    from agents.aviv_live import scrape_hours_only
+def run_hours_midday():
+    """16:00 — midday estimate (baseline + current shift)."""
+    from agents.aviv_live import scrape_hours_midday
     branches = get_active_branches()
     for bid in branches:
-        log.info("Hours scrape for branch %d", bid)
+        log.info("Hours midday for branch %d", bid)
         try:
-            result = scrape_hours_only(bid)
-            log.info("Branch %d hours: %s", bid, result)
+            result = scrape_hours_midday(bid)
+            log.info("Branch %d midday: %s", bid, result)
         except Exception as e:
-            log.error("Branch %d hours scrape failed: %s", bid, e)
+            log.error("Branch %d hours midday failed: %s", bid, e)
 
 
-# Hours scrape at 16:00 Israel time
+def run_hours_end_of_day():
+    """23:30 — authoritative end-of-day total."""
+    from agents.aviv_live import scrape_hours_end_of_day
+    branches = get_active_branches()
+    for bid in branches:
+        log.info("Hours end-of-day for branch %d", bid)
+        try:
+            result = scrape_hours_end_of_day(bid)
+            log.info("Branch %d end-of-day: %s", bid, result)
+        except Exception as e:
+            log.error("Branch %d hours end-of-day failed: %s", bid, e)
+
+
+# 16:00 — midday estimate (baseline + current shift)
 scheduler.add_job(
-    func=run_hours_scrape,
+    func=run_hours_midday,
     trigger=CronTrigger(hour=16, minute=0, timezone=IL_TZ),
-    id='hours_scrape_16',
-    name='Hours scrape 16:00',
+    id='hours_midday',
+    name='Hours midday estimate 16:00',
 )
 
-# Hours scrape at 23:30 Israel time
+# 23:30 — authoritative end-of-day total
 scheduler.add_job(
-    func=run_hours_scrape,
+    func=run_hours_end_of_day,
     trigger=CronTrigger(hour=23, minute=30, timezone=IL_TZ),
-    id='hours_scrape_23',
-    name='Hours scrape 23:30',
+    id='hours_end_of_day',
+    name='Hours authoritative 23:30',
 )
 
 
@@ -132,7 +145,7 @@ if __name__ == '__main__':
     log.info('Running startup aviv_live pass...')
     run_aviv_all()
 
-    log.info('Scheduler running — aviv every 5min, hours 16:00+23:30, nightly 02:00 IL')
+    log.info('Scheduler running — aviv every 5min, hours midday 16:00 + end-of-day 23:30, nightly 02:00 IL')
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

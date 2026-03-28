@@ -85,6 +85,27 @@ def get_next_opening() -> str:
     return f"{tsh:02d}:{tsm:02d}"
 
 
+# Total hours this month (authoritative — used at 23:30)
+_monthly_hours_pattern = re.compile(
+    r'([\d,]+\.?\d*)\s*שעות עובדים מתחילת החודש'
+    r'|שעות עובדים מתחילת החודש[^\d]*([\d,]+\.?\d*)'
+)
+
+# Current shift hours (used at 16:00)
+_shift_hours_pattern = re.compile(
+    r'([\d,]+\.?\d*)\s*שעות עובדים במשמרת'
+    r'|שעות עובדים במשמרת[^\d]*([\d,]+\.?\d*)'
+)
+
+
+def _parse_hours(pattern, text):
+    m = pattern.search(text)
+    if not m:
+        return 0.0
+    val = m.group(1) or m.group(2) or '0'
+    return float(val.replace(',', ''))
+
+
 def _scrape(branch: dict, log: logging.Logger) -> dict:
     from playwright.sync_api import sync_playwright
 
@@ -161,13 +182,11 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
                 transactions = int(tx_match.group(1))
             last_updated = datetime.now(IL_TZ).strftime("%H:%M %d/%m/%y")
 
-        # Scrape employee hours from same page
-        employee_hours = 0.0
-        hours_pattern = re.compile(r'שעות עובדים מתחילת החודש[^\d]*([\d,]+\.?\d*)')
-        hours_match = hours_pattern.search(raw_text)
-        if hours_match:
-            employee_hours = float(hours_match.group(1).replace(',', ''))
-        log.info("Scraped: amount=₪%.2f, tx=%d, hours=%.2f, last_updated=%s", amount, transactions, employee_hours, last_updated)
+        # Scrape employee hours — two distinct fields
+        monthly_hours = _parse_hours(_monthly_hours_pattern, raw_text)
+        shift_hours = _parse_hours(_shift_hours_pattern, raw_text)
+        log.info("Scraped: amount=₪%.2f, tx=%d, monthly_hours=%.2f, shift_hours=%.2f, last_updated=%s",
+                 amount, transactions, monthly_hours, shift_hours, last_updated)
         browser.close()
 
     return {
@@ -176,7 +195,8 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
         'transactions': transactions,
         'last_updated': last_updated,
         'fetched_at': datetime.now(IL_TZ).isoformat(),
-        'employee_hours': employee_hours,
+        'monthly_hours': monthly_hours,
+        'shift_hours': shift_hours,
     }
 
 
@@ -306,13 +326,13 @@ def run_aviv_live(branch_id: int) -> dict:
         )
 
         # Save employee hours to branches table
-        if data.get('employee_hours', 0) > 0:
+        if data.get('monthly_hours', 0) > 0:
             conn.execute(
                 '''UPDATE branches SET
                     hours_this_month = ?,
                     hours_updated_at = ?
                     WHERE id = ?''',
-                (data['employee_hours'], datetime.now(IL_TZ).isoformat(), branch_id)
+                (data['monthly_hours'], datetime.now(IL_TZ).isoformat(), branch_id)
             )
 
         conn.commit()
@@ -354,10 +374,10 @@ def run_aviv_live(branch_id: int) -> dict:
         return {'success': False, 'amount': 0, 'transactions': 0, 'error': str(e)}
 
 
-def scrape_hours_only(branch_id: int) -> dict:
-    """Lightweight scrape — only grab employee hours from Aviv BI status page.
-    Does NOT update live_sales or daily_sales.
-    Runs at 16:00 and 23:30 daily."""
+def scrape_hours_end_of_day(branch_id: int) -> dict:
+    """23:30 job — scrape authoritative monthly total.
+    Replaces hours_this_month AND updates hours_baseline for tomorrow.
+    Uses: שעות עובדים מתחילת החודש"""
     log = _setup_logger(branch_id)
     branch = _get_branch_config(branch_id)
 
@@ -366,23 +386,66 @@ def scrape_hours_only(branch_id: int) -> dict:
 
     try:
         result = _scrape(branch, log)
-        hours = result.get('employee_hours', 0)
+        monthly_hours = result.get('monthly_hours', 0)
 
         conn = _get_db()
-        conn.execute(
-            '''UPDATE branches SET
-                hours_this_month = ?,
-                hours_updated_at = ?
-                WHERE id = ?''',
-            (hours, datetime.now(IL_TZ).isoformat(), branch_id)
-        )
+        conn.execute('''UPDATE branches SET
+            hours_this_month = ?,
+            hours_baseline = ?,
+            hours_updated_at = ?
+            WHERE id = ?''',
+            (monthly_hours, monthly_hours,
+             datetime.now(IL_TZ).isoformat(), branch_id))
         conn.commit()
         conn.close()
 
-        log.info("Hours-only scrape: %.1f hours", hours)
-        return {'success': True, 'hours': hours}
+        log.info("End-of-day hours: %.1f (baseline set)", monthly_hours)
+        return {'success': True, 'hours': monthly_hours, 'type': 'end_of_day'}
     except Exception as e:
-        log.error("Hours-only scrape failed: %s", e)
+        log.error("End-of-day hours scrape failed: %s", e)
+        return {'success': False, 'error': str(e)}
+
+
+def scrape_hours_midday(branch_id: int) -> dict:
+    """16:00 job — add today's current shift to last night's baseline.
+    Uses: hours_baseline + שעות עובדים במשמרת
+    This gives a live estimate mid-day without waiting for 23:30."""
+    log = _setup_logger(branch_id)
+    branch = _get_branch_config(branch_id)
+
+    if not branch.get('aviv_user_id'):
+        return {'success': False, 'error': 'no credentials'}
+
+    try:
+        result = _scrape(branch, log)
+        shift_hours = result.get('shift_hours', 0)
+
+        conn = _get_db()
+        row = conn.execute(
+            'SELECT hours_baseline FROM branches WHERE id=?', (branch_id,)
+        ).fetchone()
+        baseline = row['hours_baseline'] if row and row['hours_baseline'] else 0
+
+        estimated_total = round(baseline + shift_hours, 2)
+
+        conn.execute('''UPDATE branches SET
+            hours_this_month = ?,
+            hours_updated_at = ?
+            WHERE id = ?''',
+            (estimated_total, datetime.now(IL_TZ).isoformat(), branch_id))
+        conn.commit()
+        conn.close()
+
+        log.info("Midday hours: baseline=%.1f + shift=%.1f = %.2f", baseline, shift_hours, estimated_total)
+        return {
+            'success': True,
+            'baseline': baseline,
+            'shift_hours': shift_hours,
+            'total': estimated_total,
+            'type': 'midday'
+        }
+    except Exception as e:
+        log.error("Midday hours scrape failed: %s", e)
         return {'success': False, 'error': str(e)}
 
 
