@@ -300,13 +300,17 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     for r in rate_rows:
         emp_rates[r['name']] = r['hourly_rate']
 
+    # Get branch name for fuzzy matching
+    branch_row = conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)).fetchone()
+    branch_name = branch_row['name'] if branch_row else ''
+
     # Calculate totals
     total_hours_all = sum(e['total_hours'] for e in employees)
     total_salary_all = 0.0
 
     for emp in employees:
         # Match CSV employee name to employees table (fuzzy)
-        rate = _match_employee_rate(emp['name'], emp_rates)
+        rate = _match_employee_rate(emp['name'], emp_rates, branch_name)
         salary = round(emp['total_hours'] * rate, 2) if rate > 0 else 0
         total_salary_all += salary
 
@@ -334,22 +338,83 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     return msg
 
 
-def _match_employee_rate(csv_name: str, emp_rates: dict) -> float:
-    """Match a CSV employee name to the employees table rates.
-    Try: exact match, then prefix match, then first-two-words match."""
-    if csv_name in emp_rates:
-        return emp_rates[csv_name]
-    # CSV name often has branch suffix (e.g. "דיאנה דוחוניקוב איינשטיין")
+def _clean_name(name: str, branch_name: str = '') -> str:
+    """Strip branch/store name suffixes from employee name."""
+    store_words = ['איינשטיין', 'אינשטיין', 'einstein']
+    if branch_name:
+        store_words.append(branch_name.strip())
+        store_words.extend(branch_name.strip().split())
+
+    words = name.strip().split()
+    while words and any(w.lower() == words[-1].lower() for w in store_words):
+        words.pop()
+    return ' '.join(words).strip()
+
+
+def _name_tokens(name: str) -> list:
+    """Split name into tokens, lowercased."""
+    return [w.strip() for w in name.split() if w.strip()]
+
+
+def _match_employee_rate(csv_name: str, emp_rates: dict, branch_name: str = '') -> float:
+    """Smart fuzzy matching between CSV employee name and DB employee names.
+
+    Handles:
+    - Exact match
+    - Store name suffix in CSV (strip it)
+    - Middle names inserted between first and last name
+    - First + last name match regardless of middle names
+    - Any 2+ consecutive DB name tokens appear in CSV name
+
+    Returns hourly rate or 0.0 if no match found.
+    """
+    csv_clean = _clean_name(csv_name, branch_name)
+    csv_tokens = _name_tokens(csv_clean)
+
+    best_match_rate = 0.0
+    best_score = 0
+
     for db_name, rate in emp_rates.items():
-        if csv_name.startswith(db_name) or db_name.startswith(csv_name):
+        db_clean = _clean_name(db_name, branch_name)
+        db_tokens = _name_tokens(db_clean)
+
+        # 1. Exact match (after cleaning)
+        if csv_clean == db_clean:
             return rate
-    # First two words match
-    csv_words = csv_name.split()[:2]
-    if len(csv_words) >= 2:
-        for db_name, rate in emp_rates.items():
-            if db_name.split()[:2] == csv_words:
-                return rate
-    return 0.0
+
+        # 2. One contains the other (prefix/suffix)
+        if csv_clean.startswith(db_clean) or db_clean.startswith(csv_clean):
+            return rate
+
+        # 3. First + last name match (ignore middle names)
+        if len(db_tokens) >= 2:
+            first = db_tokens[0]
+            last = db_tokens[-1]
+            if first in csv_tokens and last in csv_tokens:
+                score = 3
+                if score > best_score:
+                    best_score = score
+                    best_match_rate = rate
+
+        # 4. CSV first + last match DB (reversed — DB has middle name)
+        if len(csv_tokens) >= 2:
+            first = csv_tokens[0]
+            last = csv_tokens[-1]
+            if first in db_tokens and last in db_tokens:
+                score = 3
+                if score > best_score:
+                    best_score = score
+                    best_match_rate = rate
+
+        # 5. Token overlap score — count matching tokens
+        common = set(csv_tokens) & set(db_tokens)
+        if len(common) >= 2:
+            score = len(common)
+            if score > best_score:
+                best_score = score
+                best_match_rate = rate
+
+    return best_match_rate
 
 
 def run_gmail_sync(branch_id: int) -> dict:

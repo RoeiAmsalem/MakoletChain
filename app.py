@@ -611,16 +611,18 @@ def api_employees_list():
 
     # Branch KPI data
     branch_row = db.execute(
-        "SELECT hours_this_month, avg_hourly_rate, hours_updated_at FROM branches WHERE id = ?",
+        "SELECT name, hours_this_month, avg_hourly_rate, hours_updated_at FROM branches WHERE id = ?",
         (branch_id,)
     ).fetchone()
+    branch_name = (branch_row['name'] or '') if branch_row else ''
     hours_this_month = (branch_row['hours_this_month'] or 0) if branch_row else 0
     avg_hourly_rate = (branch_row['avg_hourly_rate'] or 0) if branch_row else 0
     hours_updated_at = (branch_row['hours_updated_at'] or '') if branch_row else ''
 
-    # Match employees to CSV hours + calculate salary
+    # Clean display names and match employees to CSV hours
     for emp in employees:
-        matched = _match_employee_hours(emp['name'], hours_map)
+        emp['name'] = _clean_display_name(emp['name'], branch_name)
+        matched = _match_employee_hours(emp['name'], hours_map, branch_name)
         if matched:
             emp['hours'] = matched['total_hours']
             emp['salary'] = matched['total_salary']
@@ -673,26 +675,67 @@ def api_employees_list():
     })
 
 
-def _match_employee_hours(emp_name: str, hours_map: dict) -> dict | None:
-    """Match an employee name to CSV hours data.
-    Try: exact match, then strip branch suffix, then first-two-words match."""
+def _clean_display_name(name: str, branch_name: str = '') -> str:
+    """Strip store name suffix from employee names for clean display."""
+    store_words = ['איינשטיין', 'אינשטיין', 'einstein']
+    if branch_name:
+        store_words.extend(branch_name.strip().split())
+    words = name.split()
+    while words and any(w.lower() == words[-1].lower() for w in store_words):
+        words.pop()
+    return ' '.join(words).strip() or name
+
+
+def _match_employee_hours(emp_name: str, hours_map: dict, branch_name: str = '') -> dict | None:
+    """Match an employee name to CSV hours data using smart fuzzy matching."""
+    # Clean the employee name
+    emp_clean = _clean_display_name(emp_name, branch_name)
+    emp_tokens = emp_clean.split()
+
+    # 1. Exact match
     if emp_name in hours_map:
         return hours_map[emp_name]
-    # Strip branch suffix words (e.g. "איינשטיין", "אינשטיין")
+
+    best_match = None
+    best_score = 0
+
     for csv_name, data in hours_map.items():
-        # Check if CSV name starts with employee name
-        if csv_name.startswith(emp_name):
+        csv_clean = _clean_display_name(csv_name, branch_name)
+        csv_tokens = csv_clean.split()
+
+        # 2. Exact match after cleaning
+        if emp_clean == csv_clean:
             return data
-        if emp_name.startswith(csv_name):
+
+        # 3. One contains the other (prefix/suffix)
+        if csv_clean.startswith(emp_clean) or emp_clean.startswith(csv_clean):
             return data
-    # First two words match
-    emp_words = emp_name.split()[:2]
-    if len(emp_words) >= 2:
-        for csv_name, data in hours_map.items():
-            csv_words = csv_name.split()[:2]
-            if emp_words == csv_words:
-                return data
-    return None
+
+        # 4. First + last name match (ignore middle names)
+        if len(emp_tokens) >= 2:
+            first, last = emp_tokens[0], emp_tokens[-1]
+            if first in csv_tokens and last in csv_tokens:
+                score = 3
+                if score > best_score:
+                    best_score = score
+                    best_match = data
+
+        # 5. Reversed — CSV first + last match emp
+        if len(csv_tokens) >= 2:
+            first, last = csv_tokens[0], csv_tokens[-1]
+            if first in emp_tokens and last in emp_tokens:
+                score = 3
+                if score > best_score:
+                    best_score = score
+                    best_match = data
+
+        # 6. Token overlap
+        common = set(emp_tokens) & set(csv_tokens)
+        if len(common) >= 2 and len(common) > best_score:
+            best_score = len(common)
+            best_match = data
+
+    return best_match
 
 
 @app.route('/api/employees', methods=['POST'])
