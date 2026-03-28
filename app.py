@@ -752,14 +752,39 @@ def api_ops_status():
         "SELECT ar.*, b.name as branch_name FROM agent_runs ar "
         "LEFT JOIN branches b ON ar.branch_id = b.id "
         "WHERE ar.status IN ('error', 'warning') AND ar.started_at >= datetime('now', '-7 days') "
+        "AND (ar.dismissed IS NULL OR ar.dismissed = 0) "
         "ORDER BY ar.started_at DESC LIMIT 20"
     ).fetchall()
     alerts = [_convert_run_times(dict(r)) for r in alerts_rows]
+
+    # Summary stats
+    active_count = len(branches)
+    error_count_row = db.execute(
+        "SELECT COUNT(*) as cnt FROM agent_runs WHERE status='error' AND started_at >= datetime('now', '-1 day')"
+    ).fetchone()
+    error_count = error_count_row['cnt'] if error_count_row else 0
+
+    last_nightly_row = db.execute(
+        "SELECT started_at FROM agent_runs WHERE agent='bilboy' ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    last_nightly = _to_il_time(last_nightly_row['started_at']) if last_nightly_row else ''
+
+    # Aviv status: is store open now?
+    from agents.aviv_live import _is_store_hours, get_next_opening
+    store_open = _is_store_hours()
+    next_opening = get_next_opening() if not store_open else ''
 
     return jsonify({
         'branches': branches,
         'agent_runs': agent_runs,
         'alerts': alerts,
+        'summary': {
+            'active_branches': active_count,
+            'errors_24h': error_count,
+            'last_nightly': last_nightly,
+            'store_open': store_open,
+            'next_opening': next_opening,
+        },
     })
 
 
@@ -848,6 +873,55 @@ def ops_logs(branch_id, agent):
         return jsonify({'branch_name': branch_name, 'lines': result})
     except Exception as e:
         return jsonify({'branch_name': branch_name, 'lines': [{'message': f'שגיאה: {e}', 'level': 'error'}]})
+
+
+@app.route('/ops/dismiss-alert', methods=['POST'])
+@_ceo_required
+def ops_dismiss_alert():
+    data = request.get_json()
+    alert_id = data.get('alert_id')
+    if not alert_id:
+        return jsonify({'error': 'missing alert_id'}), 400
+    db = get_db()
+    db.execute("UPDATE agent_runs SET dismissed = 1 WHERE id = ?", (alert_id,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/ops-health')
+@_ceo_required
+def api_ops_health():
+    def _run(cmd):
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+            return r.stdout.strip()
+        except Exception as e:
+            return str(e)
+
+    svc1 = _run("systemctl is-active makolet-chain")
+    svc2 = _run("systemctl is-active makolet-chain-scheduler")
+    disk = _run("df /opt/makolet-chain --output=pcent,used,size | tail -1")
+    memory = _run("free -m | awk 'NR==2{printf \"%s/%s\", $3, $2}'")
+    uptime = _run("uptime -p")
+    last_deploy = _run("git -C /opt/makolet-chain log -1 --format='%ar — %s'")
+
+    # Parse disk percentage
+    disk_pct = 0
+    try:
+        disk_pct = int(disk.split()[0].replace('%', ''))
+    except Exception:
+        pass
+
+    services_ok = svc1 == 'active' and svc2 == 'active'
+    disk_status = 'ok' if disk_pct < 70 else ('warning' if disk_pct < 90 else 'error')
+
+    return jsonify({
+        'services': {'app': svc1, 'scheduler': svc2, 'ok': services_ok},
+        'disk': {'raw': disk.strip(), 'pct': disk_pct, 'status': disk_status},
+        'memory': memory,
+        'uptime': uptime,
+        'last_deploy': last_deploy,
+    })
 
 
 @app.route('/health')

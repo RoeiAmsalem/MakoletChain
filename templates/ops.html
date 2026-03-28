@@ -6,13 +6,24 @@
     <title>בקרה — MakoletChain</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        .ops-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; }
+        .ops-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
+        .ops-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
         .ops-header h1 { font-size:1.5rem; font-weight:700; }
         .btn-refresh { background:rgba(99,102,241,0.2); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:0.5rem 1rem; cursor:pointer; font-family:inherit; font-size:0.85rem; font-weight:600; transition:background 0.15s; }
         .btn-refresh:hover { background:rgba(99,102,241,0.35); }
 
+        /* Summary bar */
+        .summary-bar { display:flex; align-items:center; gap:1.5rem; padding:0.75rem 1.25rem; background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); margin-bottom:1.5rem; font-size:0.85rem; color:var(--text-secondary); flex-wrap:wrap; }
+        .summary-bar .sep { width:1px; height:16px; background:var(--card-border); }
+        .summary-bar strong { color:var(--text-primary); }
+        .summary-bar .error-count { color:#fca5a5; font-weight:700; }
+        .summary-bar .store-status { display:inline-flex; align-items:center; gap:4px; }
+        .summary-bar .store-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+        .summary-bar .store-dot.open { background:#22c55e; }
+        .summary-bar .store-dot.closed { background:#ef4444; }
+
         /* Branch cards */
-        .branch-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); gap:1rem; margin-bottom:2rem; }
+        .branch-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:1rem; margin-bottom:2rem; }
         .branch-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); }
         .branch-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
         .branch-name { font-size:1.1rem; font-weight:700; }
@@ -41,12 +52,14 @@
         .btn-action:disabled { opacity:0.5; cursor:not-allowed; }
         .btn-action .spin { display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,0.2); border-top-color:white; border-radius:50%; animation:spin 0.8s linear infinite; margin-left:4px; }
 
-        /* Timeline */
+        /* Sections */
         .section-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); margin-bottom:1.5rem; }
         .section-card h2 { font-size:1.1rem; font-weight:700; margin-bottom:1rem; }
+
+        /* Timeline */
         .timeline { display:flex; flex-direction:column; gap:0.4rem; }
         .timeline-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.4rem 0.6rem; border-radius:6px; background:rgba(255,255,255,0.02); }
-        .timeline-time { font-size:0.75rem; color:var(--text-muted); min-width:120px; direction:ltr; text-align:right; }
+        .timeline-time { font-size:0.75rem; color:var(--text-muted); min-width:80px; direction:ltr; text-align:right; }
         .timeline-branch { font-weight:600; min-width:100px; }
         .timeline-agent { min-width:70px; color:var(--text-secondary); }
         .timeline-msg { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -57,6 +70,18 @@
         .alert-row.warning { background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.15); }
         .alert-msg { flex:1; }
         .alert-time { font-size:0.75rem; color:var(--text-muted); }
+        .alert-dismiss { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1rem; padding:0 0.25rem; line-height:1; opacity:0.6; transition:opacity 0.15s; }
+        .alert-dismiss:hover { opacity:1; color:var(--text-primary); }
+
+        /* Health cards */
+        .health-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; }
+        .health-card { background:rgba(255,255,255,0.03); border:1px solid var(--card-border); border-radius:8px; padding:1rem; text-align:center; }
+        .health-label { font-size:0.78rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; }
+        .health-value { font-size:1.1rem; font-weight:700; color:var(--text-primary); }
+        .health-value.ok { color:#86efac; }
+        .health-value.warning { color:#fde68a; }
+        .health-value.error { color:#fca5a5; }
+        .health-sub { font-size:0.75rem; color:var(--text-muted); margin-top:0.25rem; }
 
         /* Log modal */
         .modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:1000; align-items:center; justify-content:center; }
@@ -76,7 +101,9 @@
 
         @media (max-width: 768px) {
             .branch-grid { grid-template-columns:1fr; }
+            .health-grid { grid-template-columns:repeat(2, 1fr); }
             .ops-header { flex-direction:column; gap:0.75rem; align-items:flex-start; }
+            .summary-bar { font-size:0.8rem; gap:0.75rem; }
         }
     </style>
 </head>
@@ -92,18 +119,21 @@
     </div>
 </nav>
 
-<main class="main-content">
+<div class="ops-container">
     <div class="ops-header">
         <h1>בקרת תפעול</h1>
-        <button class="btn-refresh" onclick="loadOpsData()">רענן</button>
+        <button class="btn-refresh" onclick="loadAll()">רענן</button>
     </div>
 
-    <!-- SECTION 1: Branch Cards -->
+    <!-- Summary Bar -->
+    <div class="summary-bar" id="summary-bar">טוען...</div>
+
+    <!-- Branch Cards -->
     <div class="branch-grid" id="branch-grid">
         <div class="loading"><div class="spinner"></div> טוען נתונים...</div>
     </div>
 
-    <!-- SECTION 2: Nightly Run Timeline -->
+    <!-- Timeline -->
     <div class="section-card">
         <h2>ציר זמן — הרצות אחרונות</h2>
         <div class="timeline" id="timeline">
@@ -111,14 +141,22 @@
         </div>
     </div>
 
-    <!-- SECTION 3: Alerts -->
+    <!-- Alerts -->
     <div class="section-card">
         <h2>התראות — 7 ימים אחרונים</h2>
         <div id="alerts">
             <div class="loading"><div class="spinner"></div></div>
         </div>
     </div>
-</main>
+
+    <!-- System Health -->
+    <div class="section-card">
+        <h2>בריאות השרת</h2>
+        <div class="health-grid" id="health-grid">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+</div>
 
 <!-- Log Modal -->
 <div class="modal-overlay" id="log-modal">
@@ -139,17 +177,33 @@
 <script>
 const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live' };
 const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
-
-function formatMoney(n) {
-    if (!n) return '₪0';
-    return '₪' + Number(n).toLocaleString('he-IL', {maximumFractionDigits: 0});
-}
+const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
 
 function showToast(msg, type) {
     const t = document.getElementById('toast');
     t.textContent = msg;
     t.className = 'toast show ' + type;
     setTimeout(() => t.className = 'toast', 3000);
+}
+
+function renderSummary(s) {
+    const bar = document.getElementById('summary-bar');
+    if (!s) { bar.textContent = '—'; return; }
+    const errClass = s.errors_24h > 0 ? 'error-count' : '';
+    const storeHtml = s.store_open
+        ? '<span class="store-status"><span class="store-dot open"></span> חנות פתוחה</span>'
+        : `<span class="store-status"><span class="store-dot closed"></span> סגור · יפתח ב-${s.next_opening}</span>`;
+    bar.innerHTML = `
+        <span><strong>${s.active_branches}</strong> סניפים פעילים</span>
+        <span class="sep"></span>
+        <span class="${errClass}">${s.errors_24h} שגיאות (24ש)</span>
+        <span class="sep"></span>
+        <span>ריצה אחרונה: <strong>${s.last_nightly || '—'}</strong></span>
+        <span class="sep"></span>
+        <span>ריצה הבאה: <strong>מחר 02:00</strong></span>
+        <span class="sep"></span>
+        ${storeHtml}
+    `;
 }
 
 function renderBranches(branches) {
@@ -164,13 +218,12 @@ function renderBranches(branches) {
             if (!a) return `<div class="agent-row"><span class="agent-name">${AGENT_LABELS[agent]}</span><span class="agent-msg">לא רץ</span><span class="agent-badge skipped">–</span></div>`;
             const badge = a.status || 'unknown';
             const icon = STATUS_ICONS[badge] || '?';
-            const time = a.started_at ? a.started_at.split(' ')[1] || '' : '';
             const dur = a.duration_seconds ? `${a.duration_seconds}s` : '';
             return `<div class="agent-row">
                 <span class="agent-name">${AGENT_LABELS[agent]}</span>
                 <span class="agent-msg">${a.message || ''}</span>
                 <span class="agent-badge ${badge}">${icon}</span>
-                <span class="agent-time">${time} ${dur}</span>
+                <span class="agent-time">${a.started_at || ''} ${dur}</span>
             </div>`;
         }).join('');
 
@@ -220,12 +273,54 @@ function renderAlerts(alerts) {
         return;
     }
     el.innerHTML = alerts.map(a => {
-        return `<div class="alert-row ${a.status}">
+        return `<div class="alert-row ${a.status}" id="alert-${a.id}">
             <span class="status-dot ${a.status}" style="width:8px;height:8px;flex-shrink:0;"></span>
             <span class="alert-msg"><strong>${a.branch_name || '#' + a.branch_id}</strong> · ${AGENT_LABELS[a.agent] || a.agent} — ${a.message || ''}</span>
             <span class="alert-time">${a.started_at || ''}</span>
+            <button class="alert-dismiss" onclick="dismissAlert(${a.id})" title="סגור">✕</button>
         </div>`;
     }).join('');
+}
+
+function renderHealth(h) {
+    const grid = document.getElementById('health-grid');
+    if (!h) { grid.innerHTML = '<span style="color:var(--text-muted)">לא זמין</span>'; return; }
+
+    const svcCount = (h.services.app === 'active' ? 1 : 0) + (h.services.scheduler === 'active' ? 1 : 0);
+    const svcClass = svcCount === 2 ? 'ok' : 'error';
+
+    const diskClass = h.disk.status;
+
+    // Parse memory used/total
+    let memHtml = h.memory || '—';
+    let memClass = 'ok';
+    try {
+        const [used, total] = h.memory.split('/').map(Number);
+        const memPct = Math.round(used / total * 100);
+        memHtml = `${memPct}% (${used}M)`;
+        memClass = memPct > 85 ? 'error' : (memPct > 70 ? 'warning' : 'ok');
+    } catch(e) {}
+
+    grid.innerHTML = `
+        <div class="health-card">
+            <div class="health-label">שירותים</div>
+            <div class="health-value ${svcClass}">${svcCount}/2 פעילים</div>
+            <div class="health-sub">${h.uptime || ''}</div>
+        </div>
+        <div class="health-card">
+            <div class="health-label">דיסק</div>
+            <div class="health-value ${diskClass}">${h.disk.pct}%</div>
+            <div class="health-sub">${h.disk.raw || ''}</div>
+        </div>
+        <div class="health-card">
+            <div class="health-label">זיכרון</div>
+            <div class="health-value ${memClass}">${memHtml}</div>
+        </div>
+        <div class="health-card">
+            <div class="health-label">פריסה אחרונה</div>
+            <div class="health-value" style="font-size:0.85rem;">${h.last_deploy || '—'}</div>
+        </div>
+    `;
 }
 
 async function loadOpsData() {
@@ -233,6 +328,7 @@ async function loadOpsData() {
         const resp = await fetch('/api/ops-status');
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const data = await resp.json();
+        renderSummary(data.summary);
         renderBranches(data.branches);
         renderTimeline(data.agent_runs);
         renderAlerts(data.alerts);
@@ -240,6 +336,18 @@ async function loadOpsData() {
         console.error('Failed to load ops data:', e);
     }
 }
+
+async function loadHealth() {
+    try {
+        const resp = await fetch('/api/ops-health');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        renderHealth(await resp.json());
+    } catch (e) {
+        document.getElementById('health-grid').innerHTML = `<span style="color:#fca5a5">שגיאה: ${e.message}</span>`;
+    }
+}
+
+function loadAll() { loadOpsData(); loadHealth(); }
 
 async function runAgent(branchId, agent, btn) {
     btn.disabled = true;
@@ -266,7 +374,19 @@ async function runAgent(branchId, agent, btn) {
     }
 }
 
-const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
+async function dismissAlert(id) {
+    try {
+        await fetch('/ops/dismiss-alert', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({alert_id: id})
+        });
+        const row = document.getElementById('alert-' + id);
+        if (row) row.remove();
+    } catch (e) {
+        showToast('שגיאה בסגירת התראה', 'error');
+    }
+}
 
 async function openLogs(branchId, agent) {
     document.getElementById('log-title').textContent = `לוגים — ${AGENT_LABELS[agent]} #${branchId}`;
@@ -289,21 +409,17 @@ async function openLogs(branchId, agent) {
             return `<span style="color:${color}">${escaped}</span>`;
         }).join('\n');
     } catch (e) {
-        document.getElementById('log-content').innerHTML = `<span style="color:#fca5a5">שגיאה בטעינת לוגים: ${e.message}</span>`;
+        document.getElementById('log-content').innerHTML = `<span style="color:#fca5a5">שגיאה: ${e.message}</span>`;
     }
 }
 
-function closeLogModal() {
-    document.getElementById('log-modal').classList.remove('open');
-}
+function closeLogModal() { document.getElementById('log-modal').classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLogModal(); });
 
-document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeLogModal();
-});
-
-// Initial load + auto-refresh every 60s
-loadOpsData();
+// Initial load + auto-refresh
+loadAll();
 setInterval(loadOpsData, 60000);
+setInterval(loadHealth, 120000);
 </script>
 </body>
 </html>

@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   docs_count INTEGER DEFAULT 0,
   amount REAL DEFAULT 0,
   message TEXT,
-  duration_seconds REAL DEFAULT 0
+  duration_seconds REAL DEFAULT 0,
+  dismissed INTEGER DEFAULT 0
 );
 
 -- Insert branch 126 (empty data, credentials TBD)

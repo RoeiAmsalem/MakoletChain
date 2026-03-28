@@ -302,8 +302,11 @@ def run_gmail_sync(branch_id: int) -> dict:
 
         duration = time.time() - t0
         status = 'success'
-        message = f"{new_reports} דוחות חדשים, {skipped} דילוגים"
-        if new_reports == 0 and skipped == 0:
+        if new_reports > 0:
+            message = f"{new_reports} דוחות חדשים, {skipped} דילוגים"
+        elif skipped > 0:
+            message = f"הכל מעודכן ({skipped} קיימים)"
+        else:
             status = 'warning'
             message = "אין Z-report"
             notify("⚠️ אין Z-report", f"סניף {branch_id} — לא נמצאו דוחות ב-7 ימים אחרונים")

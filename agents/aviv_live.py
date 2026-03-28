@@ -71,6 +71,20 @@ def _is_store_hours() -> bool:
     return start <= now <= end
 
 
+def get_next_opening() -> str:
+    """Return next store opening time as HH:MM string."""
+    now = datetime.now(IL_TZ)
+    sh, sm, eh, em = STORE_SCHEDULE[now.weekday()]
+    open_today = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+    # If before today's opening, return today's opening
+    if now < open_today:
+        return f"{sh:02d}:{sm:02d}"
+    # Otherwise return tomorrow's opening
+    tomorrow_wd = (now.weekday() + 1) % 7
+    tsh, tsm, _, _ = STORE_SCHEDULE[tomorrow_wd]
+    return f"{tsh:02d}:{tsm:02d}"
+
+
 def _scrape(branch: dict, log: logging.Logger) -> dict:
     from playwright.sync_api import sync_playwright
 

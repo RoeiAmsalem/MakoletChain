@@ -71,14 +71,22 @@ def run_bilboy(branch_id: int) -> dict:
     log.info("Starting BilBoy sync for branch %d", branch_id)
     t0 = time.time()
 
-    # Insert agent_runs start
+    # Insert agent_runs start (guard against duplicate within 60s)
     conn_run = _get_db()
-    cur = conn_run.execute(
-        "INSERT INTO agent_runs (branch_id, agent, started_at, status) VALUES (?, 'bilboy', datetime('now'), 'running')",
+    recent = conn_run.execute(
+        "SELECT id FROM agent_runs WHERE branch_id=? AND agent='bilboy' AND status='running' "
+        "AND started_at >= datetime('now', '-60 seconds')",
         (branch_id,)
-    )
-    run_id = cur.lastrowid
-    conn_run.commit()
+    ).fetchone()
+    if recent:
+        run_id = recent['id']
+    else:
+        cur = conn_run.execute(
+            "INSERT INTO agent_runs (branch_id, agent, started_at, status) VALUES (?, 'bilboy', datetime('now'), 'running')",
+            (branch_id,)
+        )
+        run_id = cur.lastrowid
+        conn_run.commit()
     conn_run.close()
 
     try:
