@@ -216,22 +216,18 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         conn.close()
         return "already processed"
 
-    # Search for attendance emails in last 35 days
+    # Search for recent emails (can't use Hebrew in IMAP SUBJECT search)
     since_str = (date.today() - timedelta(days=35)).strftime("%d-%b-%Y")
-    criteria = f'(SUBJECT "נוכחות באקסל" SINCE "{since_str}")'
+    criteria = f'(SINCE "{since_str}")'
     status, data = mail.search(None, criteria)
 
     if status != "OK" or not data or not data[0]:
-        # Try broader search
-        criteria = f'(SINCE "{since_str}")'
-        status, data = mail.search(None, criteria)
-        if status != "OK" or not data or not data[0]:
-            log.info("No attendance CSV emails found")
-            conn.close()
-            return None
+        log.info("No recent emails found for attendance CSV")
+        conn.close()
+        return None
 
     msg_ids = data[0].split()
-    log.info("Scanning %d emails for attendance CSV", len(msg_ids))
+    log.info("Scanning %d recent emails for attendance CSV", len(msg_ids))
 
     csv_content = None
     for msg_id in reversed(msg_ids):  # Most recent first
