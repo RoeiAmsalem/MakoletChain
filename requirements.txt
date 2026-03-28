@@ -7,3 +7,4 @@ requests
 pymupdf
 pdfplumber
 python-dotenv
+resend

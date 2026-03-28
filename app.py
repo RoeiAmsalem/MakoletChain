@@ -1,12 +1,15 @@
 import io
 import os
+import secrets
 import sqlite3
 import subprocess
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import resend
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -77,6 +80,49 @@ def seed_admin():
     conn.close()
 
 
+def send_reset_email(to_email: str, reset_url: str, user_name: str = ''):
+    resend.api_key = os.environ.get('RESEND_API_KEY')
+    resend.Emails.send({
+        "from": "רשת המכולת <noreply@makoletdashboard.com>",
+        "to": [to_email],
+        "subject": "איפוס סיסמה — רשת המכולת",
+        "html": f"""
+        <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 520px;
+             margin: auto; padding: 32px; background: #f9f9f9; border-radius: 12px;">
+          <div style="text-align: center; margin-bottom: 24px;">
+            <h1 style="color: #0d1526; font-size: 24px; margin: 0;">רשת המכולת</h1>
+            <p style="color: #666; margin: 4px 0 0;">מערכת ניהול</p>
+          </div>
+          <div style="background: white; padding: 24px; border-radius: 8px;
+               border: 1px solid #e0e0e0;">
+            <h2 style="color: #0d1526; font-size: 18px;">איפוס סיסמה</h2>
+            <p style="color: #444; line-height: 1.6;">
+              קיבלנו בקשה לאיפוס הסיסמה לחשבון שלך.
+              לחץ על הכפתור למטה כדי לאפס את הסיסמה:
+            </p>
+            <div style="text-align: center; margin: 24px 0;">
+              <a href="{reset_url}" style="
+                background: #6366f1;
+                color: white;
+                padding: 14px 32px;
+                border-radius: 8px;
+                text-decoration: none;
+                font-size: 16px;
+                font-weight: bold;
+                display: inline-block;
+              ">איפוס סיסמה</a>
+            </div>
+            <p style="color: #888; font-size: 13px; border-top: 1px solid #eee;
+               padding-top: 16px; margin-top: 16px;">
+              הקישור תקף ל-30 דקות בלבד.<br>
+              אם לא ביקשת לאפס סיסמה, התעלם מהמייל הזה.
+            </p>
+          </div>
+        </div>
+        """
+    })
+
+
 # ── Auth ──────────────────────────────────────────────────────
 
 def login_required(f):
@@ -93,7 +139,8 @@ def login():
     if request.method == 'GET':
         if 'user_id' in session:
             return redirect('/')
-        return render_template('login.html', error=None)
+        message = request.args.get('message', '')
+        return render_template('login.html', error=None, message=message)
 
     email = request.form.get('email', '').strip()
     password = request.form.get('password', '')
@@ -130,6 +177,72 @@ def login():
 def logout():
     session.clear()
     return redirect('/login')
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if request.method == 'GET':
+        return render_template('forgot_password.html')
+
+    email = request.form.get('email', '').strip().lower()
+    db = get_db()
+    user = db.execute('SELECT id FROM users WHERE email=? AND active=1', (email,)).fetchone()
+    if user:
+        token = secrets.token_urlsafe(32)
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+        db.execute('INSERT INTO reset_tokens (user_id, token, expires_at) VALUES (?,?,?)',
+                   (user['id'], token, expires))
+        db.commit()
+        reset_url = f"https://app.makoletdashboard.com/reset-password?token={token}"
+        try:
+            send_reset_email(email, reset_url)
+        except Exception as e:
+            app.logger.error(f"Failed to send reset email: {e}")
+    return render_template('forgot_password.html',
+                           sent=True,
+                           message="אם האימייל קיים במערכת, נשלח קישור לאיפוס סיסמה תוך מספר שניות")
+
+
+@app.route('/reset-password', methods=['GET', 'POST'])
+def reset_password():
+    if request.method == 'GET':
+        token = request.args.get('token', '')
+        db = get_db()
+        row = db.execute('''SELECT rt.*, u.email FROM reset_tokens rt
+                            JOIN users u ON rt.user_id = u.id
+                            WHERE rt.token=? AND rt.used=0''', (token,)).fetchone()
+        if not row:
+            return render_template('reset_password.html', error="הקישור לא תקין")
+        expires = datetime.fromisoformat(row['expires_at'])
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires:
+            return render_template('reset_password.html', error="הקישור פג תוקף. בקש קישור חדש.")
+        return render_template('reset_password.html', token=token)
+
+    token = request.form.get('token', '')
+    password = request.form.get('password', '')
+    confirm = request.form.get('confirm_password', '')
+    if password != confirm:
+        return render_template('reset_password.html', token=token, error="הסיסמאות אינן תואמות")
+    if len(password) < 8:
+        return render_template('reset_password.html', token=token, error="הסיסמה חייבת להכיל לפחות 8 תווים")
+    db = get_db()
+    row = db.execute('''SELECT rt.*, u.id as uid FROM reset_tokens rt
+                        JOIN users u ON rt.user_id = u.id
+                        WHERE rt.token=? AND rt.used=0''', (token,)).fetchone()
+    if not row:
+        return render_template('reset_password.html', error="הקישור לא תקין")
+    expires = datetime.fromisoformat(row['expires_at'])
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires:
+        return render_template('reset_password.html', error="הקישור פג תוקף")
+    db.execute('UPDATE users SET password_hash=? WHERE id=?',
+               (generate_password_hash(password), row['uid']))
+    db.execute('UPDATE reset_tokens SET used=1 WHERE token=?', (token,))
+    db.commit()
+    return redirect(url_for('login', message="הסיסמה עודכנה בהצלחה! התחבר עם הסיסמה החדשה"))
 
 
 # ── Helpers ───────────────────────────────────────────────────
