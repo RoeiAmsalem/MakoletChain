@@ -17,7 +17,11 @@
                  style="height:42px; width:auto; object-fit:contain; filter:invert(1) hue-rotate(180deg);">
             <span class="store-name">{{ branch_name }}</span>
         </a>
-        <button class="hamburger" id="hamburger" aria-label="תפריט">&#9776;</button>
+        <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:12px; color:rgba(255,255,255,0.4);">{{ session.get('user_name', '') }}</span>
+            <a href="/logout" style="font-size:12px; color:rgba(255,255,255,0.45); text-decoration:none; padding:5px 10px; border:1px solid rgba(255,255,255,0.15); border-radius:6px; transition:all 0.2s;" onmouseover="this.style.color='rgba(255,255,255,0.8)'" onmouseout="this.style.color='rgba(255,255,255,0.45)'">יציאה</a>
+            <button class="hamburger" id="hamburger" aria-label="תפריט">&#9776;</button>
+        </div>
     </div>
     <nav>
         <ul class="navbar-nav">
