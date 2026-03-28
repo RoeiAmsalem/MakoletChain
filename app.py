@@ -417,11 +417,46 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
             'label': f'מבוסס על {hours} שעות CSV'
         }
 
-    # Estimate using per-employee rates × hours
+    # CSV rows exist with hours but no salary — backfill from employee rates
     employees = db.execute('''
         SELECT name, hourly_rate FROM employees
         WHERE branch_id=? AND active=1 AND hourly_rate > 0
     ''', (branch_id,)).fetchall()
+
+    if csv_rows and employees:
+        emp_rates = {e['name']: e['hourly_rate'] for e in employees}
+        total_salary = 0
+        updated = False
+        for row in csv_rows:
+            if row['total_hours'] > 0 and (row['total_salary'] or 0) == 0:
+                csv_tokens = set(row['employee_name'].replace('איינשטיין', '').replace('אינשטיין', '').split())
+                rate = 0
+                for emp_name, emp_rate in emp_rates.items():
+                    emp_tokens = set(emp_name.split())
+                    if len(emp_tokens & csv_tokens) >= 2:
+                        rate = emp_rate
+                        break
+                if rate > 0:
+                    calc_salary = round(row['total_hours'] * rate, 2)
+                    db.execute(
+                        'UPDATE employee_hours SET total_salary=? '
+                        'WHERE branch_id=? AND month=? AND employee_name=?',
+                        (calc_salary, branch_id, current_month, row['employee_name'])
+                    )
+                    total_salary += calc_salary
+                    updated = True
+            else:
+                total_salary += row['total_salary'] or 0
+        if updated:
+            db.commit()
+        if total_salary > 0:
+            hours = round(sum(r['total_hours'] for r in csv_rows), 2)
+            return {
+                'amount': round(total_salary, 2),
+                'source': 'csv',
+                'hours': hours,
+                'label': f'מבוסס על {hours} שעות CSV'
+            }
 
     branch = db.execute(
         'SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id=?',
