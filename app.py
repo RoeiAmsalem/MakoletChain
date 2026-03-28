@@ -164,13 +164,26 @@ def _month_nav(selected):
     return prev_month, next_month, display, show_today, current
 
 
+def get_branch_id():
+    """Get branch_id from session only — never from request args/form."""
+    role = session.get('user_role')
+    if role == 'ceo':
+        return session.get('branch_id', 126)
+    elif role == 'manager':
+        return session.get('branch_id')
+    return None
+
+
 def _get_branch_id():
+    """Get branch_id for page routes — allows URL param switching with access validation."""
     bid = request.args.get('branch_id')
     if bid:
-        session['branch_id'] = int(bid)
-    else:
-        bid = session.get('branch_id', 126)
-    return int(bid)
+        bid = int(bid)
+        role = session.get('user_role')
+        branches = session.get('user_branches', [])
+        if role == 'ceo' or bid in branches:
+            session['branch_id'] = bid
+    return get_branch_id()
 
 
 def _branch_name(branch_id):
@@ -278,7 +291,7 @@ def api_branches():
 @login_required
 def api_summary():
     """Return KPI summary for a branch + month."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
     db = get_db()
@@ -364,7 +377,7 @@ def api_summary():
 @login_required
 def api_history():
     """Return last 6 months of data for chart + table."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
     year, mon = map(int, month.split('-'))
@@ -416,7 +429,7 @@ def api_history():
 @login_required
 def api_live_sales():
     """Return today's live sales for a branch."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     today = _now_il().strftime('%Y-%m-%d')
     db = get_db()
     row = db.execute(
@@ -436,7 +449,7 @@ def api_live_sales():
 @login_required
 def api_employees_list():
     """List employees for a branch + month."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
     rows = db.execute(
@@ -452,7 +465,7 @@ def api_employees_list():
 def api_employees_create():
     """Add a new employee entry for a branch + month."""
     data = request.get_json()
-    branch_id = data.get('branch_id', _get_branch_id())
+    branch_id = get_branch_id()
     month = data.get('month', _now_il().strftime('%Y-%m'))
     name = data.get('employee_name', '').strip()
     rate = float(data.get('rate', 0))
@@ -501,7 +514,7 @@ def api_employees_delete(emp_id):
 @login_required
 def api_fixed_expenses_list():
     """List fixed expenses for a branch + month."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
     rows = db.execute(
@@ -517,7 +530,7 @@ def api_fixed_expenses_list():
 def api_fixed_expenses_create():
     """Add a new fixed expense."""
     data = request.get_json()
-    branch_id = data.get('branch_id', _get_branch_id())
+    branch_id = get_branch_id()
     month = data.get('month', _now_il().strftime('%Y-%m'))
     name = data.get('name', '').strip()
     amount = float(data.get('amount', 0))
@@ -563,7 +576,7 @@ PDF_BASE = os.path.join(os.path.dirname(__file__), 'data', 'pdfs')
 @login_required
 def api_sales():
     """Return daily sales for a branch + month."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
     rows = db.execute(
@@ -613,7 +626,7 @@ def api_sales():
 @login_required
 def api_sales_pdf(sale_date):
     """Serve the original PDF for a Z-report."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     pdf_path = os.path.join(PDF_BASE, str(branch_id), f"z_{sale_date}.pdf")
     if not os.path.isfile(pdf_path):
         abort(404)
@@ -624,7 +637,7 @@ def api_sales_pdf(sale_date):
 @login_required
 def api_sales_pdf_image(sale_date, page):
     """Render a PDF page as PNG image using PyMuPDF."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     pdf_path = os.path.join(PDF_BASE, str(branch_id), f"z_{sale_date}.pdf")
     if not os.path.isfile(pdf_path):
         abort(404)
@@ -646,7 +659,7 @@ def api_sales_pdf_image(sale_date, page):
 @login_required
 def api_sales_pdf_pages(sale_date):
     """Return the number of pages in a PDF."""
-    branch_id = _get_branch_id()
+    branch_id = get_branch_id()
     pdf_path = os.path.join(PDF_BASE, str(branch_id), f"z_{sale_date}.pdf")
     if not os.path.isfile(pdf_path) or fitz is None:
         return jsonify({'pages': 0})
