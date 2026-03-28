@@ -247,6 +247,25 @@ def run_bilboy(branch_id: int) -> dict:
         log.info("BilBoy sync complete: %d docs, total=%.2f", len(records), total_amount)
         return {'success': True, 'docs_count': len(records), 'total_amount': total_amount}
 
+    except PermissionError:
+        log.error("BilBoy token expired for branch %d", branch_id)
+        duration = time.time() - t0
+        try:
+            conn_err = _get_db()
+            conn_err.execute(
+                "UPDATE agent_runs SET finished_at=datetime('now'), status='error', message='token_expired', duration_seconds=? WHERE id=?",
+                (round(duration, 1), run_id)
+            )
+            conn_err.commit()
+            conn_err.close()
+        except Exception:
+            pass
+        notify(
+            "🔑 BilBoy — טוקן פג",
+            f"סניף {branch_id} · {branch.get('name', '')} — יש להתחבר מחדש ל-BilBoy"
+        )
+        return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': 'token_expired'}
+
     except Exception as e:
         log.error("BilBoy sync failed: %s", e, exc_info=True)
         duration = time.time() - t0

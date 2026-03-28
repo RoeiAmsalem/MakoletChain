@@ -23,9 +23,9 @@ DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db'
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
 
-# Gmail credentials (same as MakoletDashboard)
-GMAIL_ADDRESS = os.environ.get('GMAIL_ADDRESS', 'makoletdeshboard@gmail.com')
-GMAIL_APP_PASSWORD = os.environ.get('GMAIL_APP_PASSWORD', 'tulgwyjhilhjxfwi')
+# Gmail credentials — must be set in .env
+GMAIL_ADDRESS = os.environ.get('GMAIL_ADDRESS', '')
+GMAIL_APP_PASSWORD = os.environ.get('GMAIL_APP_PASSWORD', '')
 AVIV_SENDER_EMAIL = os.environ.get('AVIV_SENDER_EMAIL', 'avivpost@avivpos.co.il')
 
 # RTL PDF: "20295.85 ₪ :כ"הס"
@@ -166,6 +166,10 @@ def run_gmail_sync(branch_id: int) -> dict:
     conn_run.close()
 
     try:
+        if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+            log.error("GMAIL_ADDRESS or GMAIL_APP_PASSWORD not set in .env")
+            return {'success': False, 'new_reports': 0, 'skipped': 0, 'error': 'missing gmail credentials in .env'}
+
         branch = _get_branch_config(branch_id)
         gmail_label = branch.get('gmail_label') or ''
         if not gmail_label:
