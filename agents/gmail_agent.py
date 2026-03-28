@@ -204,17 +204,10 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     now_il = datetime.now(ZoneInfo('Asia/Jerusalem'))
     current_month = now_il.strftime('%Y-%m')
 
-    # Check if already processed this month
+    # We'll check "already processed" after determining the report month from email date.
+    # First, search for the CSV email to detect its date.
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM employee_hours WHERE branch_id=? AND month=?",
-        (branch_id, current_month)
-    ).fetchone()['cnt']
-    if count > 0:
-        log.info("Attendance CSV already processed for %s (%d employees)", current_month, count)
-        conn.close()
-        return "already processed"
 
     # Search for recent emails (can't use Hebrew in IMAP SUBJECT search)
     since_str = (date.today() - timedelta(days=35)).strftime("%d-%b-%Y")
@@ -230,6 +223,7 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     log.info("Scanning %d recent emails for attendance CSV", len(msg_ids))
 
     csv_content = None
+    report_month = current_month  # default, overridden by email date
     for msg_id in reversed(msg_ids):  # Most recent first
         status, msg_data = mail.fetch(msg_id, "(RFC822)")
         if status != "OK":
@@ -243,6 +237,20 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
             continue
         if 'נוכחות' not in subject:
             continue
+
+        # Detect report month from email date
+        # CSV sent on 1st-5th of month belongs to PREVIOUS month
+        msg_date_str = msg.get("Date", "")
+        try:
+            msg_date = email.utils.parsedate_to_datetime(msg_date_str)
+            if msg_date.day <= 5:
+                prev = msg_date.replace(day=1) - timedelta(days=1)
+                report_month = prev.strftime('%Y-%m')
+            else:
+                report_month = msg_date.strftime('%Y-%m')
+            log.info("Email date: %s → report month: %s", msg_date_str, report_month)
+        except Exception:
+            log.warning("Could not parse email date: %s, using current month", msg_date_str)
 
         # Look for CSV attachment
         for part in msg.walk():
@@ -284,6 +292,16 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         conn.close()
         return None
 
+    # Check if already processed for the detected report month
+    count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM employee_hours WHERE branch_id=? AND month=?",
+        (branch_id, report_month)
+    ).fetchone()['cnt']
+    if count > 0:
+        log.info("Attendance CSV already processed for %s (%d employees)", report_month, count)
+        conn.close()
+        return "already processed"
+
     # Parse CSV
     employees = _parse_attendance_csv(csv_content)
     if not employees:
@@ -318,7 +336,7 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
             "INSERT OR REPLACE INTO employee_hours "
             "(branch_id, month, employee_name, total_hours, total_salary, source) "
             "VALUES (?, ?, ?, ?, ?, 'csv')",
-            (branch_id, current_month, emp['name'], emp['total_hours'], salary)
+            (branch_id, report_month, emp['name'], emp['total_hours'], salary)
         )
 
     # Calculate weighted avg rate for branch
@@ -333,7 +351,7 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     conn.close()
 
     salary_str = f", שכר ₪{total_salary_all:,.0f}" if total_salary_all > 0 else ""
-    msg = f"📊 נוכחות: {len(employees)} עובדים, {total_hours_all:.1f} שעות{salary_str}"
+    msg = f"📊 נוכחות {report_month}: {len(employees)} עובדים, {total_hours_all:.1f} שעות{salary_str}"
     log.info(msg)
     return msg
 

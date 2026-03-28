@@ -244,10 +244,9 @@ async function loadEmployees() {
 
         // KPI tiles
         document.getElementById('kpi-hours').textContent = (d.hours_this_month || 0).toFixed(1);
-        if (d.hours_updated_at) {
-            const dt = new Date(d.hours_updated_at);
-            document.getElementById('kpi-hours-sub').textContent = 'עודכן: ' + dt.toLocaleDateString('he-IL');
-        }
+        document.getElementById('kpi-hours-sub').textContent = d.hours_updated_at
+            ? 'שעות עדכניות מ-Aviv BI · ' + new Date(d.hours_updated_at).toLocaleDateString('he-IL')
+            : 'שעות עדכניות מ-Aviv BI';
 
         document.getElementById('kpi-salary').textContent = formatMoney(d.salary_cost || 0);
         const badgeEl = document.getElementById('kpi-salary-badge');
@@ -256,7 +255,7 @@ async function loadEmployees() {
                 + `<div style="margin-top:0.2rem">מבוסס על ${(d.salary_hours || 0).toFixed(1)} שעות</div>`;
         } else if (d.salary_cost > 0) {
             badgeEl.innerHTML = '<span class="status-badge badge-estimated">משוער</span>'
-                + '<div style="margin-top:0.2rem">הערכה בלבד</div>';
+                + '<div style="margin-top:0.2rem">משוער — מבוסס על תעריף חודש קודם × שעות BI</div>';
         } else {
             badgeEl.innerHTML = '<div style="margin-top:0.2rem;color:var(--text-muted)">אין נתונים</div>';
         }

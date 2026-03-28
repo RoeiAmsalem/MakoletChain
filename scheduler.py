@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
@@ -93,6 +94,36 @@ def scheduled_nightly():
     nightly_sync()
 
 
+def run_hours_scrape():
+    """Lightweight hours-only scrape for all active branches."""
+    from agents.aviv_live import scrape_hours_only
+    branches = get_active_branches()
+    for bid in branches:
+        log.info("Hours scrape for branch %d", bid)
+        try:
+            result = scrape_hours_only(bid)
+            log.info("Branch %d hours: %s", bid, result)
+        except Exception as e:
+            log.error("Branch %d hours scrape failed: %s", bid, e)
+
+
+# Hours scrape at 16:00 Israel time
+scheduler.add_job(
+    func=run_hours_scrape,
+    trigger=CronTrigger(hour=16, minute=0, timezone=IL_TZ),
+    id='hours_scrape_16',
+    name='Hours scrape 16:00',
+)
+
+# Hours scrape at 23:30 Israel time
+scheduler.add_job(
+    func=run_hours_scrape,
+    trigger=CronTrigger(hour=23, minute=30, timezone=IL_TZ),
+    id='hours_scrape_23',
+    name='Hours scrape 23:30',
+)
+
+
 if __name__ == '__main__':
     init_db()
     log.info('MakoletChain scheduler started')
@@ -101,7 +132,7 @@ if __name__ == '__main__':
     log.info('Running startup aviv_live pass...')
     run_aviv_all()
 
-    log.info('Scheduler running — aviv every 5min, nightly 02:00 IL')
+    log.info('Scheduler running — aviv every 5min, hours 16:00+23:30, nightly 02:00 IL')
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

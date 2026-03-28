@@ -354,6 +354,38 @@ def run_aviv_live(branch_id: int) -> dict:
         return {'success': False, 'amount': 0, 'transactions': 0, 'error': str(e)}
 
 
+def scrape_hours_only(branch_id: int) -> dict:
+    """Lightweight scrape — only grab employee hours from Aviv BI status page.
+    Does NOT update live_sales or daily_sales.
+    Runs at 16:00 and 23:30 daily."""
+    log = _setup_logger(branch_id)
+    branch = _get_branch_config(branch_id)
+
+    if not branch.get('aviv_user_id'):
+        return {'success': False, 'error': 'no credentials'}
+
+    try:
+        result = _scrape(branch, log)
+        hours = result.get('employee_hours', 0)
+
+        conn = _get_db()
+        conn.execute(
+            '''UPDATE branches SET
+                hours_this_month = ?,
+                hours_updated_at = ?
+                WHERE id = ?''',
+            (hours, datetime.now(IL_TZ).isoformat(), branch_id)
+        )
+        conn.commit()
+        conn.close()
+
+        log.info("Hours-only scrape: %.1f hours", hours)
+        return {'success': True, 'hours': hours}
+    except Exception as e:
+        log.error("Hours-only scrape failed: %s", e)
+        return {'success': False, 'error': str(e)}
+
+
 if __name__ == '__main__':
     import sys
     bid = int(sys.argv[1]) if len(sys.argv) > 1 else 126
