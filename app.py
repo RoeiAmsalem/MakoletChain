@@ -479,6 +479,55 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     }
 
 
+def _recalculate_avg_rate(branch_id: int, conn):
+    """Recalculate weighted avg hourly rate for a branch.
+    Called whenever an employee rate changes.
+    Uses last month's CSV hours distribution as weights."""
+    today = date.today()
+    prev_month = (today.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+
+    prev_rows = conn.execute('''
+        SELECT eh.employee_name, eh.total_hours
+        FROM employee_hours eh
+        WHERE eh.branch_id=? AND eh.month=?
+    ''', (branch_id, prev_month)).fetchall()
+
+    employees = conn.execute('''
+        SELECT name, hourly_rate FROM employees
+        WHERE branch_id=? AND active=1 AND hourly_rate > 0
+    ''', (branch_id,)).fetchall()
+
+    if not employees:
+        return
+
+    if not prev_rows:
+        avg = sum(e['hourly_rate'] for e in employees) / len(employees)
+        conn.execute('UPDATE branches SET avg_hourly_rate=? WHERE id=?',
+                     (round(avg, 2), branch_id))
+        return
+
+    emp_rates = {e['name']: e['hourly_rate'] for e in employees}
+
+    total_weighted = 0
+    total_hours = 0
+    for row in prev_rows:
+        rate = 0
+        csv_tokens = set(row['employee_name'].replace('איינשטיין', '').replace('אינשטיין', '').split())
+        for emp_name, emp_rate in emp_rates.items():
+            emp_tokens = set(emp_name.split())
+            if len(emp_tokens & csv_tokens) >= 2:
+                rate = emp_rate
+                break
+        if rate > 0:
+            total_weighted += row['total_hours'] * rate
+            total_hours += row['total_hours']
+
+    if total_hours > 0:
+        avg = round(total_weighted / total_hours, 2)
+        conn.execute('UPDATE branches SET avg_hourly_rate=? WHERE id=?',
+                     (avg, branch_id))
+
+
 # ── API Routes ───────────────────────────────────────────────
 
 @app.route('/api/branches')
@@ -811,6 +860,8 @@ def api_employees_create():
         "INSERT OR IGNORE INTO employees (branch_id, name, role, hourly_rate) VALUES (?, ?, ?, ?)",
         (branch_id, name, role, hourly_rate)
     )
+    if hourly_rate > 0:
+        _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
 
@@ -834,6 +885,7 @@ def api_employees_update(emp_id):
         "UPDATE employees SET name=?, role=?, hourly_rate=? WHERE id=?",
         (name, role, hourly_rate, emp_id)
     )
+    _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
 
@@ -850,6 +902,7 @@ def api_employees_delete(emp_id):
     if row['branch_id'] != branch_id:
         return jsonify({'error': 'forbidden'}), 403
     db.execute("UPDATE employees SET active=0 WHERE id=?", (emp_id,))
+    _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
 
