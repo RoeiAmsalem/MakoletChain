@@ -13,19 +13,20 @@
         }
         .login-page {
             min-height: 100vh;
+            height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
-            box-sizing: border-box;
+            padding: 0;
+            margin: 0;
             background: #0d1526;
             position: relative;
             overflow: hidden;
         }
         .login-card {
             width: 100%;
-            max-width: 420px;
-            padding: 40px 36px;
+            max-width: 460px;
+            padding: 56px 48px;
             background: rgba(15, 23, 42, 0.85);
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255,255,255,0.08);
@@ -37,14 +38,14 @@
         .login-card h1 {
             text-align: center;
             color: white;
-            margin-bottom: 0.5rem;
-            font-size: 1.5rem;
+            margin-bottom: 8px;
+            font-size: 26px;
         }
         .login-card .subtitle {
             text-align: center;
             color: var(--text-muted);
-            margin-bottom: 2rem;
-            font-size: 0.9rem;
+            margin-bottom: 32px;
+            font-size: 14px;
         }
         .login-card label {
             display: block;
@@ -61,7 +62,7 @@
             background: rgba(255,255,255,0.05);
             color: white;
             font-size: 15px;
-            margin-bottom: 1.2rem;
+            margin-bottom: 20px;
             box-sizing: border-box;
             font-family: inherit;
             transition: border-color 0.2s ease, box-shadow 0.2s ease;
@@ -76,7 +77,7 @@
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            margin-bottom: 1.2rem;
+            margin-bottom: 20px;
         }
         .remember-row input[type="checkbox"] {
             accent-color: #6366f1;
@@ -92,12 +93,13 @@
         }
         .login-card button {
             width: 100%;
-            padding: 13px;
+            margin-top: 24px;
+            padding: 15px;
             background: var(--accent);
             color: white;
             border: none;
             border-radius: 8px;
-            font-size: 16px;
+            font-size: 17px;
             font-weight: 600;
             cursor: pointer;
             font-family: inherit;
@@ -115,10 +117,10 @@
         }
         .logo-container {
             text-align: center;
-            margin-bottom: 1.5rem;
+            margin-bottom: 12px;
         }
         .logo-container img {
-            height: 60px;
+            height: 72px;
             filter: invert(1) hue-rotate(180deg);
         }
         .orb-1 {
@@ -144,6 +146,17 @@
             right: 10%;
             z-index: 0;
             pointer-events: none;
+        }
+        @media (max-width: 480px) {
+            .login-page {
+                align-items: flex-start;
+                padding: 24px 16px;
+                height: auto;
+                min-height: 100vh;
+            }
+            .login-card {
+                padding: 40px 28px;
+            }
         }
     </style>
 </head>
