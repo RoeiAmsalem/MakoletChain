@@ -2,19 +2,79 @@
 {% block title %}עובדים - MakoletChain{% endblock %}
 {% block head %}
 <style>
-    .emp-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
-    @media (max-width: 768px) { .emp-kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+    .emp-kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 768px) { .emp-kpi-grid { grid-template-columns: 1fr; } }
 
     .emp-kpi { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow); }
     .emp-kpi-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; margin-bottom: 0.5rem; }
     .emp-kpi-value { font-size: 1.6rem; font-weight: 700; color: var(--text-primary); }
     .emp-kpi-sub { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem; }
-    .status-approved { color: #86efac; }
-    .status-estimated { color: #fde68a; }
+    .status-badge { font-size: 0.75rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; margin-right: 0.5rem; }
+    .badge-approved { background: rgba(34,197,94,0.2); color: #86efac; }
+    .badge-estimated { background: rgba(245,158,11,0.2); color: #fde68a; }
 
+    /* Employee cards grid */
+    .emp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+
+    .emp-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 0.5rem; position: relative; transition: border-color 0.15s; }
+    .emp-card:hover { border-color: rgba(99,102,241,0.4); }
+    .emp-card.no-rate { border-right: 3px solid #f59e0b; }
+
+    .emp-card-top { display: flex; align-items: center; gap: 0.75rem; }
+    .emp-avatar { width: 40px; height: 40px; border-radius: 50%; background: rgba(99,102,241,0.2); color: #a5b4fc; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 700; flex-shrink: 0; }
+    .emp-card-name { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
+    .emp-card-meta { font-size: 0.78rem; color: var(--text-secondary); }
+
+    .role-badge { font-size: 0.7rem; font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 4px; background: rgba(100,116,139,0.2); color: #94a3b8; }
+    .role-badge.morning { background: rgba(251,191,36,0.15); color: #fde68a; }
+    .role-badge.evening { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    .role-badge.manager { background: rgba(34,197,94,0.15); color: #86efac; }
+
+    .emp-card-stats { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.82rem; color: var(--text-secondary); }
+    .emp-card-rate { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
+
+    .emp-card-actions { display: flex; gap: 0.4rem; margin-top: auto; padding-top: 0.5rem; border-top: 1px solid var(--card-border); }
+    .btn-sm { background: rgba(255,255,255,0.06); border: 1px solid var(--card-border); border-radius: 6px; padding: 0.3rem 0.6rem; color: var(--text-secondary); cursor: pointer; font-size: 0.75rem; font-family: inherit; transition: background 0.15s, color 0.15s; }
+    .btn-sm:hover { background: rgba(255,255,255,0.12); color: white; }
+    .btn-sm.danger:hover { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+    /* Add employee button */
+    .emp-card-add { border: 2px dashed var(--card-border); display: flex; align-items: center; justify-content: center; min-height: 140px; cursor: pointer; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; transition: border-color 0.15s, color 0.15s; }
+    .emp-card-add:hover { border-color: rgba(99,102,241,0.4); color: #a5b4fc; }
+
+    /* Section card */
     .section-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow); margin-bottom: 1.5rem; }
     .section-card h2 { font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem; }
     .no-data-msg { color: var(--text-muted); text-align: center; padding: 2rem; font-size: 0.9rem; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-overlay.open { display: flex; }
+    .modal-box { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius); width: 90%; max-width: 400px; }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--card-border); }
+    .modal-header h3 { font-size: 1rem; font-weight: 700; }
+    .modal-close { background: none; border: none; color: var(--text-secondary); font-size: 1.25rem; cursor: pointer; padding: 0.25rem; }
+    .modal-body { padding: 1.25rem; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.35rem; }
+    .form-group input, .form-group select { width: 100%; padding: 0.5rem 0.75rem; background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); border-radius: 6px; color: var(--text-primary); font-family: inherit; font-size: 0.9rem; }
+    .form-group input:focus, .form-group select:focus { outline: none; border-color: rgba(99,102,241,0.5); }
+    .role-toggle { display: flex; gap: 0.5rem; }
+    .role-toggle label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); padding: 0.35rem 0.7rem; border-radius: 6px; border: 1px solid var(--card-border); transition: all 0.15s; }
+    .role-toggle input { display: none; }
+    .role-toggle input:checked + span { color: var(--text-primary); }
+    .role-toggle label:has(input:checked) { border-color: rgba(99,102,241,0.5); background: rgba(99,102,241,0.1); }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.25rem; }
+    .btn-primary { background: rgba(99,102,241,0.3); border: 1px solid rgba(99,102,241,0.4); border-radius: 8px; padding: 0.5rem 1.25rem; color: #c7d2fe; cursor: pointer; font-family: inherit; font-size: 0.85rem; font-weight: 600; transition: background 0.15s; }
+    .btn-primary:hover { background: rgba(99,102,241,0.45); }
+    .btn-cancel { background: rgba(255,255,255,0.06); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.5rem 1.25rem; color: var(--text-secondary); cursor: pointer; font-family: inherit; font-size: 0.85rem; font-weight: 600; }
+    .btn-cancel:hover { background: rgba(255,255,255,0.12); }
+
+    /* Toast */
+    .toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+    .toast.show { opacity: 1; }
+    .toast.success { background: #065f46; color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+    .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
 </style>
 {% endblock %}
 
@@ -25,28 +85,28 @@
     <div class="emp-kpi">
         <div class="emp-kpi-label">שעות החודש</div>
         <div class="emp-kpi-value" id="kpi-hours">—</div>
+        <div class="emp-kpi-sub" id="kpi-hours-sub"></div>
     </div>
     <div class="emp-kpi">
         <div class="emp-kpi-label">עלות שכר משוערת</div>
         <div class="emp-kpi-value" id="kpi-salary">—</div>
+        <div class="emp-kpi-sub" id="kpi-salary-badge"></div>
     </div>
     <div class="emp-kpi">
-        <div class="emp-kpi-label">תעריף ממוצע</div>
-        <div class="emp-kpi-value" id="kpi-rate">—</div>
-        <div class="emp-kpi-sub">₪/שעה</div>
-    </div>
-    <div class="emp-kpi">
-        <div class="emp-kpi-label">סטטוס</div>
-        <div class="emp-kpi-value" id="kpi-status">—</div>
+        <div class="emp-kpi-label">עובדים פעילים</div>
+        <div class="emp-kpi-value" id="kpi-count">—</div>
+        <div class="emp-kpi-sub" id="kpi-rates-sub"></div>
     </div>
 </section>
 
-<!-- Employee Breakdown Table -->
-<section class="section-card">
-    <h2>פירוט עובדים – <span id="month-label"></span></h2>
-    <div id="emp-table-container">
-        <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
-    </div>
+<!-- Section title -->
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+    <h2 style="font-size:1.1rem; font-weight:700;">עובדים – <span id="month-label"></span></h2>
+</div>
+
+<!-- Employee Cards Grid -->
+<section class="emp-grid" id="emp-grid">
+    <div class="loading" style="grid-column:1/-1"><div class="spinner"></div><span>טוען...</span></div>
 </section>
 
 <!-- History Table -->
@@ -70,6 +130,42 @@
     </div>
 </section>
 
+<!-- Add/Edit Modal -->
+<div class="modal-overlay" id="emp-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3 id="modal-title">הוסף עובד</h3>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="edit-id">
+            <div class="form-group">
+                <label>שם עובד</label>
+                <input type="text" id="emp-name" placeholder="שם מלא">
+            </div>
+            <div class="form-group">
+                <label>תפקיד</label>
+                <div class="role-toggle">
+                    <label><input type="radio" name="emp-role" value="בוקר"><span>בוקר</span></label>
+                    <label><input type="radio" name="emp-role" value="ערב" checked><span>ערב</span></label>
+                    <label><input type="radio" name="emp-role" value="מנהל"><span>מנהל</span></label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>תעריף שעתי (₪)</label>
+                <input type="number" id="emp-rate" placeholder="0" min="0" step="0.5">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal()">ביטול</button>
+                <button class="btn-primary" id="modal-save-btn" onclick="saveEmployee()">שמור</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -81,56 +177,93 @@ const BRANCH_ID = {{ branch_id | tojson }};
 const monthLabel = {{ month_display | tojson }};
 document.getElementById('month-label').textContent = monthLabel;
 
+let ALL_EMPLOYEES = [];
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    setTimeout(() => t.className = 'toast', 3000);
+}
+
+function getRoleBadgeClass(role) {
+    if (role === 'בוקר') return 'morning';
+    if (role === 'ערב') return 'evening';
+    if (role === 'מנהל') return 'manager';
+    return '';
+}
+
+function getInitials(name) {
+    const words = name.trim().split(/\s+/);
+    if (words.length >= 2) return words[0][0] + words[1][0];
+    return name[0] || '?';
+}
+
+function renderCards(employees, csvProcessed) {
+    const grid = document.getElementById('emp-grid');
+    let html = '';
+
+    employees.forEach(emp => {
+        const noRate = !emp.hourly_rate || emp.hourly_rate <= 0;
+        const initials = getInitials(emp.name);
+        const roleCls = getRoleBadgeClass(emp.role);
+        const hasHours = emp.hours > 0;
+        const salary = emp.salary > 0 ? formatMoney(emp.salary) : (hasHours && emp.hourly_rate > 0 ? formatMoney(emp.hours * emp.hourly_rate) : '—');
+
+        html += `<div class="emp-card${noRate ? ' no-rate' : ''}">
+            <div class="emp-card-top">
+                <div class="emp-avatar">${initials}</div>
+                <div>
+                    <div class="emp-card-name">${emp.name}</div>
+                    <span class="role-badge ${roleCls}">${emp.role || 'ערב'}</span>
+                </div>
+            </div>
+            <div class="emp-card-stats">
+                <div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'טרם הועלה דוח שעות'}</div>
+                <div class="emp-card-rate">${emp.hourly_rate > 0 ? '₪' + emp.hourly_rate.toFixed(0) + '/שעה' : '<span style="color:#f59e0b">לא הוגדר תעריף</span>'}</div>
+                ${hasHours && salary !== '—' ? `<div>שכר: ${salary}</div>` : ''}
+            </div>
+            <div class="emp-card-actions">
+                <button class="btn-sm" onclick="openEdit(${emp.id})">ערוך</button>
+                <button class="btn-sm danger" onclick="deleteEmployee(${emp.id}, '${emp.name.replace(/'/g, "\\'")}')">מחק</button>
+            </div>
+        </div>`;
+    });
+
+    // Add employee card
+    html += `<div class="emp-card-add" onclick="openAdd()">+ הוסף עובד</div>`;
+    grid.innerHTML = html;
+}
+
 async function loadEmployees() {
     try {
         const res = await fetch(`/api/employees?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
+        ALL_EMPLOYEES = d.employees || [];
 
         // KPI tiles
         document.getElementById('kpi-hours').textContent = (d.hours_this_month || 0).toFixed(1);
+        if (d.hours_updated_at) {
+            const dt = new Date(d.hours_updated_at);
+            document.getElementById('kpi-hours-sub').textContent = 'עודכן: ' + dt.toLocaleDateString('he-IL');
+        }
+
         document.getElementById('kpi-salary').textContent = formatMoney(d.salary_cost || 0);
-        document.getElementById('kpi-rate').textContent = d.avg_hourly_rate ? ('₪' + d.avg_hourly_rate.toFixed(2)) : '—';
-
-        const statusEl = document.getElementById('kpi-status');
-        if (d.csv_processed) {
-            statusEl.innerHTML = '<span class="status-approved">מאושר ✓</span>';
-        } else if (d.hours_this_month > 0) {
-            statusEl.innerHTML = '<span class="status-estimated">משוער</span>';
-        } else {
-            statusEl.innerHTML = '<span style="color:var(--text-muted)">אין נתונים</span>';
+        const badgeEl = document.getElementById('kpi-salary-badge');
+        if (d.csv_processed && d.salary_cost > 0) {
+            badgeEl.innerHTML = '<span class="status-badge badge-approved">מאושר</span>';
+        } else if (d.salary_cost > 0) {
+            badgeEl.innerHTML = '<span class="status-badge badge-estimated">משוער</span>';
         }
 
-        // Employee table
-        const container = document.getElementById('emp-table-container');
-        if (d.csv_processed && d.employees.length > 0) {
-            const totalHours = d.employees.reduce((s, e) => s + e.total_hours, 0);
-            const totalSalary = d.employees.reduce((s, e) => s + e.total_salary, 0);
-            const avgRate = totalHours > 0 && totalSalary > 0 ? (totalSalary / totalHours).toFixed(2) : '—';
+        const activeCount = ALL_EMPLOYEES.length;
+        const withRates = ALL_EMPLOYEES.filter(e => e.hourly_rate > 0).length;
+        document.getElementById('kpi-count').textContent = activeCount;
+        document.getElementById('kpi-rates-sub').textContent = `${withRates} עם תעריף מוגדר`;
 
-            let html = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>';
-            html += '<th>שם עובד</th><th>שעות</th><th>שכר</th><th>תעריף ממוצע</th>';
-            html += '</tr></thead><tbody>';
-            d.employees.forEach(e => {
-                const rate = e.total_hours > 0 && e.total_salary > 0 ? (e.total_salary / e.total_hours).toFixed(2) : '—';
-                html += `<tr>
-                    <td>${e.employee_name}</td>
-                    <td style="direction:ltr;text-align:left">${e.total_hours.toFixed(1)}</td>
-                    <td>${e.total_salary > 0 ? formatMoney(e.total_salary) : '—'}</td>
-                    <td>${rate !== '—' ? '₪' + rate : '—'}</td>
-                </tr>`;
-            });
-            html += `<tr style="font-weight:700;border-top:2px solid var(--card-border)">
-                <td>סה"כ</td>
-                <td style="direction:ltr;text-align:left">${totalHours.toFixed(1)}</td>
-                <td>${totalSalary > 0 ? formatMoney(totalSalary) : '—'}</td>
-                <td>${avgRate !== '—' ? '₪' + avgRate : '—'}</td>
-            </tr>`;
-            html += '</tbody></table></div>';
-            container.innerHTML = html;
-        } else {
-            container.innerHTML = '<p class="no-data-msg">הנתונים הסופיים יתעדכנו בתחילת החודש הבא עם קבלת דוח הנוכחות</p>';
-        }
+        // Cards
+        renderCards(ALL_EMPLOYEES, d.csv_processed);
 
         // History table
         if (d.history && d.history.length) {
@@ -139,8 +272,8 @@ async function loadEmployees() {
                 const [y, m] = h.month.split('-');
                 const label = `${parseInt(m)}/${y}`;
                 const srcBadge = h.source === 'csv'
-                    ? '<span class="status-approved" style="font-size:0.85rem">CSV</span>'
-                    : '<span class="status-estimated" style="font-size:0.85rem">משוער</span>';
+                    ? '<span class="status-badge badge-approved" style="font-size:0.75rem">CSV</span>'
+                    : '<span class="status-badge badge-estimated" style="font-size:0.75rem">משוער</span>';
                 return `<tr>
                     <td>${label}</td>
                     <td style="direction:ltr;text-align:left">${h.hours > 0 ? h.hours.toFixed(1) : '—'}</td>
@@ -156,6 +289,77 @@ async function loadEmployees() {
     }
 }
 
+function openAdd() {
+    document.getElementById('modal-title').textContent = 'הוסף עובד';
+    document.getElementById('edit-id').value = '';
+    document.getElementById('emp-name').value = '';
+    document.getElementById('emp-rate').value = '';
+    document.querySelector('input[name="emp-role"][value="ערב"]').checked = true;
+    document.getElementById('emp-modal').classList.add('open');
+    document.getElementById('emp-name').focus();
+}
+
+function openEdit(id) {
+    const emp = ALL_EMPLOYEES.find(e => e.id === id);
+    if (!emp) return;
+    document.getElementById('modal-title').textContent = 'ערוך עובד';
+    document.getElementById('edit-id').value = id;
+    document.getElementById('emp-name').value = emp.name;
+    document.getElementById('emp-rate').value = emp.hourly_rate || '';
+    const roleRadio = document.querySelector(`input[name="emp-role"][value="${emp.role || 'ערב'}"]`);
+    if (roleRadio) roleRadio.checked = true;
+    document.getElementById('emp-modal').classList.add('open');
+}
+
+function closeModal() {
+    document.getElementById('emp-modal').classList.remove('open');
+}
+
+async function saveEmployee() {
+    const editId = document.getElementById('edit-id').value;
+    const name = document.getElementById('emp-name').value.trim();
+    const role = document.querySelector('input[name="emp-role"]:checked')?.value || 'ערב';
+    const hourly_rate = parseFloat(document.getElementById('emp-rate').value) || 0;
+
+    if (!name) { showToast('נא למלא שם עובד', 'error'); return; }
+
+    try {
+        let url, method;
+        if (editId) {
+            url = `/api/employees/${editId}`;
+            method = 'PUT';
+        } else {
+            url = '/api/employees';
+            method = 'POST';
+        }
+        const res = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, role, hourly_rate })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'שגיאה');
+        closeModal();
+        showToast(editId ? 'עובד עודכן' : 'עובד נוסף', 'success');
+        loadEmployees();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function deleteEmployee(id, name) {
+    if (!confirm(`למחוק את ${name}?`)) return;
+    try {
+        const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('עובד נמחק', 'success');
+        loadEmployees();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 loadEmployees();
 </script>
 {% endblock %}

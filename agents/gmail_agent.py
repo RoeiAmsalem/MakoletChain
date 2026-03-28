@@ -291,30 +291,65 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         conn.close()
         return None
 
+    # Load employee rates from employees table
+    emp_rates = {}
+    rate_rows = conn.execute(
+        "SELECT name, hourly_rate FROM employees WHERE branch_id = ? AND active = 1",
+        (branch_id,)
+    ).fetchall()
+    for r in rate_rows:
+        emp_rates[r['name']] = r['hourly_rate']
+
     # Calculate totals
     total_hours_all = sum(e['total_hours'] for e in employees)
+    total_salary_all = 0.0
 
-    # We don't have salary in the CSV, so store hours only (salary=0)
-    # avg_rate will be calculated when salary data is available
     for emp in employees:
+        # Match CSV employee name to employees table (fuzzy)
+        rate = _match_employee_rate(emp['name'], emp_rates)
+        salary = round(emp['total_hours'] * rate, 2) if rate > 0 else 0
+        total_salary_all += salary
+
         conn.execute(
             "INSERT OR REPLACE INTO employee_hours "
             "(branch_id, month, employee_name, total_hours, total_salary, source) "
-            "VALUES (?, ?, ?, ?, 0, 'csv')",
-            (branch_id, current_month, emp['name'], emp['total_hours'])
+            "VALUES (?, ?, ?, ?, ?, 'csv')",
+            (branch_id, current_month, emp['name'], emp['total_hours'], salary)
         )
 
-    # Update branch hours
+    # Calculate weighted avg rate for branch
+    avg_rate = round(total_salary_all / total_hours_all, 2) if total_hours_all > 0 and total_salary_all > 0 else 0
+
+    # Update branch hours + avg rate
     conn.execute(
-        "UPDATE branches SET hours_this_month=?, hours_updated_at=? WHERE id=?",
-        (total_hours_all, now_il.isoformat(), branch_id)
+        "UPDATE branches SET hours_this_month=?, avg_hourly_rate=?, hours_updated_at=? WHERE id=?",
+        (total_hours_all, avg_rate, now_il.isoformat(), branch_id)
     )
     conn.commit()
     conn.close()
 
-    msg = f"📊 נוכחות: {len(employees)} עובדים, {total_hours_all:.1f} שעות"
+    salary_str = f", שכר ₪{total_salary_all:,.0f}" if total_salary_all > 0 else ""
+    msg = f"📊 נוכחות: {len(employees)} עובדים, {total_hours_all:.1f} שעות{salary_str}"
     log.info(msg)
     return msg
+
+
+def _match_employee_rate(csv_name: str, emp_rates: dict) -> float:
+    """Match a CSV employee name to the employees table rates.
+    Try: exact match, then prefix match, then first-two-words match."""
+    if csv_name in emp_rates:
+        return emp_rates[csv_name]
+    # CSV name often has branch suffix (e.g. "דיאנה דוחוניקוב איינשטיין")
+    for db_name, rate in emp_rates.items():
+        if csv_name.startswith(db_name) or db_name.startswith(csv_name):
+            return rate
+    # First two words match
+    csv_words = csv_name.split()[:2]
+    if len(csv_words) >= 2:
+        for db_name, rate in emp_rates.items():
+            if db_name.split()[:2] == csv_words:
+                return rate
+    return 0.0
 
 
 def run_gmail_sync(branch_id: int) -> dict:

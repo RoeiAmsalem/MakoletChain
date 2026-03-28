@@ -237,9 +237,10 @@ function renderBranches(branches) {
             </div>
             <div class="agent-rows">${agentRows}</div>
             <div style="font-size:0.8rem;color:var(--text-muted);padding:0.3rem 0.6rem;margin-bottom:0.5rem;">
-                ${b.avg_hourly_rate > 0
-                    ? 'תעריף שכר ממוצע: ₪' + b.avg_hourly_rate.toFixed(0) + '/שעה  |  שעות החודש: ' + (b.hours_this_month || 0).toFixed(1)
-                    : 'טרם הוגדר תעריף'}
+                ${b.hours_this_month > 0
+                    ? 'שעות החודש: ' + (b.hours_this_month || 0).toFixed(1) + (b.avg_hourly_rate > 0 ? ' | עלות משוערת: ₪' + Math.round(b.hours_this_month * b.avg_hourly_rate).toLocaleString() : '')
+                    : 'טרם הועלו שעות'}
+                ${b.employees_with_rates !== undefined ? '<br>תעריפים: ' + b.employees_with_rates + ' עובדים מוגדרים' : ''}
             </div>
             <div class="branch-actions">
                 <button class="btn-action" onclick="runAgent(${b.id},'bilboy',this)">הרץ BilBoy</button>

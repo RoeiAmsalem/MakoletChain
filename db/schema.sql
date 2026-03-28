@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS reset_tokens (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS employees (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  branch_id INTEGER NOT NULL REFERENCES branches(id),
+  name TEXT NOT NULL,
+  role TEXT DEFAULT 'ערב',
+  hourly_rate REAL NOT NULL,
+  active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(branch_id, name)
+);
+
 -- Insert branch 126 (empty data, credentials TBD)
 INSERT OR IGNORE INTO branches (id, name, city, aviv_user_id, gmail_label, franchise_supplier)
 VALUES (126, 'מכולת אינשטיין', 'תל אביב', 'S33834', 'איינשטיין', 'זיכיונות המכולת בע"מ');
