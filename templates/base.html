@@ -10,7 +10,7 @@
 <body>
 
 <nav class="navbar">
-    <div class="navbar-top">
+    <div class="navbar-top" style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
         <a href="/" class="navbar-brand" style="text-decoration:none;">
             <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
             <span class="store-name">{{ branch_name }}</span>
