@@ -17,6 +17,10 @@
                  style="height:42px; width:auto; object-fit:contain; filter:invert(1) hue-rotate(180deg);">
             <span class="store-name">{{ branch_name }}</span>
         </a>
+        {% if session.get('user_role') == 'admin' %}
+        <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 10px; font-size:0.82rem; cursor:pointer; max-width:200px;">
+        </select>
+        {% endif %}
         <div style="display:flex; align-items:center; gap:8px;">
             <span style="font-size:12px; color:rgba(255,255,255,0.4);">{{ session.get('user_name', '') }}</span>
             <a href="/logout" style="font-size:12px; color:rgba(255,255,255,0.45); text-decoration:none; padding:5px 10px; border:1px solid rgba(255,255,255,0.15); border-radius:6px; transition:all 0.2s;" onmouseover="this.style.color='rgba(255,255,255,0.8)'" onmouseout="this.style.color='rgba(255,255,255,0.45)'">יציאה</a>
@@ -35,13 +39,6 @@
             {% endif %}
         </ul>
     </nav>
-    {% if session.get('user_role') == 'admin' %}
-    <div class="branch-switcher" id="branch-switcher" style="padding:4px 12px;">
-      <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 8px; font-size:0.85rem; cursor:pointer">
-        <option value="">בחר סניף</option>
-      </select>
-    </div>
-    {% endif %}
     <div class="navbar-end">
         <div style="display:flex; align-items:center; gap:6px; font-size:0.9rem; direction:ltr;">
             <a href="?month={{ prev_month }}" style="color:#aaa; text-decoration:none; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08);">‹</a>

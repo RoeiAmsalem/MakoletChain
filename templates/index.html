@@ -33,7 +33,7 @@
           <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#86efac; margin-bottom:4px">
             <span id="profit-pct-label">ריווחיות: 0%</span>
           </div>
-          <div style="background:#1e3a2f; border-radius:6px; height:8px; width:100%; overflow:hidden">
+          <div style="background:#1e293b; border-radius:6px; height:10px; width:100%; overflow:hidden">
             <div id="profit-bar-fill" style="height:100%; background:#22c55e; border-radius:6px; width:0%; transition:width 0.5s"></div>
           </div>
           <div id="profit-month-sub" style="font-size:0.72rem; color:#64748b; margin-top:5px; text-align:center"></div>
@@ -152,9 +152,11 @@ async function loadSummary() {
         const income = d.income || 0;
         const profitBarWrap = document.getElementById('profit-bar-wrap');
         if (income > 0) {
-            const profitability = (profitVal / income * 100).toFixed(1);
-            document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + profitability + '%';
-            document.getElementById('profit-bar-fill').style.width = Math.max(0, Math.min(100, profitability)) + '%';
+            const pct = parseFloat(((profitVal / income) * 100).toFixed(1));
+            document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
+            const fillEl = document.getElementById('profit-bar-fill');
+            fillEl.style.width = Math.max(Math.abs(pct), 2) + '%';
+            fillEl.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
             const now = new Date();
             const dayOfMonth = now.getDate();
             const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
