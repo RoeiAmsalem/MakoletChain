@@ -18,7 +18,7 @@
             <span class="store-name">{{ branch_name }}</span>
         </a>
         {% if session.get('user_role') == 'admin' %}
-        <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 10px; font-size:0.82rem; cursor:pointer; max-width:200px;">
+        <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 10px; font-size:0.82rem; cursor:pointer; min-width:180px;">
         </select>
         {% endif %}
         <div style="display:flex; align-items:center; gap:8px;">

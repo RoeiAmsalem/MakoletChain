@@ -1118,7 +1118,8 @@ def _ceo_required(f):
 @app.route('/ops')
 @_ceo_required
 def ops():
-    return render_template('ops.html')
+    ctx = _page_context('ops')
+    return render_template('ops.html', **ctx)
 
 
 def _to_il_time(utc_str):
