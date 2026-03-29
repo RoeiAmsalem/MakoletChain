@@ -29,6 +29,15 @@
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
         <span class="kpi-badge estimated" id="profit-badge">משוער</span>
+        <div class="profit-bar-wrap" id="profit-bar-wrap" style="display:none; margin-top:10px; width:100%">
+          <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#86efac; margin-bottom:4px">
+            <span id="profit-pct-label">ריווחיות: 0%</span>
+          </div>
+          <div style="background:#1e3a2f; border-radius:6px; height:8px; width:100%; overflow:hidden">
+            <div id="profit-bar-fill" style="height:100%; background:#22c55e; border-radius:6px; width:0%; transition:width 0.5s"></div>
+          </div>
+          <div id="profit-month-sub" style="font-size:0.72rem; color:#64748b; margin-top:5px; text-align:center"></div>
+        </div>
     </div>
 
     <div class="kpi-card kpi-card--income" style="cursor:pointer" onclick="location.href='/sales'">
@@ -137,6 +146,23 @@ async function loadSummary() {
         } else {
             profitTile.className = 'kpi-card kpi-card--loss';
             profitValue.className = 'kpi-value loss';
+        }
+
+        // Profitability bar
+        const income = d.income || 0;
+        const profitBarWrap = document.getElementById('profit-bar-wrap');
+        if (income > 0) {
+            const profitability = (profitVal / income * 100).toFixed(1);
+            document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + profitability + '%';
+            document.getElementById('profit-bar-fill').style.width = Math.max(0, Math.min(100, profitability)) + '%';
+            const now = new Date();
+            const dayOfMonth = now.getDate();
+            const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+            const monthPct = (dayOfMonth / daysInMonth * 100).toFixed(0);
+            document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth + ' | ' + monthPct + '% מהחודש';
+            profitBarWrap.style.display = 'block';
+        } else {
+            profitBarWrap.style.display = 'none';
         }
     } catch (err) {
         console.error('summary:', err);

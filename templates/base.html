@@ -30,11 +30,18 @@
             <li><a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a></li>
             <li><a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a></li>
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
-            {% if session.get('user_role') == 'ceo' %}
+            {% if session.get('user_role') == 'admin' %}
             <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
             {% endif %}
         </ul>
     </nav>
+    {% if session.get('user_role') == 'admin' %}
+    <div class="branch-switcher" id="branch-switcher" style="padding:4px 12px;">
+      <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 8px; font-size:0.85rem; cursor:pointer">
+        <option value="">בחר סניף</option>
+      </select>
+    </div>
+    {% endif %}
     <div class="navbar-end">
         <div style="display:flex; align-items:center; gap:6px; font-size:0.9rem; direction:ltr;">
             <a href="?month={{ prev_month }}" style="color:#aaa; text-decoration:none; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08);">‹</a>
@@ -58,7 +65,7 @@
         <a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a>
         <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
-        {% if session.get('user_role') == 'ceo' %}
+        {% if session.get('user_role') == 'admin' %}
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
         {% endif %}
     </div>
@@ -81,6 +88,30 @@
 </main>
 
 <script>
+const CURRENT_BRANCH_ID = {{ branch_id | tojson }};
+
+async function switchBranch(branchId) {
+    if (!branchId) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('branch_id', branchId);
+    window.location.href = url.toString();
+}
+
+async function loadBranchSwitcher() {
+    const sel = document.getElementById('branch-select');
+    if (!sel) return;
+    const res = await fetch('/api/branches');
+    const branches = await res.json();
+    branches.forEach(b => {
+        const opt = document.createElement('option');
+        opt.value = b.id;
+        opt.textContent = b.name + ' — ' + b.city;
+        if (b.id == CURRENT_BRANCH_ID) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+loadBranchSwitcher();
+
 function setViewMode(mode) {
     localStorage.setItem('view_mode', mode);
     applyViewMode();

@@ -37,7 +37,7 @@ TRANSACTIONS_PATTERN = re.compile(r'(\d+)\s*תואקסע\s*תומכ')
 
 
 def _get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -206,7 +206,7 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
 
     # We'll check "already processed" after determining the report month from email date.
     # First, search for the CSV email to detect its date.
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
 
     # Search for recent emails (can't use Hebrew in IMAP SUBJECT search)

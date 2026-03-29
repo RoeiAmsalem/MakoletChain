@@ -23,7 +23,7 @@ ALLOWED_DOC_TYPES = {2, 3, 4, 5}
 
 
 def _get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -92,7 +92,7 @@ def run_bilboy(branch_id: int) -> dict:
     try:
         branch = _get_branch_config(branch_id)
         token = branch.get('bilboy_pass') or ''
-        franchise_supplier = branch.get('franchise_supplier') or ''
+        franchise_supplier = branch.get('franchise_supplier') or 'זיכיונות המכולת בע״מ'
 
         if not token:
             log.warning("No BilBoy token for branch %d", branch_id)

@@ -37,7 +37,7 @@ HEBREW_MONTHS = {
 
 def get_db():
     if 'db' not in g:
-        g.db = sqlite3.connect(DB_PATH)
+        g.db = sqlite3.connect(DB_PATH, timeout=30)
         g.db.row_factory = sqlite3.Row
     return g.db
 
@@ -51,7 +51,7 @@ def close_db(exception):
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     with open(SCHEMA_PATH, 'r') as f:
         conn.executescript(f.read())
     conn.close()
@@ -59,14 +59,14 @@ def init_db():
 
 def seed_admin():
     """Seed the admin user if not exists."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     existing = conn.execute("SELECT id FROM users WHERE email = ?", ('admin@makolet.com',)).fetchone()
     if not existing:
         pw_hash = generate_password_hash('admin123')
         conn.execute(
             "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
-            ('מנהל ראשי', 'admin@makolet.com', pw_hash, 'ceo')
+            ('מנהל ראשי', 'admin@makolet.com', pw_hash, 'admin')
         )
         conn.commit()
         # Get user id
@@ -280,7 +280,7 @@ def _month_nav(selected):
 def get_branch_id():
     """Get branch_id from session only — never from request args/form."""
     role = session.get('user_role')
-    if role == 'ceo':
+    if role == 'admin':
         return session.get('branch_id', 126)
     elif role == 'manager':
         return session.get('branch_id')
@@ -294,7 +294,7 @@ def _get_branch_id():
         bid = int(bid)
         role = session.get('user_role')
         branches = session.get('user_branches', [])
-        if role == 'ceo' or bid in branches:
+        if role == 'admin' or bid in branches:
             session['branch_id'] = bid
     return get_branch_id()
 
@@ -1109,7 +1109,7 @@ def _ceo_required(f):
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
             return redirect(url_for('login'))
-        if session.get('user_role') != 'ceo':
+        if session.get('user_role') != 'admin':
             abort(403)
         return f(*args, **kwargs)
     return decorated

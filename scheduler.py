@@ -22,14 +22,14 @@ SCHEMA_PATH = os.path.join(os.path.dirname(__file__), 'db', 'schema.sql')
 
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     with open(SCHEMA_PATH, 'r') as f:
         conn.executescript(f.read())
     conn.close()
 
 
 def get_active_branches() -> list[int]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     rows = conn.execute('SELECT id FROM branches WHERE active = 1').fetchall()
     conn.close()
     return [r[0] for r in rows]
