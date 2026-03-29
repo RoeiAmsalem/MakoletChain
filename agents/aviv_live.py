@@ -117,7 +117,7 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
         browser = p.chromium.launch(headless=True)
         page = browser.new_context().new_page()
 
-        page.goto(STATUS_URL, wait_until="networkidle", timeout=30000)
+        page.goto(STATUS_URL, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(2000)
 
         # Login if redirected to sign-in
@@ -146,7 +146,7 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
                 status_link.first.click()
                 page.wait_for_timeout(3000)
             else:
-                page.goto(STATUS_URL, wait_until="networkidle", timeout=30000)
+                page.goto(STATUS_URL, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(3000)
 
         # Wait for content
