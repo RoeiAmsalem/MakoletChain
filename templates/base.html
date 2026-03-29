@@ -10,8 +10,8 @@
 <body>
 
 <nav class="navbar">
-    <div class="navbar-top" style="display:flex; align-items:center; justify-content:space-between; width:100%;">
-        <div style="display:flex; align-items:center; gap:10px; flex:1;">
+    <div class="navbar-top" style="display:flex; align-items:center; justify-content:space-between; width:100%; flex-shrink:0;">
+        <div style="display:flex; align-items:center; gap:10px; flex-shrink:0;">
             <a href="/" class="navbar-brand" style="text-decoration:none; display:flex; align-items:center; gap:0.75rem; flex-shrink:0;">
                 <img src="{{ url_for('static', filename='makolet_logo.png') }}"
                      alt="רשת המכולה"
@@ -19,7 +19,7 @@
                 <span class="store-name">{{ branch_name }}</span>
             </a>
             {% if session.get('user_role') == 'admin' %}
-            <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 10px; font-size:0.82rem; cursor:pointer; flex-shrink:0;">
+            <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 10px; font-size:0.82rem; cursor:pointer; flex-shrink:0; width:auto; white-space:nowrap;">
             </select>
             {% endif %}
         </div>
