@@ -16,11 +16,9 @@
             <span class="store-name">{{ branch_name }}</span>
         </a>
         {% if session.get('user_role') == 'admin' %}
-        <select id="branch-select" onchange="switchBranch(this.value)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:4px 10px; font-size:0.82rem; cursor:pointer;">
+        <select id="branch-select" onchange="switchBranch(this.value)" style="background:rgba(255,255,255,0.07); color:#e2e8f0; border:1px solid rgba(255,255,255,0.15); border-radius:20px; padding:3px 10px; font-size:0.8rem; cursor:pointer; outline:none;">
         </select>
         {% endif %}
-        <span style="font-size:12px; color:rgba(255,255,255,0.4);">{{ session.get('user_name', '') }}</span>
-        <a href="/logout" style="font-size:12px; color:rgba(255,255,255,0.45); text-decoration:none; padding:5px 10px; border:1px solid rgba(255,255,255,0.15); border-radius:6px;">יציאה</a>
         <button class="hamburger" id="hamburger" aria-label="תפריט">&#9776;</button>
     </div>
     <nav>
@@ -32,6 +30,7 @@
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
             {% if session.get('user_role') == 'admin' %}
             <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
+            <li><a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">סניפים</a></li>
             {% endif %}
         </ul>
     </nav>
@@ -50,6 +49,9 @@
             <span style="margin-right:6px;border-right:1px solid rgba(255,255,255,0.15);height:16px;display:inline-block"></span>
             <button id="vm-prorated" onclick="setViewMode('prorated')" style="font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.12);color:white;white-space:nowrap;">יחסי</button>
             <button id="vm-full" onclick="setViewMode('full')" style="font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;border:1px solid rgba(255,255,255,0.15);background:none;color:rgba(255,255,255,0.45);white-space:nowrap;">מלא</button>
+            <span style="width:1px;height:16px;background:rgba(255,255,255,0.15);display:inline-block;margin:0 4px;"></span>
+            <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">{{ session.get('user_name', '') }}</span>
+            <a href="/logout" style="font-size:0.75rem; color:rgba(255,255,255,0.45); text-decoration:none; padding:2px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px;">יציאה</a>
         </div>
     </div>
     <div class="mobile-nav" id="mobile-nav">
@@ -60,6 +62,7 @@
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
         {% if session.get('user_role') == 'admin' %}
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
+        <a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">סניפים</a>
         {% endif %}
     </div>
     <div class="month-switcher-mobile">

@@ -1395,6 +1395,73 @@ def api_ops_health():
     })
 
 
+@app.route('/admin/branches')
+@_ceo_required
+def admin_branches():
+    db = get_db()
+    branches = db.execute('SELECT * FROM branches ORDER BY id').fetchall()
+    users = db.execute(
+        "SELECT u.*, GROUP_CONCAT(ub.branch_id) as branch_ids "
+        "FROM users u LEFT JOIN user_branches ub ON u.id = ub.user_id "
+        "GROUP BY u.id ORDER BY u.id"
+    ).fetchall()
+    return render_template('admin_branches.html',
+                           branches=[dict(b) for b in branches],
+                           users=[dict(u) for u in users],
+                           **_page_context('admin'))
+
+
+@app.route('/api/admin/branches', methods=['POST'])
+@_ceo_required
+def api_admin_branch_create():
+    data = request.get_json()
+    db = get_db()
+    max_id = db.execute('SELECT MAX(id) FROM branches').fetchone()[0] or 126
+    new_id = max_id + 1
+    db.execute(
+        '''INSERT INTO branches (id, name, city, active, aviv_user_id, aviv_password,
+           bilboy_user, bilboy_pass, gmail_label, franchise_supplier)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)''',
+        (new_id, data.get('name', ''), data.get('city', ''),
+         data.get('aviv_user_id', ''), data.get('aviv_password', ''),
+         data.get('bilboy_user', ''), data.get('bilboy_pass', ''),
+         data.get('gmail_label', ''),
+         data.get('franchise_supplier', 'זיכיונות המכולת בע״מ')))
+    db.commit()
+    manager_email = data.get('manager_email', '').strip()
+    manager_name = data.get('manager_name', '').strip()
+    if manager_email and manager_name:
+        temp_password = secrets.token_urlsafe(8)
+        pw_hash = generate_password_hash(temp_password)
+        db.execute(
+            "INSERT OR IGNORE INTO users (name, email, password_hash, role) VALUES (?,?,?,'manager')",
+            (manager_name, manager_email, pw_hash))
+        db.commit()
+        user_row = db.execute('SELECT id FROM users WHERE email=?', (manager_email,)).fetchone()
+        if user_row:
+            db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
+                       (user_row['id'], new_id))
+            db.commit()
+        return jsonify({'ok': True, 'branch_id': new_id, 'temp_password': temp_password})
+    return jsonify({'ok': True, 'branch_id': new_id})
+
+
+@app.route('/api/admin/branches/<int:branch_id>', methods=['PUT'])
+@_ceo_required
+def api_admin_branch_update(branch_id):
+    data = request.get_json()
+    db = get_db()
+    fields = ['name', 'city', 'active', 'aviv_user_id', 'aviv_password',
+              'bilboy_user', 'bilboy_pass', 'gmail_label', 'franchise_supplier']
+    updates = {f: data[f] for f in fields if f in data}
+    if not updates:
+        return jsonify({'ok': True})
+    sql = 'UPDATE branches SET ' + ', '.join(f + '=?' for f in updates) + ' WHERE id=?'
+    db.execute(sql, list(updates.values()) + [branch_id])
+    db.commit()
+    return jsonify({'ok': True})
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'project': 'MakoletChain'})
