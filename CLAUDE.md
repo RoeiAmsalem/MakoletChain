@@ -108,7 +108,7 @@ reset_tokens:
 - Reconciliation diff > 500 -> brrr warning
 
 ### gmail_agent.py — Nightly email processing (02:00)
-- IMAP to makoletdeshboard@gmail.com using GMAIL_APP_PASSWORD from .env
+- IMAP to makoletdashboard@gmail.com using GMAIL_APP_PASSWORD from .env
 - Z-reports: finds emails from avivpost@avivpos.co.il matching branches.gmail_label
   - Downloads PDF, parses total with regex
   - Saves to daily_sales
@@ -206,7 +206,7 @@ avg_hourly_rate auto-recalculates when:
 
 ## .env Variables (server: /opt/makolet-chain/.env)
 SECRET_KEY
-GMAIL_ADDRESS=makoletdeshboard@gmail.com
+GMAIL_ADDRESS=makoletdashboard@gmail.com
 GMAIL_APP_PASSWORD
 RESEND_API_KEY
 BRRR_URL
