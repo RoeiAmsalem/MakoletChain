@@ -1420,13 +1420,14 @@ def api_admin_branch_create():
     new_id = max_id + 1
     db.execute(
         '''INSERT INTO branches (id, name, city, active, aviv_user_id, aviv_password,
-           bilboy_user, bilboy_pass, gmail_label, franchise_supplier)
-           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)''',
+           bilboy_user, bilboy_pass, gmail_label, franchise_supplier, iec_contract)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)''',
         (new_id, data.get('name', ''), data.get('city', ''),
          data.get('aviv_user_id', ''), data.get('aviv_password', ''),
          data.get('bilboy_user', ''), data.get('bilboy_pass', ''),
          data.get('gmail_label', ''),
-         data.get('franchise_supplier', 'זיכיונות המכולת בע״מ')))
+         data.get('franchise_supplier', 'זיכיונות המכולת בע״מ'),
+         data.get('iec_contract', '')))
     db.commit()
     manager_email = data.get('manager_email', '').strip()
     manager_name = data.get('manager_name', '').strip()
@@ -1452,7 +1453,7 @@ def api_admin_branch_update(branch_id):
     data = request.get_json()
     db = get_db()
     fields = ['name', 'city', 'active', 'aviv_user_id', 'aviv_password',
-              'bilboy_user', 'bilboy_pass', 'gmail_label', 'franchise_supplier']
+              'bilboy_user', 'bilboy_pass', 'gmail_label', 'franchise_supplier', 'iec_contract']
     updates = {f: data[f] for f in fields if f in data}
     if not updates:
         return jsonify({'ok': True})
