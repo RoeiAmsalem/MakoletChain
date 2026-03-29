@@ -276,6 +276,12 @@ def run_aviv_live(branch_id: int) -> dict:
         log.info("Outside store hours, skipping")
         return {'success': True, 'amount': 0, 'transactions': 0, 'skipped': 'outside_hours'}
 
+    # Check credentials BEFORE creating agent_runs record
+    branch = _get_branch_config(branch_id)
+    if not branch.get('aviv_user_id'):
+        log.info("No aviv_user_id for branch %d, skipping", branch_id)
+        return {'success': True, 'skipped': 'no_credentials'}
+
     # Insert agent_runs start
     conn_run = _get_db()
     cur = conn_run.execute(
@@ -287,10 +293,6 @@ def run_aviv_live(branch_id: int) -> dict:
     conn_run.close()
 
     try:
-        branch = _get_branch_config(branch_id)
-        if not branch.get('aviv_user_id'):
-            log.warning("No aviv_user_id for branch %d", branch_id)
-            return {'success': False, 'amount': 0, 'transactions': 0, 'error': 'no credentials'}
 
         # Check if paused due to early closure
         conn = _get_db()
