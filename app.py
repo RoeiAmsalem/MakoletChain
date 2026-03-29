@@ -1447,6 +1447,16 @@ def api_admin_branch_create():
     return jsonify({'ok': True, 'branch_id': new_id})
 
 
+@app.route('/api/admin/branches/<int:branch_id>')
+@_ceo_required
+def api_admin_branch_get(branch_id):
+    db = get_db()
+    row = db.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(dict(row))
+
+
 @app.route('/api/admin/branches/<int:branch_id>', methods=['PUT'])
 @_ceo_required
 def api_admin_branch_update(branch_id):

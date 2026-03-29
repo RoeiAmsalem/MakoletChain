@@ -206,6 +206,41 @@
     </div>
 </div>
 
+<!-- Edit Branch Modal -->
+<div class="modal-overlay" id="edit-branch-modal">
+  <div class="modal-box" style="max-width:560px;">
+    <div class="modal-header">
+      <h3 id="edit-branch-title">Edit Branch</h3>
+      <button class="modal-close" onclick="closeEditBranch()">✕</button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+      <input type="hidden" id="edit-branch-id">
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Branch Name *</label>
+      <input id="edit-name" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">City</label>
+      <input id="edit-city" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Aviv User ID</label>
+      <input id="edit-aviv-user" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Aviv Password</label>
+      <input id="edit-aviv-pass" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">BilBoy Token (JWT)</label>
+      <textarea id="edit-bilboy-token" rows="3" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.82rem;margin-top:4px;resize:vertical;"></textarea></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Gmail Label</label>
+      <input id="edit-gmail-label" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">IEC Contract Number</label>
+      <input id="edit-iec-contract" type="text" placeholder="e.g. 346412955" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Franchise Supplier</label>
+      <input id="edit-franchise-supplier" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+        <input type="checkbox" id="edit-active" style="width:16px;height:16px;cursor:pointer;">
+        <label for="edit-active" style="font-size:0.88rem;color:#f1f5f9;cursor:pointer;">Branch Active</label>
+      </div>
+      <div id="edit-branch-error" style="display:none;color:#fca5a5;font-size:0.82rem;"></div>
+      <button onclick="saveEditBranch()" style="background:#6366f1;color:white;border:none;border-radius:8px;padding:10px;font-size:0.9rem;font-weight:600;cursor:pointer;margin-top:4px;">Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <!-- Log Modal -->
 <div class="modal-overlay" id="log-modal">
     <div class="modal-box">
@@ -299,6 +334,7 @@ function renderBranches(branches) {
                 <button class="btn-action" onclick="openLogs(${b.id},'bilboy')">לוגים BB</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'gmail')">לוגים GM</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'aviv_live')">לוגים AV</button>
+                <button class="btn-action" onclick="openEditBranch(${b.id})">✏️ Edit Branch</button>
             </div>
         </div>`;
     }).join('');
@@ -470,7 +506,66 @@ async function openLogs(branchId, agent) {
 }
 
 function closeLogModal() { document.getElementById('log-modal').classList.remove('open'); }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLogModal(); });
+
+async function openEditBranch(branchId) {
+    const resp = await fetch(`/api/admin/branches/${branchId}`);
+    const b = await resp.json();
+    document.getElementById('edit-branch-id').value = b.id;
+    document.getElementById('edit-branch-title').textContent = `Edit Branch — ${b.name}`;
+    document.getElementById('edit-name').value = b.name || '';
+    document.getElementById('edit-city').value = b.city || '';
+    document.getElementById('edit-aviv-user').value = b.aviv_user_id || '';
+    document.getElementById('edit-aviv-pass').value = b.aviv_password || '';
+    document.getElementById('edit-bilboy-token').value = b.bilboy_pass || '';
+    document.getElementById('edit-gmail-label').value = b.gmail_label || '';
+    document.getElementById('edit-iec-contract').value = b.iec_contract || '';
+    document.getElementById('edit-franchise-supplier').value = b.franchise_supplier || '';
+    document.getElementById('edit-active').checked = b.active == 1;
+    document.getElementById('edit-branch-error').style.display = 'none';
+    document.getElementById('edit-branch-modal').classList.add('open');
+}
+
+function closeEditBranch() {
+    document.getElementById('edit-branch-modal').classList.remove('open');
+}
+
+async function saveEditBranch() {
+    const id = document.getElementById('edit-branch-id').value;
+    const payload = {
+        name: document.getElementById('edit-name').value.trim(),
+        city: document.getElementById('edit-city').value.trim(),
+        aviv_user_id: document.getElementById('edit-aviv-user').value.trim(),
+        aviv_password: document.getElementById('edit-aviv-pass').value.trim(),
+        bilboy_pass: document.getElementById('edit-bilboy-token').value.trim(),
+        gmail_label: document.getElementById('edit-gmail-label').value.trim(),
+        iec_contract: document.getElementById('edit-iec-contract').value.trim(),
+        franchise_supplier: document.getElementById('edit-franchise-supplier').value.trim(),
+        active: document.getElementById('edit-active').checked ? 1 : 0,
+    };
+    if (!payload.name) {
+        document.getElementById('edit-branch-error').textContent = 'Branch name is required';
+        document.getElementById('edit-branch-error').style.display = 'block';
+        return;
+    }
+    const resp = await fetch(`/api/admin/branches/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (data.ok) {
+        closeEditBranch();
+        showToast('Branch updated ✓', 'success');
+        loadOpsData();
+    } else {
+        document.getElementById('edit-branch-error').textContent = data.error || 'Save failed';
+        document.getElementById('edit-branch-error').style.display = 'block';
+    }
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeLogModal(); closeEditBranch(); }
+});
 
 function toggleBranchesPanel() {
     const panel = document.getElementById('branches-panel');
