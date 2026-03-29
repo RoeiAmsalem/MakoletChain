@@ -66,6 +66,13 @@ body {
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
 }
 
+.navbar-top {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-shrink: 0;
+}
+
 .navbar-brand {
     display: flex;
     align-items: center;
@@ -307,8 +314,8 @@ body {
 .kpi-value.salary  { color: #93c5fd; }
 
 .ratio-bar {
-    height: 4px;
-    border-radius: 2px;
+    height: 8px;
+    border-radius: 4px;
     background: rgba(255, 255, 255, 0.15);
     margin-top: 0.25rem;
     overflow: hidden;
@@ -316,7 +323,7 @@ body {
 
 .ratio-bar-fill {
     height: 100%;
-    border-radius: 2px;
+    border-radius: 4px;
     background: rgba(134, 239, 172, 0.8);
     transition: width 0.6s ease;
 }

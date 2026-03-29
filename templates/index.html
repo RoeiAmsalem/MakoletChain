@@ -29,14 +29,14 @@
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
         <span class="kpi-badge estimated" id="profit-badge">משוער</span>
-        <div class="profit-bar-wrap" id="profit-bar-wrap" style="display:none; margin-top:10px; width:100%">
-          <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#86efac; margin-bottom:4px">
-            <span id="profit-pct-label">ריווחיות: 0%</span>
+        <div id="profit-bar-wrap" style="display:none; margin-top:8px; width:100%">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span id="profit-pct-label" style="font-size:0.82rem; font-weight:700; color:#86efac;">ריווחיות: 0%</span>
           </div>
-          <div style="background:#1e293b; border-radius:6px; height:10px; width:100%; overflow:hidden">
-            <div id="profit-bar-fill" style="height:100%; background:#22c55e; border-radius:6px; width:0%; transition:width 0.5s"></div>
+          <div class="ratio-bar">
+            <div class="ratio-bar-fill" id="profit-bar-fill" style="width:0%"></div>
           </div>
-          <div id="profit-month-sub" style="font-size:0.72rem; color:#64748b; margin-top:5px; text-align:center"></div>
+          <div id="profit-month-sub" style="font-size:0.72rem; color:#64748b; margin-top:5px; text-align:center;"></div>
         </div>
     </div>
 
@@ -156,7 +156,7 @@ async function loadSummary() {
             document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
             const fillEl = document.getElementById('profit-bar-fill');
             fillEl.style.width = Math.max(Math.abs(pct), 2) + '%';
-            fillEl.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
+            fillEl.style.background = pct >= 0 ? 'rgba(134,239,172,0.8)' : '#ef4444';
             const now = new Date();
             const dayOfMonth = now.getDate();
             const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
