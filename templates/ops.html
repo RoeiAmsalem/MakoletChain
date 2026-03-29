@@ -126,7 +126,7 @@
                 <div style="display:flex; flex-direction:column; gap:12px;">
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם הסניף *</label>
-                        <input type="text" name="name" required placeholder="לדוגמה: המכולת ד׳יזנגוף" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <input type="text" name="name" id="branch-name" required placeholder="לדוגמה: המכולת ד׳יזנגוף" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
                     </div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">עיר</label>
@@ -147,17 +147,19 @@
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Gmail Label</label>
                         <input type="text" name="gmail_label" placeholder="המילה הייחודית בנושא מייל ה-Z" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:3px;">Forward one Z-report email from avivpost@avivpos.co.il to makoletdeshboard@gmail.com — the unique word in the subject becomes the label</div>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">מספר חוזה חשמל (IEC)</label>
                         <input type="text" name="iec_contract" id="branch-iec-contract" placeholder="לדוגמה: 346412955" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                        <span style="font-size:0.72rem; color:var(--text-muted);">* הגדר העברה אוטומטית מ-noreplys@iec.co.il לתיבה שלנו</span>
+                        <span style="font-size:0.78rem; color:#94a3b8;">* הגדר העברה אוטומטית מ-noreplys@iec.co.il לתיבה שלנו</span>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">ספק זיכיון</label>
                         <input type="text" name="franchise_supplier" value="זיכיונות המכולת בע״מ" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:3px;">This supplier will be automatically filtered out from goods reports</div>
                     </div>
-                    <div style="border-top:1px solid var(--card-border); margin:0.5rem 0; padding-top:0.5rem; font-size:0.8rem; color:var(--text-muted); font-weight:600;">שדות מנהל (אופציונלי)</div>
+                    <div style="border-top:1px solid #334155; margin:8px 0 12px; padding-top:12px; font-size:0.8rem; color:#64748b; text-align:center;">— Manager Details (optional) —</div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם מנהל</label>
                         <input type="text" name="manager_name" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
@@ -167,7 +169,7 @@
                         <input type="email" name="manager_email" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
                     </div>
                     <div style="margin-top:0.5rem;">
-                        <button type="submit" id="btn-add-branch" style="background:var(--accent); color:white; border:none; border-radius:8px; padding:0.6rem 1.5rem; font-size:0.9rem; font-weight:700; cursor:pointer; font-family:inherit;">הוסף סניף</button>
+                        <button type="submit" id="submit-branch-btn" style="background:var(--accent); color:white; border:none; border-radius:8px; padding:0.6rem 1.5rem; font-size:0.9rem; font-weight:700; cursor:pointer; font-family:inherit; opacity:0.5; cursor:not-allowed;" disabled>הוסף סניף</button>
                     </div>
                 </div>
             </form>
@@ -481,7 +483,7 @@ function toggleBranchesPanel() {
 async function addBranch(e) {
     e.preventDefault();
     const form = document.getElementById('add-branch-form');
-    const btn = document.getElementById('btn-add-branch');
+    const btn = document.getElementById('submit-branch-btn');
     const data = {};
     new FormData(form).forEach((v, k) => { data[k] = v; });
     btn.disabled = true;
@@ -516,6 +518,18 @@ async function addBranch(e) {
         btn.disabled = false;
         btn.textContent = 'הוסף סניף';
     }
+}
+
+// Submit button validation
+const branchNameInput = document.getElementById('branch-name');
+const submitBtn = document.getElementById('submit-branch-btn');
+if (branchNameInput && submitBtn) {
+    branchNameInput.addEventListener('input', function() {
+        const hasValue = this.value.trim().length > 0;
+        submitBtn.disabled = !hasValue;
+        submitBtn.style.opacity = hasValue ? '1' : '0.5';
+        submitBtn.style.cursor = hasValue ? 'pointer' : 'not-allowed';
+    });
 }
 
 // Initial load + auto-refresh
