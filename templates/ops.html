@@ -109,13 +109,69 @@
     <div class="ops-header">
         <h1>בקרת תפעול</h1>
         <div style="display:flex; gap:0.5rem;">
-            <a href="/admin/branches" class="btn-action" style="text-decoration:none; padding:0.5rem 1rem; font-size:0.85rem; font-weight:600;">ניהול סניפים</a>
+            <button id="toggle-branches-btn" class="btn-action" onclick="toggleBranchesPanel()" style="padding:0.5rem 1rem; font-size:0.85rem; font-weight:600;">➕ הוסף סניף</button>
             <button class="btn-refresh" onclick="loadAll()">רענן</button>
         </div>
     </div>
 
     <!-- Summary Bar -->
     <div class="summary-bar" id="summary-bar">טוען...</div>
+
+    <!-- Add Branch Panel -->
+    <div id="branches-panel" style="display:none; margin-bottom:1.5rem;">
+        <div class="section-card">
+            <h2>הוספת סניף חדש</h2>
+            <div class="success-banner" id="branch-success" style="display:none; background:rgba(34,197,94,0.15); border:1px solid rgba(34,197,94,0.3); border-radius:8px; padding:0.75rem 1rem; color:#86efac; font-size:0.9rem; font-weight:600; margin-bottom:1rem;"></div>
+            <form id="add-branch-form" onsubmit="return addBranch(event)">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem;">
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם הסניף *</label>
+                        <input type="text" name="name" required placeholder="לדוגמה: המכולת דיזנגוף" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">עיר</label>
+                        <input type="text" name="city" placeholder="תל אביב" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Aviv User ID</label>
+                        <input type="text" name="aviv_user_id" placeholder="S33834" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Aviv Password</label>
+                        <input type="text" name="aviv_password" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">BilBoy User</label>
+                        <input type="text" name="bilboy_user" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Gmail Label</label>
+                        <input type="text" name="gmail_label" placeholder="המילה הייחודית בנושא מייל ה-Z" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem; grid-column:1 / -1;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">BilBoy Token (JWT)</label>
+                        <textarea name="bilboy_pass" placeholder="eyJhbGciOiJIUzI1..." style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem; resize:vertical; min-height:60px;"></textarea>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">ספק זיכיון</label>
+                        <input type="text" name="franchise_supplier" value="זיכיונות המכולת בע״מ" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="grid-column:1 / -1; border-top:1px solid var(--card-border); margin:0.5rem 0; padding-top:0.5rem; font-size:0.8rem; color:var(--text-muted); font-weight:600;">שדות מנהל (אופציונלי)</div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם מנהל</label>
+                        <input type="text" name="manager_name" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">אימייל מנהל</label>
+                        <input type="email" name="manager_email" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="grid-column:1 / -1; margin-top:0.5rem;">
+                        <button type="submit" id="btn-add-branch" style="background:var(--accent); color:white; border:none; border-radius:8px; padding:0.6rem 1.5rem; font-size:0.9rem; font-weight:700; cursor:pointer; font-family:inherit;">הוסף סניף</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Branch Cards -->
     <div class="branch-grid" id="branch-grid">
@@ -412,6 +468,54 @@ async function openLogs(branchId, agent) {
 
 function closeLogModal() { document.getElementById('log-modal').classList.remove('open'); }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLogModal(); });
+
+function toggleBranchesPanel() {
+    const panel = document.getElementById('branches-panel');
+    const btn = document.getElementById('toggle-branches-btn');
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    btn.textContent = isOpen ? '➕ הוסף סניף' : '📊 חזור לבקרה';
+}
+
+async function addBranch(e) {
+    e.preventDefault();
+    const form = document.getElementById('add-branch-form');
+    const btn = document.getElementById('btn-add-branch');
+    const data = {};
+    new FormData(form).forEach((v, k) => { data[k] = v; });
+    btn.disabled = true;
+    btn.textContent = 'מוסיף...';
+    try {
+        const resp = await fetch('/api/admin/branches', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+        if (result.ok) {
+            const banner = document.getElementById('branch-success');
+            let msg = 'סניף #' + result.branch_id + ' נוסף בהצלחה!';
+            if (result.temp_password) {
+                msg += ' סיסמה זמנית למנהל: ' + result.temp_password;
+            }
+            banner.textContent = msg;
+            banner.style.display = 'block';
+            form.reset();
+            setTimeout(() => {
+                toggleBranchesPanel();
+                banner.style.display = 'none';
+                loadAll();
+            }, 3000);
+        } else {
+            showToast('שגיאה: ' + (result.error || 'unknown'), 'error');
+        }
+    } catch (err) {
+        showToast('שגיאה: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'הוסף סניף';
+    }
+}
 
 // Initial load + auto-refresh
 loadAll();

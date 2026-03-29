@@ -33,8 +33,8 @@
           <div style="font-size:0.82rem; font-weight:700; color:#4ade80; margin-bottom:6px;">
             <span id="profit-pct-label">ריווחיות: 0%</span>
           </div>
-          <div style="height:3px; border-radius:2px; background:rgba(255,255,255,0.08); overflow:hidden;">
-            <div id="profit-bar-fill" style="height:100%; border-radius:2px; background:#4ade80; width:0%; transition:width 0.6s ease;"></div>
+          <div style="height:6px; border-radius:3px; background:#1a2a1a; overflow:hidden; margin:4px 0;">
+            <div id="profit-bar-fill" style="height:100%; border-radius:3px; background:#4ade80; width:0%; transition:width 0.6s ease;"></div>
           </div>
           <div id="profit-month-sub" style="font-size:0.72rem; color:#64748b; margin-top:6px;"></div>
         </div>
@@ -155,7 +155,7 @@ async function loadSummary() {
             const pct = parseFloat(((profitVal / income) * 100).toFixed(1));
             document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
             const fillEl = document.getElementById('profit-bar-fill');
-            fillEl.style.width = Math.max(Math.abs(pct), 2) + '%';
+            fillEl.style.width = (pct > 0 ? Math.max(pct, 8) : pct < 0 ? Math.max(Math.abs(pct), 8) : 0) + '%';
             fillEl.style.background = pct >= 0 ? '#4ade80' : '#ef4444';
             const now = new Date();
             const dayOfMonth = now.getDate();
