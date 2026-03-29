@@ -32,6 +32,7 @@
           <div id="profit-pct-badge" style="width:100%; text-align:center; padding:5px 0; border-radius:8px; background:#22c55e; font-size:0.9rem; font-weight:700; color:#052e16;">
             <span id="profit-pct-label">ריווחיות: 0%</span>
           </div>
+          <div id="profit-month-sub" style="font-size:0.72rem; color:#94a3b8; text-align:center; margin-top:4px;"></div>
         </div>
         <span class="kpi-badge estimated" id="profit-badge">משוער</span>
     </div>
@@ -151,6 +152,10 @@ async function loadSummary() {
         const badge = document.getElementById('profit-pct-badge');
         badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
         badge.style.color = pct >= 0 ? '#052e16' : '#fff';
+        const today = new Date();
+        const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
+        const dayOfMonth = today.getDate();
+        document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
         document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
     } catch (err) {
         console.error('summary:', err);
