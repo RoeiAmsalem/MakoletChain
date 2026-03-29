@@ -29,13 +29,9 @@
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
         <div id="profit-bar-wrap" style="display:none; width:100%; margin-top:6px;">
-          <div id="profit-pct-badge" style="width:100%; text-align:center; padding:5px 0; border-radius:8px; background:#22c55e; font-size:0.9rem; font-weight:700; color:#052e16; margin-bottom:6px;">
+          <div id="profit-pct-badge" style="width:100%; text-align:center; padding:5px 0; border-radius:8px; background:#22c55e; font-size:0.9rem; font-weight:700; color:#052e16;">
             <span id="profit-pct-label">ריווחיות: 0%</span>
           </div>
-          <div style="height:3px; border-radius:2px; background:rgba(255,255,255,0.12); overflow:hidden; margin:6px 0 4px;">
-            <div id="profit-bar-fill" style="height:100%; border-radius:2px; background:#86efac; width:0%; transition:width 0.6s ease;"></div>
-          </div>
-          <div id="profit-month-sub" style="font-size:0.72rem; color:rgba(255,255,255,0.45); text-align:center;"></div>
         </div>
         <span class="kpi-badge estimated" id="profit-badge">משוער</span>
     </div>
@@ -148,20 +144,13 @@ async function loadSummary() {
             profitValue.className = 'kpi-value loss';
         }
 
-        // Profitability pill + month progress
+        // Profitability pill
         const income = d.income || 0;
         const pct = income > 0 ? parseFloat(((profitVal / income) * 100).toFixed(1)) : 0;
         document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
         const badge = document.getElementById('profit-pct-badge');
         badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
         badge.style.color = pct >= 0 ? '#052e16' : '#fff';
-        const today = new Date();
-        const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
-        const dayOfMonth = today.getDate();
-        const monthPct = Math.round((dayOfMonth / daysInMonth) * 100);
-        document.getElementById('profit-bar-fill').style.width = monthPct + '%';
-        document.getElementById('profit-month-sub').textContent =
-            'יום ' + dayOfMonth + ' מתוך ' + daysInMonth + ' · ' + monthPct + '% מהחודש';
         document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
     } catch (err) {
         console.error('summary:', err);
