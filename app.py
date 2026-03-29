@@ -1426,7 +1426,7 @@ def api_admin_branch_create():
          data.get('aviv_user_id', ''), data.get('aviv_password', ''),
          data.get('bilboy_user', ''), data.get('bilboy_pass', ''),
          data.get('gmail_label', ''),
-         data.get('franchise_supplier', 'זיכיונות המכולת בע״מ'),
+         data.get('franchise_supplier', 'זיכיונות המכולת בע"מ'),
          data.get('iec_contract', '')))
     db.commit()
     manager_email = data.get('manager_email', '').strip()

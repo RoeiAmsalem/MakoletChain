@@ -92,7 +92,7 @@ def run_bilboy(branch_id: int) -> dict:
     try:
         branch = _get_branch_config(branch_id)
         token = branch.get('bilboy_pass') or ''
-        franchise_supplier = branch.get('franchise_supplier') or 'זיכיונות המכולת בע״מ'
+        franchise_supplier = branch.get('franchise_supplier') or 'זיכיונות המכולת בע"מ'
 
         if not token:
             log.warning("No BilBoy token for branch %d", branch_id)
