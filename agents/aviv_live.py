@@ -151,9 +151,9 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
 
         # Wait for content
         try:
-            page.wait_for_selector("text=תאריך עדכון אחרון", timeout=15000)
+            page.wait_for_selector("text=תאריך עדכון אחרון", timeout=20000)
         except Exception:
-            page.wait_for_selector("text=₪", timeout=10000)
+            page.wait_for_selector("text=₪", timeout=20000)
         page.wait_for_timeout(2000)
 
         raw_text = page.inner_text("body")
