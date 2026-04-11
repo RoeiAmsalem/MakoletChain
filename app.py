@@ -596,13 +596,8 @@ def api_summary():
         (branch_id, month)
     ).fetchone()[0]
 
-    # Fixed expenses
+    # Ensure monthly carry-forward before totals
     _ensure_monthly_expenses(branch_id, month, db)
-    fixed = db.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM fixed_expenses "
-        "WHERE branch_id = ? AND month = ?",
-        (branch_id, month)
-    ).fetchone()[0]
 
     # Salary — single source of truth
     salary_data = _calculate_salary_cost(branch_id, month)
@@ -633,6 +628,9 @@ def api_summary():
                 income += live_amount_today
     else:
         live_row = None
+
+    # Fixed expenses (% rows computed live from final income)
+    fixed = _get_fixed_total(branch_id, month, income, db)
 
     profit = income - goods - fixed - salary
 
@@ -692,10 +690,7 @@ def api_history():
             (branch_id, ms)
         ).fetchone()[0]
         _ensure_monthly_expenses(branch_id, ms, db)
-        fix = db.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM fixed_expenses WHERE branch_id = ? AND month = ?",
-            (branch_id, ms)
-        ).fetchone()[0]
+        fix = _get_fixed_total(branch_id, ms, inc, db)
         sal = _calculate_salary_cost(branch_id, ms)['amount']
         profit = inc - gds - fix - sal
         result.append({
@@ -945,6 +940,21 @@ def api_employees_delete(emp_id):
     return jsonify({'ok': True})
 
 
+def _get_fixed_total(branch_id: int, month: str, income: float, db) -> float:
+    """Sum fixed expenses for a branch+month. % rows calculated live from income."""
+    rows = db.execute(
+        'SELECT amount, pct_value FROM fixed_expenses WHERE branch_id=? AND month=?',
+        (branch_id, month)
+    ).fetchall()
+    total = 0
+    for r in rows:
+        if r['pct_value'] and r['pct_value'] > 0:
+            total += income * r['pct_value'] / 100
+        else:
+            total += r['amount']
+    return round(total, 2)
+
+
 def _ensure_monthly_expenses(branch_id: int, month: str, db):
     """Carry forward 'חודשי' expenses from the most recent prior month if target month is empty."""
     existing = db.execute(
@@ -967,11 +977,13 @@ def _ensure_monthly_expenses(branch_id: int, month: str, db):
         (branch_id, prev['month'])
     ).fetchall()
     for r in rows:
+        # % expenses: store 0, always calculated live from income
+        amt = 0 if (r['pct_value'] and r['pct_value'] > 0) else r['amount']
         db.execute(
             '''INSERT OR IGNORE INTO fixed_expenses
                (branch_id, month, name, amount, expense_type, pct_value)
                VALUES (?,?,?,?,?,?)''',
-            (branch_id, month, r['name'], r['amount'], r['expense_type'], r['pct_value'])
+            (branch_id, month, r['name'], amt, r['expense_type'], r['pct_value'])
         )
     db.commit()
 
@@ -984,12 +996,38 @@ def api_fixed_expenses_list():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
     _ensure_monthly_expenses(branch_id, month, db)
+    income = db.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
+        "WHERE branch_id=? AND strftime('%Y-%m',date)=?",
+        (branch_id, month)
+    ).fetchone()[0]
+    # Add today's live amount to income if we're viewing current month with no Z yet
+    current_month = _now_il().strftime('%Y-%m')
+    if month == current_month:
+        today = _now_il().strftime('%Y-%m-%d')
+        has_z = db.execute(
+            "SELECT 1 FROM daily_sales WHERE branch_id=? AND date=?",
+            (branch_id, today)
+        ).fetchone()
+        if not has_z:
+            live = db.execute(
+                "SELECT amount FROM live_sales WHERE branch_id=? AND date=?",
+                (branch_id, today)
+            ).fetchone()
+            if live and live['amount']:
+                income += live['amount']
     rows = db.execute(
         "SELECT id, name, amount, expense_type, pct_value, locked FROM fixed_expenses "
         "WHERE branch_id = ? AND month = ?",
         (branch_id, month)
     ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d['pct_value'] and d['pct_value'] > 0:
+            d['amount'] = round(income * d['pct_value'] / 100, 2)
+        result.append(d)
+    return jsonify(result)
 
 
 @app.route('/api/fixed-expenses', methods=['POST'])
@@ -1005,6 +1043,9 @@ def api_fixed_expenses_create():
     pct_value = data.get('pct_value')
     if not name:
         return jsonify({'error': 'name required'}), 400
+    # % expenses: never store a stale amount — always computed live from income
+    if pct_value and float(pct_value) > 0:
+        amount = 0
     db = get_db()
     db.execute(
         "INSERT INTO fixed_expenses (branch_id, month, name, amount, expense_type, pct_value) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1032,6 +1073,9 @@ def api_fixed_expenses_update(exp_id):
     amount = float(data.get('amount', row['amount']))
     expense_type = data.get('expense_type', row['expense_type'])
     pct_value = data.get('pct_value', row['pct_value'])
+    # % expenses: never store a stale amount — always computed live from income
+    if pct_value and float(pct_value) > 0:
+        amount = 0
     db.execute(
         'UPDATE fixed_expenses SET name=?, amount=?, expense_type=?, pct_value=? WHERE id=?',
         (name, amount, expense_type, pct_value, exp_id)
