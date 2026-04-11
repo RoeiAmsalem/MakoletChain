@@ -954,7 +954,7 @@ def _ensure_monthly_expenses(branch_id: int, month: str, db):
         return
     prev = db.execute(
         '''SELECT DISTINCT month FROM fixed_expenses
-           WHERE branch_id=? AND month < ? AND expense_type='חודשי'
+           WHERE branch_id=? AND month < ? AND expense_type='monthly'
            ORDER BY month DESC LIMIT 1''',
         (branch_id, month)
     ).fetchone()
@@ -962,7 +962,7 @@ def _ensure_monthly_expenses(branch_id: int, month: str, db):
         return
     rows = db.execute(
         '''SELECT name, amount, expense_type, pct_value
-           FROM fixed_expenses WHERE branch_id=? AND month=? AND expense_type='חודשי' ''',
+           FROM fixed_expenses WHERE branch_id=? AND month=? AND expense_type='monthly' ''',
         (branch_id, prev['month'])
     ).fetchall()
     for r in rows:
