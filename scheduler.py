@@ -73,7 +73,14 @@ def nightly_sync():
     log.info("=== Nightly sync complete ===")
 
 
-scheduler = BlockingScheduler(timezone=IL_TZ)
+scheduler = BlockingScheduler(
+    timezone=IL_TZ,
+    job_defaults={
+        'misfire_grace_time': 120,
+        'coalesce': True,
+        'max_instances': 1
+    }
+)
 
 
 # 06:30–06:55 IL — early window before main cron kicks in

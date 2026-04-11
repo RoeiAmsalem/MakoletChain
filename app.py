@@ -63,7 +63,8 @@ def seed_admin():
     conn.row_factory = sqlite3.Row
     existing = conn.execute("SELECT id FROM users WHERE email = ?", ('admin@makolet.com',)).fetchone()
     if not existing:
-        pw_hash = generate_password_hash('admin123')
+        admin_password = os.environ.get('ADMIN_PASSWORD', secrets.token_urlsafe(16))
+        pw_hash = generate_password_hash(admin_password)
         conn.execute(
             "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
             ('מנהל ראשי', 'admin@makolet.com', pw_hash, 'admin')
@@ -1181,9 +1182,24 @@ def _to_il_time(utc_str):
         return utc_str
 
 
+def _to_il_datetime(utc_str):
+    """Convert UTC datetime string to Israel time DD/MM HH:MM."""
+    if not utc_str:
+        return ''
+    try:
+        from datetime import timezone
+        dt = datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        il_dt = dt.astimezone(IL_TZ)
+        return il_dt.strftime('%d/%m %H:%M')
+    except Exception:
+        return utc_str
+
+
 def _convert_run_times(row_dict):
-    """Convert started_at and finished_at to Israel time in a dict."""
-    row_dict['started_at'] = _to_il_time(row_dict.get('started_at'))
+    """Convert started_at (DD/MM HH:MM) and finished_at (HH:MM:SS) to Israel time."""
+    row_dict['started_at'] = _to_il_datetime(row_dict.get('started_at'))
     row_dict['finished_at'] = _to_il_time(row_dict.get('finished_at'))
     return row_dict
 
@@ -1208,7 +1224,7 @@ def api_ops_status():
             ).fetchone()
             if row:
                 d = dict(row)
-                d['started_at'] = _to_il_time(d.get('started_at'))
+                d['started_at'] = _to_il_datetime(d.get('started_at'))
                 agents_data[agent] = d
             else:
                 agents_data[agent] = None
@@ -1248,6 +1264,7 @@ def api_ops_status():
     runs = db.execute(
         "SELECT ar.*, b.name as branch_name FROM agent_runs ar "
         "LEFT JOIN branches b ON ar.branch_id = b.id "
+        "WHERE (ar.message NOT LIKE '%orphaned%' OR ar.message IS NULL) "
         "ORDER BY ar.started_at DESC LIMIT 20"
     ).fetchall()
     agent_runs = [_convert_run_times(dict(r)) for r in runs]
@@ -1272,7 +1289,7 @@ def api_ops_status():
     last_nightly_row = db.execute(
         "SELECT started_at FROM agent_runs WHERE agent='bilboy' ORDER BY started_at DESC LIMIT 1"
     ).fetchone()
-    last_nightly = _to_il_time(last_nightly_row['started_at']) if last_nightly_row else ''
+    last_nightly = _to_il_datetime(last_nightly_row['started_at']) if last_nightly_row else ''
 
     # Aviv status: is store open now?
     from agents.aviv_live import _is_store_hours, get_next_opening

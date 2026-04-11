@@ -164,12 +164,23 @@ async function loadSales() {
                 ? `<button class="btn-pdf" onclick="openPdf('${s.date}')">📄 צפה</button>`
                 : '<span style="color:#64748b;font-size:0.8rem">—</span>';
             const avgTxn = s.avg_per_txn != null ? `₪ ${s.avg_per_txn}` : '—';
+            const src = s.source || 'z_report';
+            let srcBadge;
+            if (src === 'z_report') {
+                srcBadge = '<span style="background:rgba(34,197,94,0.15); color:#86efac; border:1px solid rgba(34,197,94,0.3); border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600;">Z ✓</span>';
+            } else if (src === 'aviv_backfill') {
+                srcBadge = '<span style="background:rgba(99,102,241,0.15); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3); border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600;">גיבוי</span>';
+            } else if (src === 'live_provisional') {
+                srcBadge = '<span style="background:rgba(245,158,11,0.15); color:#fde68a; border:1px solid rgba(245,158,11,0.3); border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600;">זמני ⚡</span>';
+            } else {
+                srcBadge = `<span style="background:rgba(148,163,184,0.15); color:#cbd5e1; border:1px solid rgba(148,163,184,0.3); border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600;">${src}</span>`;
+            }
             return `<tr>
                 <td>${s.date}</td>
                 <td class="money profit" style="direction:ltr;text-align:left;font-weight:600">₪ ${Number(s.amount).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
                 <td style="text-align:center">${s.transactions || '—'}</td>
                 <td style="text-align:center">${avgTxn}</td>
-                <td><span style="font-size:0.78rem;color:#94a3b8">${s.source || 'z_report'}</span></td>
+                <td>${srcBadge}</td>
                 <td>${pdfBtn}</td>
             </tr>`;
         }).join('');
