@@ -596,6 +596,7 @@ def api_summary():
     ).fetchone()[0]
 
     # Fixed expenses
+    _ensure_monthly_expenses(branch_id, month, db)
     fixed = db.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM fixed_expenses "
         "WHERE branch_id = ? AND month = ?",
@@ -689,6 +690,7 @@ def api_history():
             "SELECT COALESCE(SUM(amount), 0) FROM goods_documents WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ?",
             (branch_id, ms)
         ).fetchone()[0]
+        _ensure_monthly_expenses(branch_id, ms, db)
         fix = db.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM fixed_expenses WHERE branch_id = ? AND month = ?",
             (branch_id, ms)
@@ -942,6 +944,37 @@ def api_employees_delete(emp_id):
     return jsonify({'ok': True})
 
 
+def _ensure_monthly_expenses(branch_id: int, month: str, db):
+    """Carry forward 'חודשי' expenses from the most recent prior month if target month is empty."""
+    existing = db.execute(
+        'SELECT COUNT(*) FROM fixed_expenses WHERE branch_id=? AND month=?',
+        (branch_id, month)
+    ).fetchone()[0]
+    if existing > 0:
+        return
+    prev = db.execute(
+        '''SELECT DISTINCT month FROM fixed_expenses
+           WHERE branch_id=? AND month < ? AND expense_type='חודשי'
+           ORDER BY month DESC LIMIT 1''',
+        (branch_id, month)
+    ).fetchone()
+    if not prev:
+        return
+    rows = db.execute(
+        '''SELECT name, amount, expense_type, pct_value
+           FROM fixed_expenses WHERE branch_id=? AND month=? AND expense_type='חודשי' ''',
+        (branch_id, prev['month'])
+    ).fetchall()
+    for r in rows:
+        db.execute(
+            '''INSERT OR IGNORE INTO fixed_expenses
+               (branch_id, month, name, amount, expense_type, pct_value)
+               VALUES (?,?,?,?,?,?)''',
+            (branch_id, month, r['name'], r['amount'], r['expense_type'], r['pct_value'])
+        )
+    db.commit()
+
+
 @app.route('/api/fixed-expenses', methods=['GET'])
 @login_required
 def api_fixed_expenses_list():
@@ -949,6 +982,7 @@ def api_fixed_expenses_list():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
+    _ensure_monthly_expenses(branch_id, month, db)
     rows = db.execute(
         "SELECT id, name, amount, expense_type, pct_value, locked FROM fixed_expenses "
         "WHERE branch_id = ? AND month = ?",
@@ -986,6 +1020,11 @@ def api_fixed_expenses_update(exp_id):
     data = request.get_json()
     amount = float(data.get('amount', 0))
     db = get_db()
+    row = db.execute('SELECT branch_id FROM fixed_expenses WHERE id=?', (exp_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    if row['branch_id'] != get_branch_id():
+        return jsonify({'error': 'forbidden'}), 403
     db.execute("UPDATE fixed_expenses SET amount = ? WHERE id = ?", (amount, exp_id))
     db.commit()
     return jsonify({'ok': True})
@@ -996,6 +1035,11 @@ def api_fixed_expenses_update(exp_id):
 def api_fixed_expenses_delete(exp_id):
     """Delete a fixed expense."""
     db = get_db()
+    row = db.execute('SELECT branch_id FROM fixed_expenses WHERE id=?', (exp_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    if row['branch_id'] != get_branch_id():
+        return jsonify({'error': 'forbidden'}), 403
     db.execute("DELETE FROM fixed_expenses WHERE id = ?", (exp_id,))
     db.commit()
     return jsonify({'ok': True})

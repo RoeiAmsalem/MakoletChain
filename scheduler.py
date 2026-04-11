@@ -137,8 +137,22 @@ scheduler.add_job(
 )
 
 
+def cleanup_orphaned_runs():
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    result = conn.execute(
+        '''UPDATE agent_runs
+           SET status='error', message='orphaned on startup', finished_at=datetime('now')
+           WHERE status='running' AND started_at < datetime('now', '-1 hour')'''
+    )
+    if result.rowcount > 0:
+        log.warning("Cleaned up %d orphaned agent_runs on startup", result.rowcount)
+    conn.commit()
+    conn.close()
+
+
 if __name__ == '__main__':
     init_db()
+    cleanup_orphaned_runs()
     log.info('MakoletChain scheduler started')
 
     # Run aviv_live once on startup
