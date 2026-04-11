@@ -108,29 +108,54 @@ def run_bilboy(branch_id: int) -> dict:
         first = branches_data[0] if isinstance(branches_data, list) else branches_data
         bb_branch_id = str(first.get('branchId') or first.get('id') or first.get('branch_id', ''))
 
-        # Get suppliers (for logging only — franchise filter applied at doc level below)
+        # Get suppliers, filter out franchise
         raw = _api_get(session, '/customer/suppliers', params={
             'customerBranchId': bb_branch_id, 'all': 'true'
         })
         suppliers = raw.get('suppliers') if isinstance(raw, dict) else raw
-        log.info("Branch has %d suppliers in BilBoy", len(suppliers) if suppliers else 0)
+        keep_ids = []
+        if suppliers:
+            for s in suppliers:
+                name = s.get('title') or s.get('name') or s.get('supplierName') or ''
+                sid = str(s.get('id') or s.get('supplierId') or '')
+                if franchise_supplier and franchise_supplier in name:
+                    log.info("Filtered out franchise supplier: %s", name)
+                    continue
+                if sid:
+                    keep_ids.append(sid)
+
+        if not keep_ids:
+            log.warning("No supplier IDs found")
+            return {'success': True, 'docs_count': 0, 'total_amount': 0}
 
         # Full month date range
         today = date.today()
         from_date = date(today.year, today.month, 1).isoformat()
         to_date = today.isoformat()
 
-        # Fetch ALL docs (no suppliers filter — URL length limit with many suppliers).
-        # Franchise exclusion is handled at doc level below.
-        raw_docs = _api_get(session, '/customer/docs/headers', params={
-            'branches': bb_branch_id,
-            'from': f'{from_date}T00:00:00',
-            'to': f'{to_date}T00:00:00',
-        })
-        docs = raw_docs if isinstance(raw_docs, list) else (
-            raw_docs.get('data') or raw_docs.get('docs') or raw_docs.get('headers') or []
-        )
-        log.info("API returned %d raw documents", len(docs))
+        # Fetch docs in batches of 30 suppliers to avoid 400 from URL length limit
+        BATCH_SIZE = 30
+        all_raw_docs = []
+        for i in range(0, max(len(keep_ids), 1), BATCH_SIZE):
+            batch = keep_ids[i:i+BATCH_SIZE]
+            if not batch:
+                break
+            batch_docs = _api_get(session, '/customer/docs/headers', params={
+                'suppliers': ','.join(batch),
+                'branches': bb_branch_id,
+                'from': f'{from_date}T00:00:00',
+                'to': f'{to_date}T00:00:00',
+            })
+            batch_list = batch_docs if isinstance(batch_docs, list) else (
+                batch_docs.get('data') or batch_docs.get('docs') or
+                batch_docs.get('headers') or []
+            )
+            all_raw_docs.extend(batch_list)
+            log.info("Batch %d-%d: %d docs", i, i+len(batch), len(batch_list))
+
+        docs = all_raw_docs
+        log.info("API returned %d raw documents total (%d batches)",
+                 len(docs), (len(keep_ids) + BATCH_SIZE - 1) // max(BATCH_SIZE, 1))
 
         # Process documents
         records = []
