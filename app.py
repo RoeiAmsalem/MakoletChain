@@ -1017,16 +1017,25 @@ def api_fixed_expenses_create():
 @app.route('/api/fixed-expenses/<int:exp_id>', methods=['PUT'])
 @login_required
 def api_fixed_expenses_update(exp_id):
-    """Update a fixed expense amount."""
+    """Update a fixed expense (name, amount, type, pct_value)."""
     data = request.get_json()
-    amount = float(data.get('amount', 0))
     db = get_db()
-    row = db.execute('SELECT branch_id FROM fixed_expenses WHERE id=?', (exp_id,)).fetchone()
+    row = db.execute(
+        'SELECT branch_id, name, amount, expense_type, pct_value FROM fixed_expenses WHERE id=?',
+        (exp_id,)
+    ).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     if row['branch_id'] != get_branch_id():
         return jsonify({'error': 'forbidden'}), 403
-    db.execute("UPDATE fixed_expenses SET amount = ? WHERE id = ?", (amount, exp_id))
+    name = data.get('name', row['name'])
+    amount = float(data.get('amount', row['amount']))
+    expense_type = data.get('expense_type', row['expense_type'])
+    pct_value = data.get('pct_value', row['pct_value'])
+    db.execute(
+        'UPDATE fixed_expenses SET name=?, amount=?, expense_type=?, pct_value=? WHERE id=?',
+        (name, amount, expense_type, pct_value, exp_id)
+    )
     db.commit()
     return jsonify({'ok': True})
 
