@@ -108,36 +108,21 @@ def run_bilboy(branch_id: int) -> dict:
         first = branches_data[0] if isinstance(branches_data, list) else branches_data
         bb_branch_id = str(first.get('branchId') or first.get('id') or first.get('branch_id', ''))
 
-        # Get suppliers, filter out franchise
+        # Get suppliers (for logging only — franchise filter applied at doc level below)
         raw = _api_get(session, '/customer/suppliers', params={
             'customerBranchId': bb_branch_id, 'all': 'true'
         })
         suppliers = raw.get('suppliers') if isinstance(raw, dict) else raw
-        keep_ids = []
-        if suppliers:
-            for s in suppliers:
-                name = s.get('title') or s.get('name') or s.get('supplierName') or ''
-                sid = str(s.get('id') or s.get('supplierId') or '')
-                if franchise_supplier and franchise_supplier in name:
-                    log.info("Filtered out franchise supplier: %s", name)
-                    continue
-                if sid:
-                    keep_ids.append(sid)
-
-        if not keep_ids:
-            log.warning("No supplier IDs found")
-            return {'success': True, 'docs_count': 0, 'total_amount': 0}
-
-        suppliers_csv = ','.join(keep_ids)
+        log.info("Branch has %d suppliers in BilBoy", len(suppliers) if suppliers else 0)
 
         # Full month date range
         today = date.today()
         from_date = date(today.year, today.month, 1).isoformat()
         to_date = today.isoformat()
 
-        # Fetch docs from API
+        # Fetch ALL docs (no suppliers filter — URL length limit with many suppliers).
+        # Franchise exclusion is handled at doc level below.
         raw_docs = _api_get(session, '/customer/docs/headers', params={
-            'suppliers': suppliers_csv,
             'branches': bb_branch_id,
             'from': f'{from_date}T00:00:00',
             'to': f'{to_date}T00:00:00',
