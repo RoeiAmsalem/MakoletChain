@@ -671,23 +671,37 @@ def api_summary():
 @app.route('/api/history')
 @login_required
 def api_history():
-    """Return last 6 months of data for chart + table."""
+    """Return monthly data from first month with real data to selected month."""
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
-    year, mon = map(int, month.split('-'))
+    db = get_db()
+    earliest = db.execute('''
+        SELECT MIN(month) as m FROM (
+            SELECT strftime('%Y-%m', date) as month FROM daily_sales WHERE branch_id=?
+            UNION
+            SELECT strftime('%Y-%m', doc_date) as month FROM goods_documents WHERE branch_id=?
+            UNION
+            SELECT month FROM employee_hours WHERE branch_id=?
+        )
+    ''', (branch_id, branch_id, branch_id)).fetchone()
+
+    if not earliest or not earliest['m']:
+        return jsonify([])
+
+    start_y, start_m = map(int, earliest['m'].split('-'))
+    end_y, end_m = map(int, month.split('-'))
     months = []
-    for i in range(5, -1, -1):
-        m = mon - i
-        y = year
-        while m <= 0:
-            m += 12
-            y -= 1
+    y, m = start_y, start_m
+    while (y, m) <= (end_y, end_m):
         m_str = f'{y:04d}-{m:02d}'
         label = f'{m}/{y}'
         months.append({'month': m_str, 'label': label})
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
 
-    db = get_db()
     result = []
     for m in months:
         ms = m['month']
