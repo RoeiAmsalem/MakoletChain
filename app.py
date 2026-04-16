@@ -678,13 +678,13 @@ def api_history():
     db = get_db()
     earliest = db.execute('''
         SELECT MIN(month) as m FROM (
-            SELECT strftime('%Y-%m', date) as month FROM daily_sales WHERE branch_id=?
+            SELECT strftime('%Y-%m', date) as month
+            FROM daily_sales WHERE branch_id=?
             UNION
-            SELECT strftime('%Y-%m', doc_date) as month FROM goods_documents WHERE branch_id=?
-            UNION
-            SELECT month FROM employee_hours WHERE branch_id=?
+            SELECT strftime('%Y-%m', doc_date) as month
+            FROM goods_documents WHERE branch_id=?
         )
-    ''', (branch_id, branch_id, branch_id)).fetchone()
+    ''', (branch_id, branch_id)).fetchone()
 
     if not earliest or not earliest['m']:
         return jsonify([])
