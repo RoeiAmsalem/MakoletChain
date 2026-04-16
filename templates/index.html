@@ -114,123 +114,53 @@
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
 
-// Raw API data stored for view-mode toggling without re-fetch
-let _summaryData = null;
-let _historyData = null;
-
-function getViewMode() {
-    return localStorage.getItem('view_mode') || 'prorated';
-}
-
-function getProrateMultiplier() {
-    const today = new Date();
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
-    const dayOfMonth = today.getDate();
-    return dayOfMonth > 0 ? daysInMonth / dayOfMonth : 1;
-}
-
-function isCurrentMonth(monthStr) {
-    const today = new Date();
-    const cur = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2, '0');
-    return monthStr === cur;
-}
-
-function renderSummary() {
-    const d = _summaryData;
-    if (!d) return;
-    const mode = getViewMode();
-    const prorate = (mode === 'prorated' && isCurrentMonth(SELECTED_MONTH));
-    const mult = prorate ? getProrateMultiplier() : 1;
-
-    const income = (d.income || 0) * mult;
-    const goods = (d.goods || 0) * mult;
-    const salary = (d.salary || 0) * mult;
-    const fixed = (d.fixed || 0) * mult;
-    const profit = income - goods - fixed - salary;
-
-    document.getElementById('income-value').textContent = formatMoney(income);
-    document.getElementById('goods-value').textContent = formatMoney(goods);
-    document.getElementById('fixed-value').textContent = formatMoney(fixed);
-    document.getElementById('salary-value').textContent = formatMoney(salary);
-
-    // Show live income subtitle
-    const liveSub = document.getElementById('income-live-sub');
-    if (liveSub && d.live_amount_today && !d.has_z) {
-        liveSub.textContent = 'כולל ' + formatMoney(d.live_amount_today) + ' מהיום (לייב)';
-    } else if (liveSub) {
-        liveSub.textContent = '';
-    }
-
-    // Color the profit tile green/red
-    document.getElementById('profit-value').textContent = formatMoney(profit);
-    const profitTile = document.getElementById('profit-tile');
-    const profitValue = document.getElementById('profit-value');
-    if (profit >= 0) {
-        profitTile.className = 'kpi-card kpi-card--profit';
-        profitValue.className = 'kpi-value profit';
-    } else {
-        profitTile.className = 'kpi-card kpi-card--loss';
-        profitValue.className = 'kpi-value loss';
-    }
-
-    // Profitability pill
-    const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
-    document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
-    const badge = document.getElementById('profit-pct-badge');
-    badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
-    badge.style.color = pct >= 0 ? '#052e16' : '#fff';
-    const today = new Date();
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
-    const dayOfMonth = today.getDate();
-    const modeLabel = prorate ? ' (תחזית)' : '';
-    document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth + modeLabel;
-    document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
-}
-
-function renderHistory() {
-    const months = _historyData;
-    if (!months || !months.length) return;
-    const mode = getViewMode();
-
-    const displayed = months.map(m => {
-        const prorate = (mode === 'prorated' && isCurrentMonth(m.month));
-        const mult = prorate ? getProrateMultiplier() : 1;
-        const income = m.income * mult;
-        const goods = m.goods * mult;
-        const fixed = m.fixed * mult;
-        const salary = m.salary * mult;
-        const profit = income - goods - fixed - salary;
-        return { label: m.label, income, goods, fixed, salary, profit, prorated: prorate };
-    });
-
-    buildProfitBarChart('profit-chart', displayed.map(m => m.label), displayed.map(m => m.profit));
-    const tbody = document.getElementById('history-tbody');
-    tbody.innerHTML = displayed.map(m => {
-        const cls = m.profit >= 0 ? 'profit' : 'loss';
-        const tag = m.prorated ? 'תחזית' : 'משוער';
-        return `<tr>
-            <td>${m.label}</td>
-            <td class="money profit">${formatMoney(m.income)}</td>
-            <td class="money loss">${formatMoney(m.goods)}</td>
-            <td class="money fixed hide-mobile">${formatMoney(m.fixed)}</td>
-            <td class="money salary hide-mobile">${formatMoney(m.salary)}</td>
-            <td class="money ${cls}">${formatMoney(m.profit)}</td>
-            <td><span class="kpi-badge estimated">${tag}</span></td>
-        </tr>`;
-    }).join('');
-}
-
-function onViewModeChange(mode) {
-    renderSummary();
-    renderHistory();
-}
-
 async function loadSummary() {
     try {
         const res = await fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        _summaryData = await res.json();
-        renderSummary();
+        const d = await res.json();
+        const income = d.income || 0;
+        const goods = d.goods || 0;
+        const fixed = d.fixed || 0;
+        const salary = d.salary || 0;
+        const profit = d.profit || 0;
+
+        document.getElementById('income-value').textContent = formatMoney(income);
+        document.getElementById('goods-value').textContent = formatMoney(goods);
+        document.getElementById('fixed-value').textContent = formatMoney(fixed);
+        document.getElementById('salary-value').textContent = formatMoney(salary);
+
+        // Show live income subtitle
+        const liveSub = document.getElementById('income-live-sub');
+        if (liveSub && d.live_amount_today && !d.has_z) {
+            liveSub.textContent = 'כולל ' + formatMoney(d.live_amount_today) + ' מהיום (לייב)';
+        } else if (liveSub) {
+            liveSub.textContent = '';
+        }
+
+        // Color the profit tile green/red
+        document.getElementById('profit-value').textContent = formatMoney(profit);
+        const profitTile = document.getElementById('profit-tile');
+        const profitValue = document.getElementById('profit-value');
+        if (profit >= 0) {
+            profitTile.className = 'kpi-card kpi-card--profit';
+            profitValue.className = 'kpi-value profit';
+        } else {
+            profitTile.className = 'kpi-card kpi-card--loss';
+            profitValue.className = 'kpi-value loss';
+        }
+
+        // Profitability pill
+        const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
+        document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
+        const badge = document.getElementById('profit-pct-badge');
+        badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
+        badge.style.color = pct >= 0 ? '#052e16' : '#fff';
+        const today = new Date();
+        const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
+        const dayOfMonth = today.getDate();
+        document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
+        document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
     } catch (err) {
         console.error('summary:', err);
     }
@@ -240,8 +170,23 @@ async function loadHistory() {
     try {
         const res = await fetch(`/api/history?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        _historyData = await res.json();
-        renderHistory();
+        const months = await res.json();
+        if (months.length) {
+            buildProfitBarChart('profit-chart', months.map(m => m.label), months.map(m => m.profit));
+            const tbody = document.getElementById('history-tbody');
+            tbody.innerHTML = months.map(m => {
+                const cls = m.profit >= 0 ? 'profit' : 'loss';
+                return `<tr>
+                    <td>${m.label}</td>
+                    <td class="money profit">${formatMoney(m.income)}</td>
+                    <td class="money loss">${formatMoney(m.goods)}</td>
+                    <td class="money fixed hide-mobile">${formatMoney(m.fixed)}</td>
+                    <td class="money salary hide-mobile">${formatMoney(m.salary)}</td>
+                    <td class="money ${cls}">${formatMoney(m.profit)}</td>
+                    <td><span class="kpi-badge estimated">משוער</span></td>
+                </tr>`;
+            }).join('');
+        }
     } catch (err) {
         console.error('history:', err);
     }

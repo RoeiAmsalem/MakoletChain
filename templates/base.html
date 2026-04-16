@@ -45,9 +45,6 @@
             {% if show_today_btn %}
             <a href="?month={{ current_month }}" title="חזור לחודש נוכחי" style="color:#f59e0b; text-decoration:none; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.15); font-size:0.8rem; font-weight:600;">היום</a>
             {% endif %}
-            <span style="margin-right:6px;border-right:1px solid rgba(255,255,255,0.15);height:16px;display:inline-block"></span>
-            <button id="vm-prorated" onclick="setViewMode('prorated')" style="font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.12);color:white;white-space:nowrap;">יחסי</button>
-            <button id="vm-full" onclick="setViewMode('full')" style="font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:4px;cursor:pointer;font-family:inherit;border:1px solid rgba(255,255,255,0.15);background:none;color:rgba(255,255,255,0.45);white-space:nowrap;">מלא</button>
             <span style="width:1px;height:16px;background:rgba(255,255,255,0.15);display:inline-block;margin:0 4px;"></span>
             <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">{{ session.get('user_name', '') }}</span>
             <a href="/logout" style="font-size:0.75rem; color:rgba(255,255,255,0.45); text-decoration:none; padding:2px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px;">יציאה</a>
@@ -106,25 +103,6 @@ async function loadBranchSwitcher() {
 }
 loadBranchSwitcher();
 
-function setViewMode(mode) {
-    localStorage.setItem('view_mode', mode);
-    applyViewMode();
-}
-function applyViewMode() {
-    const mode = localStorage.getItem('view_mode') || 'prorated';
-    const btnPro = document.getElementById('vm-prorated');
-    const btnFull = document.getElementById('vm-full');
-    if (!btnPro) return;
-    if (mode === 'full') {
-        btnFull.style.background = 'rgba(255,255,255,0.12)'; btnFull.style.color = 'white';
-        btnPro.style.background = 'none'; btnPro.style.color = 'rgba(255,255,255,0.45)';
-    } else {
-        btnPro.style.background = 'rgba(255,255,255,0.12)'; btnPro.style.color = 'white';
-        btnFull.style.background = 'none'; btnFull.style.color = 'rgba(255,255,255,0.45)';
-    }
-    if (typeof onViewModeChange === 'function') onViewModeChange(mode);
-}
-applyViewMode();
 
 document.getElementById('hamburger').addEventListener('click', function() {
     document.getElementById('mobile-nav').classList.toggle('open');
