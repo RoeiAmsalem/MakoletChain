@@ -430,11 +430,17 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         updated = False
         for row in csv_rows:
             if row['total_hours'] > 0 and (row['total_salary'] or 0) == 0:
-                csv_tokens = set(row['employee_name'].replace('איינשטיין', '').replace('אינשטיין', '').split())
+                csv_clean = _clean_display_name(row['employee_name'], '')
+                csv_tokens = set(csv_clean.split())
                 rate = 0
                 for emp_name, emp_rate in emp_rates.items():
-                    emp_tokens = set(emp_name.split())
+                    emp_clean = _clean_display_name(emp_name, '')
+                    emp_tokens = set(emp_clean.split())
+                    # Match: token overlap ≥2, or single-word name matches first CSV word
                     if len(emp_tokens & csv_tokens) >= 2:
+                        rate = emp_rate
+                        break
+                    if len(emp_tokens) == 1 and emp_tokens & csv_tokens:
                         rate = emp_rate
                         break
                 if rate > 0:
@@ -487,9 +493,11 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         matched = []
         for row in prev_rows:
             for emp in employees:
-                emp_tokens = set(emp['name'].split())
-                row_tokens = set(row['employee_name'].replace('איינשטיין', '').replace('אינשטיין', '').split())
-                if len(emp_tokens & row_tokens) >= 2:
+                emp_clean = _clean_display_name(emp['name'], '')
+                emp_tokens = set(emp_clean.split())
+                row_clean = _clean_display_name(row['employee_name'], '')
+                row_tokens = set(row_clean.split())
+                if len(emp_tokens & row_tokens) >= 2 or (len(emp_tokens) == 1 and emp_tokens & row_tokens):
                     matched.append((row['total_hours'], emp['hourly_rate']))
                     break
 
@@ -548,10 +556,12 @@ def _recalculate_avg_rate(branch_id: int, conn):
     total_hours = 0
     for row in prev_rows:
         rate = 0
-        csv_tokens = set(row['employee_name'].replace('איינשטיין', '').replace('אינשטיין', '').split())
+        csv_clean = _clean_display_name(row['employee_name'], '')
+        csv_tokens = set(csv_clean.split())
         for emp_name, emp_rate in emp_rates.items():
-            emp_tokens = set(emp_name.split())
-            if len(emp_tokens & csv_tokens) >= 2:
+            emp_clean = _clean_display_name(emp_name, '')
+            emp_tokens = set(emp_clean.split())
+            if len(emp_tokens & csv_tokens) >= 2 or (len(emp_tokens) == 1 and emp_tokens & csv_tokens):
                 rate = emp_rate
                 break
         if rate > 0:
@@ -850,6 +860,10 @@ def _match_employee_hours(emp_name: str, hours_map: dict, branch_name: str = '')
         if csv_clean.startswith(emp_clean) or emp_clean.startswith(csv_clean):
             return data
 
+        # 3b. Single-word name matches first word of multi-word CSV name
+        if len(emp_tokens) == 1 and csv_tokens and emp_tokens[0] == csv_tokens[0]:
+            return data
+
         # 4. First + last name match (ignore middle names)
         if len(emp_tokens) >= 2:
             first, last = emp_tokens[0], emp_tokens[-1]
@@ -938,6 +952,142 @@ def api_employees_delete(emp_id):
     _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
+
+
+@app.route('/api/employee-match-pending', methods=['GET'])
+@login_required
+def api_employee_match_pending():
+    """Return unresolved pending employee matches for branch/month."""
+    branch_id = get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+
+    # Ensure table exists
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS employee_match_pending (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER, month TEXT, csv_name TEXT,
+            suggested_employee_id INTEGER, confidence TEXT,
+            hours REAL, salary REAL,
+            created_at TEXT DEFAULT (datetime('now')),
+            resolved INTEGER DEFAULT 0
+        )
+    ''')
+
+    rows = db.execute('''
+        SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
+               p.hours, p.salary, p.month,
+               e.name as suggested_name, e.hourly_rate as suggested_rate
+        FROM employee_match_pending p
+        LEFT JOIN employees e ON e.id = p.suggested_employee_id
+        WHERE p.branch_id = ? AND p.month = ? AND p.resolved = 0
+        ORDER BY p.hours DESC
+    ''', (branch_id, month)).fetchall()
+
+    # Also get all active employees for reassignment dropdown
+    employees = [dict(r) for r in db.execute(
+        "SELECT id, name, hourly_rate FROM employees WHERE branch_id = ? AND active = 1 ORDER BY name",
+        (branch_id,)
+    ).fetchall()]
+
+    return jsonify({
+        'pending': [dict(r) for r in rows],
+        'employees': employees,
+    })
+
+
+@app.route('/api/employee-match-pending/<int:pending_id>/approve', methods=['POST'])
+@login_required
+def api_pending_approve(pending_id):
+    """Approve a pending match — save to employee_hours."""
+    db = get_db()
+    branch_id = get_branch_id()
+    row = db.execute(
+        "SELECT * FROM employee_match_pending WHERE id = ? AND branch_id = ?",
+        (pending_id, branch_id)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+
+    # Get the employee rate for salary calculation
+    emp = db.execute(
+        "SELECT hourly_rate FROM employees WHERE id = ?",
+        (row['suggested_employee_id'],)
+    ).fetchone()
+    rate = emp['hourly_rate'] if emp else 0
+    salary = round(row['hours'] * rate, 2) if rate > 0 else 0
+
+    db.execute(
+        "INSERT OR REPLACE INTO employee_hours "
+        "(branch_id, month, employee_name, total_hours, total_salary, source) "
+        "VALUES (?, ?, ?, ?, ?, 'csv')",
+        (branch_id, row['month'], row['csv_name'], row['hours'], salary)
+    )
+    db.execute("UPDATE employee_match_pending SET resolved = 1 WHERE id = ?", (pending_id,))
+    db.commit()
+
+    _recalculate_avg_rate(branch_id, db)
+    db.commit()
+    return jsonify({'ok': True, 'hours': row['hours'], 'salary': salary})
+
+
+@app.route('/api/employee-match-pending/<int:pending_id>/reject', methods=['POST'])
+@login_required
+def api_pending_reject(pending_id):
+    """Reject a pending match — mark resolved, no hours saved."""
+    db = get_db()
+    branch_id = get_branch_id()
+    row = db.execute(
+        "SELECT id FROM employee_match_pending WHERE id = ? AND branch_id = ?",
+        (pending_id, branch_id)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    db.execute("UPDATE employee_match_pending SET resolved = 1 WHERE id = ?", (pending_id,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/employee-match-pending/<int:pending_id>/reassign', methods=['POST'])
+@login_required
+def api_pending_reassign(pending_id):
+    """Reassign a pending match to a different employee."""
+    db = get_db()
+    branch_id = get_branch_id()
+    data = request.get_json()
+    employee_id = data.get('employee_id')
+    if not employee_id:
+        return jsonify({'error': 'employee_id required'}), 400
+
+    row = db.execute(
+        "SELECT * FROM employee_match_pending WHERE id = ? AND branch_id = ?",
+        (pending_id, branch_id)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+
+    # Verify employee belongs to this branch
+    emp = db.execute(
+        "SELECT hourly_rate FROM employees WHERE id = ? AND branch_id = ?",
+        (employee_id, branch_id)
+    ).fetchone()
+    if not emp:
+        return jsonify({'error': 'employee not found'}), 404
+
+    salary = round(row['hours'] * emp['hourly_rate'], 2) if emp['hourly_rate'] > 0 else 0
+
+    db.execute(
+        "INSERT OR REPLACE INTO employee_hours "
+        "(branch_id, month, employee_name, total_hours, total_salary, source) "
+        "VALUES (?, ?, ?, ?, ?, 'csv')",
+        (branch_id, row['month'], row['csv_name'], row['hours'], salary)
+    )
+    db.execute("UPDATE employee_match_pending SET resolved = 1 WHERE id = ?", (pending_id,))
+    db.commit()
+
+    _recalculate_avg_rate(branch_id, db)
+    db.commit()
+    return jsonify({'ok': True, 'hours': row['hours'], 'salary': salary})
 
 
 def _get_fixed_total(branch_id: int, month: str, income: float, db) -> float:

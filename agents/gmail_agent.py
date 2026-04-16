@@ -151,9 +151,14 @@ def _parse_attendance_csv(csv_text: str) -> list[dict]:
     CSV columns: עובד, יום בשבוע, תאריך כניסה, תאריך יציאה, הערות, כמות שעות
     Employee rows start with 'ID NAME', continuation rows have empty first col.
     Summary rows: סה''כ שורות N  with total hours as HH:MM in last column.
+
+    NOTE: The same employee may appear with different name variants mid-CSV
+    (e.g. "441 עידן בקון" then "441 עידן בקון איינשטיין"). We track by
+    employee ID so the summary line captures the correct total.
     """
     employees = []
     current_name = None
+    current_emp_id = None
     current_hours = 0.0
 
     for line in csv_text.strip().splitlines():
@@ -177,21 +182,112 @@ def _parse_attendance_csv(csv_text: str) -> list[dict]:
                     pass
                 employees.append({
                     'name': current_name,
+                    'csv_emp_id': current_emp_id,
                     'total_hours': round(current_hours, 2),
                 })
             current_name = None
+            current_emp_id = None
             current_hours = 0.0
             continue
 
         # New employee row (starts with digit = employee ID)
         if first_col and first_col[0].isdigit():
-            # Extract name: "382 רועי אמסלם" -> "רועי אמסלם"
+            # Extract ID and name: "382 רועי אמסלם" -> id=382, name="רועי אמסלם"
             parts = first_col.split(None, 1)
             if len(parts) >= 2:
-                current_name = parts[1].strip()
+                new_id = parts[0]
+                new_name = parts[1].strip()
+                # Same employee ID with different name variant — keep longest name
+                if current_emp_id == new_id:
+                    if len(new_name) > len(current_name or ''):
+                        current_name = new_name
+                else:
+                    current_emp_id = new_id
+                    current_name = new_name
             continue
 
     return employees
+
+
+def _match_employee_name(csv_name: str, db_employees: list, branch_name: str = '') -> tuple:
+    """Match CSV employee name to DB employee.
+
+    Returns (employee_id, confidence, matched_db_name, hourly_rate)
+    confidence: 'exact', 'high', 'low', 'none'
+    """
+    # Clean the CSV name: strip branch suffixes
+    cleaned = _clean_name(csv_name, branch_name)
+
+    best_match = None
+    best_score = 0.0
+
+    for emp in db_employees:
+        db_name = emp['name'].strip()
+        db_clean = _clean_name(db_name, branch_name)
+
+        # Exact match after cleaning
+        if cleaned == db_clean:
+            return (emp['id'], 'exact', db_name, emp['hourly_rate'])
+
+        # One contains the other (handles "עידן" matching "עידן בקון")
+        if cleaned.startswith(db_clean) or db_clean.startswith(cleaned):
+            return (emp['id'], 'exact', db_name, emp['hourly_rate'])
+
+        csv_words = cleaned.split()
+        db_words = db_clean.split()
+        if not csv_words or not db_words:
+            continue
+
+        # First name matches
+        if csv_words[0] == db_words[0]:
+            overlap = len(set(csv_words) & set(db_words))
+            score = overlap / max(len(csv_words), len(db_words))
+            if score > best_score:
+                best_score = score
+                best_match = emp
+
+        # First + last name match (ignore middle names)
+        if len(db_words) >= 2:
+            first, last = db_words[0], db_words[-1]
+            if first in csv_words and last in csv_words:
+                score = 0.8
+                if score > best_score:
+                    best_score = score
+                    best_match = emp
+
+        if len(csv_words) >= 2:
+            first, last = csv_words[0], csv_words[-1]
+            if first in db_words and last in db_words:
+                score = 0.8
+                if score > best_score:
+                    best_score = score
+                    best_match = emp
+
+    if best_match:
+        if best_score >= 0.5:
+            return (best_match['id'], 'high', best_match['name'], best_match['hourly_rate'])
+        else:
+            return (best_match['id'], 'low', best_match['name'], best_match['hourly_rate'])
+
+    return (None, 'none', None, 0)
+
+
+def _ensure_pending_table(conn):
+    """Create employee_match_pending table if it doesn't exist."""
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS employee_match_pending (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER,
+            month TEXT,
+            csv_name TEXT,
+            suggested_employee_id INTEGER,
+            confidence TEXT,
+            hours REAL,
+            salary REAL,
+            created_at TEXT DEFAULT (datetime('now')),
+            resolved INTEGER DEFAULT 0
+        )
+    ''')
 
 
 def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
@@ -204,10 +300,9 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     now_il = datetime.now(ZoneInfo('Asia/Jerusalem'))
     current_month = now_il.strftime('%Y-%m')
 
-    # We'll check "already processed" after determining the report month from email date.
-    # First, search for the CSV email to detect its date.
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    _ensure_pending_table(conn)
 
     # Search for recent emails (can't use Hebrew in IMAP SUBJECT search)
     since_str = (date.today() - timedelta(days=35)).strftime("%d-%b-%Y")
@@ -309,38 +404,57 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         conn.close()
         return None
 
-    # Load employee rates from employees table
-    emp_rates = {}
-    rate_rows = conn.execute(
-        "SELECT name, hourly_rate FROM employees WHERE branch_id = ? AND active = 1",
+    # Load DB employees for matching
+    db_employees = [dict(r) for r in conn.execute(
+        "SELECT id, name, hourly_rate FROM employees WHERE branch_id = ? AND active = 1",
         (branch_id,)
-    ).fetchall()
-    for r in rate_rows:
-        emp_rates[r['name']] = r['hourly_rate']
+    ).fetchall()]
 
     # Get branch name for fuzzy matching
     branch_row = conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)).fetchone()
     branch_name = branch_row['name'] if branch_row else ''
 
-    # Calculate totals
+    # Match and save
     total_hours_all = sum(e['total_hours'] for e in employees)
     total_salary_all = 0.0
+    saved_count = 0
+    pending_count = 0
 
     for emp in employees:
-        # Match CSV employee name to employees table (fuzzy)
-        rate = _match_employee_rate(emp['name'], emp_rates, branch_name)
-        salary = round(emp['total_hours'] * rate, 2) if rate > 0 else 0
-        total_salary_all += salary
-
-        conn.execute(
-            "INSERT OR REPLACE INTO employee_hours "
-            "(branch_id, month, employee_name, total_hours, total_salary, source) "
-            "VALUES (?, ?, ?, ?, ?, 'csv')",
-            (branch_id, report_month, emp['name'], emp['total_hours'], salary)
+        emp_id, confidence, matched_name, rate = _match_employee_name(
+            emp['name'], db_employees, branch_name
         )
+        salary = round(emp['total_hours'] * rate, 2) if rate > 0 else 0
+
+        if confidence in ('exact', 'high'):
+            # Save directly to employee_hours
+            total_salary_all += salary
+            conn.execute(
+                "INSERT OR REPLACE INTO employee_hours "
+                "(branch_id, month, employee_name, total_hours, total_salary, source) "
+                "VALUES (?, ?, ?, ?, ?, 'csv')",
+                (branch_id, report_month, emp['name'], emp['total_hours'], salary)
+            )
+            saved_count += 1
+            log.info("  %s → %s (%s, %.1fh, ₪%.0f)",
+                      emp['name'], matched_name, confidence, emp['total_hours'], salary)
+        else:
+            # Save to pending for manual review
+            conn.execute(
+                "INSERT INTO employee_match_pending "
+                "(branch_id, month, csv_name, suggested_employee_id, confidence, hours, salary) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (branch_id, report_month, emp['name'], emp_id, confidence,
+                 emp['total_hours'], salary)
+            )
+            pending_count += 1
+            log.warning("  %s → PENDING (%s, suggested: %s)", emp['name'], confidence, matched_name)
 
     # Calculate weighted avg rate for branch
-    avg_rate = round(total_salary_all / total_hours_all, 2) if total_hours_all > 0 and total_salary_all > 0 else 0
+    if total_hours_all > 0 and total_salary_all > 0:
+        avg_rate = round(total_salary_all / total_hours_all, 2)
+    else:
+        avg_rate = 0
 
     # Update branch hours + avg rate
     conn.execute(
@@ -351,9 +465,16 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     conn.close()
 
     salary_str = f", שכר ₪{total_salary_all:,.0f}" if total_salary_all > 0 else ""
-    msg = f"📊 נוכחות {report_month}: {len(employees)} עובדים, {total_hours_all:.1f} שעות{salary_str}"
-    log.info(msg)
-    return msg
+    pending_str = f", {pending_count} ממתינים לאישור" if pending_count > 0 else ""
+    result_msg = (f"📊 נוכחות {report_month}: {saved_count} עובדים"
+                  f", {total_hours_all:.1f} שעות{salary_str}{pending_str}")
+    log.info(result_msg)
+
+    if pending_count > 0:
+        notify("⚠️ התאמות עובדים ממתינות",
+               f"סניף {branch_id}: {pending_count} עובדים מה-CSV לא זוהו — נדרש אישור ידני")
+
+    return result_msg
 
 
 def _clean_name(name: str, branch_name: str = '') -> str:

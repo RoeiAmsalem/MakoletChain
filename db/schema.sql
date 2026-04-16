@@ -120,6 +120,19 @@ CREATE TABLE IF NOT EXISTS employees (
   UNIQUE(branch_id, name)
 );
 
+CREATE TABLE IF NOT EXISTS employee_match_pending (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  branch_id INTEGER,
+  month TEXT,
+  csv_name TEXT,
+  suggested_employee_id INTEGER,
+  confidence TEXT,
+  hours REAL,
+  salary REAL,
+  created_at TEXT DEFAULT (datetime('now')),
+  resolved INTEGER DEFAULT 0
+);
+
 -- Insert branch 126 (empty data, credentials TBD)
 INSERT OR IGNORE INTO branches (id, name, city, aviv_user_id, gmail_label, franchise_supplier)
 VALUES (126, 'מכולת אינשטיין', 'תל אביב', 'S33834', 'איינשטיין', 'זיכיונות המכולת בע"מ');
