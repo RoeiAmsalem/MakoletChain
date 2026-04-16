@@ -17,6 +17,22 @@ import requests
 
 from utils.notify import notify
 
+
+def _friendly_bilboy_error(e: Exception) -> str:
+    msg = str(e)
+    if '400' in msg:
+        return "BilBoy rejected the request (400) — likely too many suppliers in one call."
+    if '401' in msg or 'token' in msg.lower() or 'expired' in msg.lower():
+        return "BilBoy token expired — needs to be refreshed from the browser."
+    if '500' in msg:
+        return "BilBoy server error — their server is having issues."
+    if 'Connection' in msg or 'timeout' in msg.lower():
+        return "Could not connect to BilBoy — network or server issue."
+    if 'JSONDecodeError' in msg or 'json' in msg.lower():
+        return "BilBoy returned an unexpected response — possible API change."
+    return msg[:120]
+
+
 API_BASE = "https://app.billboy.co.il:5050/api"
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 ALLOWED_DOC_TYPES = {2, 3, 4, 5}
@@ -238,7 +254,8 @@ def run_bilboy(branch_id: int) -> dict:
             message = f"{len(records)} docs, ₪{total_amount:,.0f} — פער ₪{diff:,.0f}"
             log.warning("RECONCILIATION MISMATCH: DB=%.2f API=%.2f diff=%.2f",
                         db_total, total_amount, diff)
-            notify("⚠️ BilBoy diff", f"סניף {branch_id} — פער ₪{diff:.0f}")
+            notify(f"⚠️ BilBoy — {branch.get('name', f'Branch {branch_id}')}",
+                   f"Reconciliation gap of ₪{diff:,.0f} — DB total doesn't match API total.")
         elif diff > 10:
             log.warning("RECONCILIATION MISMATCH: DB=%.2f API=%.2f diff=%.2f",
                         db_total, total_amount, diff)
@@ -271,8 +288,8 @@ def run_bilboy(branch_id: int) -> dict:
         except Exception:
             pass
         notify(
-            "🔑 BilBoy — טוקן פג",
-            f"סניף {branch_id} · {branch.get('name', '')} — יש להתחבר מחדש ל-BilBoy"
+            f"🔑 BilBoy — {branch.get('name', f'Branch {branch_id}')}",
+            "BilBoy token expired — needs to be refreshed from the browser."
         )
         return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': 'token_expired'}
 
@@ -289,7 +306,7 @@ def run_bilboy(branch_id: int) -> dict:
             conn_err.close()
         except Exception:
             pass
-        notify("❌ BilBoy נכשל", f"סניף {branch_id} — {e}")
+        notify(f"❌ BilBoy — {branch.get('name', f'Branch {branch_id}')}", _friendly_bilboy_error(e))
         return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': str(e)}
 
 

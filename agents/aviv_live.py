@@ -17,6 +17,31 @@ from zoneinfo import ZoneInfo
 
 from utils.notify import notify
 
+def _friendly_error(e: Exception) -> str:
+    msg = str(e)
+    if 'Quota' in msg or 'quota' in msg or 'Bandwidth' in msg:
+        return "Aviv BI is down — bandwidth quota exceeded on their end."
+    if 'wait_for_selector' in msg and 'Timeout' in msg:
+        return "Aviv BI page loaded but data took too long to appear."
+    if 'goto' in msg and 'Timeout' in msg:
+        return "Aviv BI website failed to load — could be down or unreachable."
+    if 'net::ERR' in msg:
+        code = msg.split('net::ERR_')[1].split()[0] if 'net::ERR_' in msg else 'unknown'
+        return f"Network error connecting to Aviv BI ({code})."
+    if '401' in msg:
+        return "Aviv BI login failed — credentials may have changed."
+    if '500' in msg:
+        return "Aviv BI server error — their server is having issues."
+    if 'sign-in' in msg.lower():
+        return "Aviv BI login page issue — could not authenticate."
+    # Strip any Playwright call log noise
+    clean = msg.split('Call log:')[0].strip()
+    clean = clean.replace('playwright._impl._errors.TimeoutError: ', '')
+    clean = clean.replace('Page.goto: ', '')
+    clean = clean.replace('Page.wait_for_selector: ', '')
+    return clean[:120] if clean else "Unknown Aviv BI error."
+
+
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 STATUS_URL = "https://bi-aviv.web.app/status"
 IL_TZ = ZoneInfo('Asia/Jerusalem')
@@ -346,7 +371,7 @@ def run_aviv_live(branch_id: int) -> dict:
         if data['amount'] == 0 and _is_store_hours():
             status = 'warning'
             message = "סכום 0 בשעות פעילות"
-            notify("⚠️ Aviv Live 0", f"סניף {branch_id} — סכום 0 בשעות פעילות")
+            notify(f"⚠️ Aviv Live — {branch.get('name', f'Branch {branch_id}')}", "Revenue is showing ₪0 during store hours.")
 
         conn_fin = _get_db()
         conn_fin.execute(
@@ -372,7 +397,7 @@ def run_aviv_live(branch_id: int) -> dict:
             conn_err.close()
         except Exception:
             pass
-        notify("❌ Aviv Live נכשל", f"סניף {branch_id} — {e}")
+        notify(f"❌ Aviv Live — {branch.get('name', f'Branch {branch_id}')}", _friendly_error(e))
         return {'success': False, 'amount': 0, 'transactions': 0, 'error': str(e)}
 
 

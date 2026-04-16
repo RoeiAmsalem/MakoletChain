@@ -36,7 +36,8 @@ def get_active_branches() -> list[int]:
 
 
 def _check_consecutive_failures(bid):
-    """Send brrr alert if branch has 6+ consecutive Aviv errors (~30 min)."""
+    """Send brrr alert if branch has 6+ consecutive Aviv errors (~30 min).
+    Also sends recovery alert when Aviv comes back online after failures."""
     from utils.notify import notify
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -44,24 +45,43 @@ def _check_consecutive_failures(bid):
         recent = conn.execute('''
             SELECT status FROM agent_runs
             WHERE branch_id=? AND agent='aviv_live'
-            ORDER BY started_at DESC LIMIT 7
+            ORDER BY started_at DESC LIMIT 8
         ''', (bid,)).fetchall()
 
+        row = conn.execute('SELECT name FROM branches WHERE id=?', (bid,)).fetchone()
+        branch_name = row['name'] if row else f'Branch {bid}'
+        conn.close()
+
+        if not recent:
+            return
+
+        # Recovery detection: latest is success, but previous 6+ were errors
+        if recent[0]['status'] == 'success':
+            consecutive_errors = 0
+            for r in recent[1:]:
+                if r['status'] == 'error':
+                    consecutive_errors += 1
+                else:
+                    break
+            if consecutive_errors >= 6:
+                notify(
+                    f"✅ Aviv Live — {branch_name}",
+                    f"Back online after {consecutive_errors * 5} minutes of downtime."
+                )
+                log.info("Branch %d: Aviv recovered after %d consecutive failures", bid, consecutive_errors)
+            return
+
+        # Failure detection: 6+ consecutive errors
         if len(recent) >= 6 and all(r['status'] == 'error' for r in recent[:6]):
+            consecutive = sum(1 for r in recent if r['status'] == 'error')
             # Only alert once: if 7th run was also error, we already alerted
-            if len(recent) == 7 and recent[6]['status'] == 'error':
-                conn.close()
+            if len(recent) >= 7 and recent[6]['status'] == 'error':
                 return
-            row = conn.execute('SELECT name FROM branches WHERE id=?', (bid,)).fetchone()
-            branch_name = row['name'] if row else f'branch {bid}'
-            conn.close()
             notify(
-                f'⚠️ Aviv Live — {branch_name}',
-                f'30 דקות רצופות של כשלון — Aviv BI אולי מושבת'
+                f"⚠️ Aviv Live — {branch_name}",
+                f"Down for 30 minutes ({consecutive} failed attempts)."
             )
             log.warning("Branch %d: 30min consecutive Aviv failures — brrr alert sent", bid)
-        else:
-            conn.close()
     except Exception as e:
         log.error("Failed to check consecutive failures: %s", e)
 

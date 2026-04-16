@@ -19,6 +19,20 @@ from zoneinfo import ZoneInfo
 
 from utils.notify import notify
 
+
+def _friendly_gmail_error(e: Exception) -> str:
+    msg = str(e)
+    if 'AUTHENTICATIONFAILED' in msg:
+        return "Gmail authentication failed — app password may have changed."
+    if 'IMAP' in msg or 'imap' in msg.lower():
+        return "Gmail IMAP connection failed — could not reach inbox."
+    if 'timeout' in msg.lower():
+        return "Gmail connection timed out."
+    if 'SSL' in msg:
+        return "Gmail SSL connection error."
+    return msg[:120]
+
+
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
@@ -471,8 +485,8 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     log.info(result_msg)
 
     if pending_count > 0:
-        notify("⚠️ התאמות עובדים ממתינות",
-               f"סניף {branch_id}: {pending_count} עובדים מה-CSV לא זוהו — נדרש אישור ידני")
+        notify(f"⚠️ Attendance — {branch.get('name', f'Branch {branch_id}')}",
+               f"{pending_count} employees from CSV could not be matched — manual review needed.")
 
     return result_msg
 
@@ -732,7 +746,8 @@ def run_gmail_sync(branch_id: int) -> dict:
         else:
             status = 'warning'
             message = "אין Z-report"
-            notify("⚠️ אין Z-report", f"סניף {branch_id} — לא נמצאו דוחות ב-7 ימים אחרונים")
+            notify(f"⚠️ Gmail — {branch.get('name', f'Branch {branch_id}')}",
+                   "No Z-reports found in the last 7 days.")
 
         conn_fin = _get_db()
         conn_fin.execute(
@@ -758,7 +773,7 @@ def run_gmail_sync(branch_id: int) -> dict:
             conn_err.close()
         except Exception:
             pass
-        notify("❌ Gmail נכשל", f"סניף {branch_id} — {e}")
+        notify(f"❌ Gmail — {branch.get('name', f'Branch {branch_id}')}", _friendly_gmail_error(e))
         return {'success': False, 'new_reports': 0, 'skipped': 0, 'error': str(e)}
 
 
