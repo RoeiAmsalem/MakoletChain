@@ -35,6 +35,37 @@ def get_active_branches() -> list[int]:
     return [r[0] for r in rows]
 
 
+def _check_consecutive_failures(bid):
+    """Send brrr alert if branch has 6+ consecutive Aviv errors (~30 min)."""
+    from utils.notify import notify
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        recent = conn.execute('''
+            SELECT status FROM agent_runs
+            WHERE branch_id=? AND agent='aviv_live'
+            ORDER BY started_at DESC LIMIT 7
+        ''', (bid,)).fetchall()
+
+        if len(recent) >= 6 and all(r['status'] == 'error' for r in recent[:6]):
+            # Only alert once: if 7th run was also error, we already alerted
+            if len(recent) == 7 and recent[6]['status'] == 'error':
+                conn.close()
+                return
+            row = conn.execute('SELECT name FROM branches WHERE id=?', (bid,)).fetchone()
+            branch_name = row['name'] if row else f'branch {bid}'
+            conn.close()
+            notify(
+                f'⚠️ Aviv Live — {branch_name}',
+                f'30 דקות רצופות של כשלון — Aviv BI אולי מושבת'
+            )
+            log.warning("Branch %d: 30min consecutive Aviv failures — brrr alert sent", bid)
+        else:
+            conn.close()
+    except Exception as e:
+        log.error("Failed to check consecutive failures: %s", e)
+
+
 def run_aviv_all():
     """Run aviv_live for all active branches."""
     from agents.aviv_live import run_aviv_live
@@ -46,6 +77,7 @@ def run_aviv_all():
             log.info("Branch %d: %s", bid, result)
         except Exception as e:
             log.error("Branch %d aviv_live failed: %s", bid, e)
+        _check_consecutive_failures(bid)
 
 
 def nightly_sync():
