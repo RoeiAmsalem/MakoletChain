@@ -121,6 +121,22 @@
     <h2 style="font-size:1.1rem; font-weight:700;">עובדים – <span id="month-label"></span></h2>
 </div>
 
+<!-- Unknown Employees Banner -->
+<div id="unknown-banner" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.25rem;">
+  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
+    <span style="font-size:1.5rem;">&#9888;&#65039;</span>
+    <div>
+      <div style="font-weight:700; color:#fca5a5; margin-bottom:0.25rem;">
+        <span id="unknown-count">0</span> עובדים חדשים לא מזוהים
+      </div>
+      <div style="font-size:0.85rem; color:#fecaca;">
+        עובדים אלו מופיעים באביב/CSV אך לא קיימים בדשבורד. לחץ להוספה.
+      </div>
+    </div>
+  </div>
+  <div id="unknown-list" style="display:flex; flex-direction:column; gap:0.75rem;"></div>
+</div>
+
 <!-- Employee Cards Grid -->
 <section class="emp-grid" id="emp-grid">
     <div class="loading" style="grid-column:1/-1"><div class="spinner"></div><span>טוען...</span></div>
@@ -426,9 +442,43 @@ async function loadPendingMatches() {
         const res = await fetch(`/api/employee-match-pending?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) return;
         const d = await res.json();
-        const pending = d.pending || [];
+        const allPending = d.pending || [];
         const allEmps = d.employees || [];
 
+        // Separate unknown (new) employees from low-confidence matches
+        const unknowns = allPending.filter(p => p.is_new_employee);
+        const pending = allPending.filter(p => !p.is_new_employee);
+
+        // RED banner for unknowns
+        const banner = document.getElementById('unknown-banner');
+        if (unknowns.length) {
+            banner.style.display = '';
+            document.getElementById('unknown-count').textContent = unknowns.length;
+            document.getElementById('unknown-list').innerHTML = unknowns.map(p => {
+                const srcLabel = p.source === 'aviv_api' ? 'Aviv' : 'CSV';
+                const escapedName = p.csv_name.replace(/'/g, "\\'");
+                return `<div id="pending-${p.id}" style="background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.2); border-radius:8px; padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
+                  <div>
+                    <div style="font-weight:600; color:white;">${p.csv_name}</div>
+                    <div style="font-size:0.8rem; color:#94a3b8;">${p.hours.toFixed(1)} שעות החודש · מקור: ${srcLabel}</div>
+                  </div>
+                  <div style="display:flex; gap:0.5rem;">
+                    <button onclick="openNewFromPending(${p.id}, '${escapedName}')"
+                            style="padding:0.5rem 1rem; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); border-radius:6px; color:#fca5a5; font-weight:600; cursor:pointer; font-family:inherit; font-size:0.85rem;">
+                      הוסף עובד ←
+                    </button>
+                    <button onclick="dismissUnknown(${p.id})"
+                            style="padding:0.5rem 0.75rem; background:transparent; border:1px solid #475569; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; font-size:0.85rem;">
+                      התעלם
+                    </button>
+                  </div>
+                </div>`;
+            }).join('');
+        } else {
+            banner.style.display = 'none';
+        }
+
+        // Yellow section for low-confidence matches
         const section = document.getElementById('pending-section');
         if (!pending.length) {
             section.style.display = 'none';
@@ -509,7 +559,17 @@ function openNewFromPending(pendingId, csvName) {
     document.getElementById('new-emp-rate').value = '';
     document.querySelector('input[name="new-emp-role"][value="ערב"]').checked = true;
     document.getElementById('new-emp-modal').classList.add('open');
-    document.getElementById('new-emp-rate').focus();
+    document.getElementById('new-emp-name').focus();
+}
+
+async function dismissUnknown(pendingId) {
+    if (!confirm('להתעלם מעובד זה?')) return;
+    try {
+        const res = await fetch(`/api/employee-match-pending/${pendingId}/reject`, {method:'POST'});
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('שעות נדחו', 'success');
+        loadPendingMatches();
+    } catch (err) { showToast(err.message, 'error'); }
 }
 
 function closeNewModal() {

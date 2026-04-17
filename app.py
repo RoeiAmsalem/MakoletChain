@@ -69,6 +69,7 @@ def _migrate_add_columns(conn):
         ('employees', 'aviv_employee_id', 'INTEGER'),
         ('employee_match_pending', 'aviv_employee_id', 'INTEGER'),
         ('employee_match_pending', 'source', "TEXT DEFAULT 'csv'"),
+        ('employee_match_pending', 'is_new_employee', 'INTEGER DEFAULT 0'),
     ]
     for table, col, col_type in migrations:
         try:
@@ -84,6 +85,15 @@ def _migrate_add_columns(conn):
         amount REAL DEFAULT 0,
         transactions INTEGER DEFAULT 0,
         PRIMARY KEY (branch_id, date, hour)
+    )''')
+    # Ensure employee_aliases table exists
+    conn.execute('''CREATE TABLE IF NOT EXISTS employee_aliases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER NOT NULL,
+        alias_name TEXT NOT NULL,
+        branch_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(branch_id, alias_name)
     )''')
     conn.commit()
 
@@ -1131,6 +1141,7 @@ def api_employee_match_pending():
         SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
                p.hours, p.salary, p.month, p.aviv_employee_id,
                COALESCE(p.source, 'csv') as source,
+               COALESCE(p.is_new_employee, 0) as is_new_employee,
                e.name as suggested_name, e.hourly_rate as suggested_rate
         FROM employee_match_pending p
         LEFT JOIN employees e ON e.id = p.suggested_employee_id
@@ -1311,6 +1322,13 @@ def api_pending_add_new(pending_id):
         "(branch_id, month, employee_name, total_hours, total_salary, source) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (branch_id, row['month'], name, hours, salary, source))
+
+    # Create alias if manager changed the name (for future auto-matching)
+    csv_name = row['csv_name']
+    if csv_name and csv_name.strip() != name:
+        db.execute(
+            'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
+            (new_emp_id, csv_name.strip(), branch_id))
 
     db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (pending_id,))
     _recalculate_avg_rate(branch_id, db)

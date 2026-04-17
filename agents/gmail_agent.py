@@ -223,12 +223,38 @@ def _parse_attendance_csv(csv_text: str) -> list[dict]:
     return employees
 
 
-def _match_employee_name(csv_name: str, db_employees: list, branch_name: str = '') -> tuple:
+def _check_alias(csv_name: str, branch_id: int, db_employees: list):
+    """Check employee_aliases table for a match. Returns (emp_id, confidence, name, rate) or None."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        alias = conn.execute(
+            'SELECT employee_id FROM employee_aliases WHERE branch_id=? AND alias_name=?',
+            (branch_id, csv_name.strip())
+        ).fetchone()
+        conn.close()
+        if alias:
+            emp_id = alias['employee_id']
+            for emp in db_employees:
+                if emp['id'] == emp_id:
+                    return (emp_id, 'exact', emp['name'], emp['hourly_rate'])
+    except Exception:
+        pass
+    return None
+
+
+def _match_employee_name(csv_name: str, db_employees: list, branch_name: str = '', branch_id: int = 0) -> tuple:
     """Match CSV employee name to DB employee.
 
     Returns (employee_id, confidence, matched_db_name, hourly_rate)
     confidence: 'exact', 'high', 'low', 'none'
     """
+    # Check aliases first
+    if branch_id:
+        alias_match = _check_alias(csv_name, branch_id, db_employees)
+        if alias_match:
+            return alias_match
+
     # Clean the CSV name: strip branch suffixes
     cleaned = _clean_name(csv_name, branch_name)
 
@@ -300,6 +326,23 @@ def _ensure_pending_table(conn):
             salary REAL,
             created_at TEXT DEFAULT (datetime('now')),
             resolved INTEGER DEFAULT 0
+        )
+    ''')
+    # Add is_new_employee column if missing
+    try:
+        conn.execute('ALTER TABLE employee_match_pending ADD COLUMN is_new_employee INTEGER DEFAULT 0')
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    # Ensure employee_aliases table
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS employee_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            alias_name TEXT NOT NULL,
+            branch_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(branch_id, alias_name)
         )
     ''')
 
@@ -436,7 +479,7 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
 
     for emp in employees:
         emp_id, confidence, matched_name, rate = _match_employee_name(
-            emp['name'], db_employees, branch_name
+            emp['name'], db_employees, branch_name, branch_id
         )
         salary = round(emp['total_hours'] * rate, 2) if rate > 0 else 0
 
@@ -454,12 +497,13 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
                       emp['name'], matched_name, confidence, emp['total_hours'], salary)
         else:
             # Save to pending for manual review
+            is_new = 1 if confidence == 'none' and emp_id is None else 0
             conn.execute(
                 "INSERT INTO employee_match_pending "
-                "(branch_id, month, csv_name, suggested_employee_id, confidence, hours, salary) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(branch_id, month, csv_name, suggested_employee_id, confidence, hours, salary, is_new_employee) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (branch_id, report_month, emp['name'], emp_id, confidence,
-                 emp['total_hours'], salary)
+                 emp['total_hours'], salary, is_new)
             )
             pending_count += 1
             log.warning("  %s → PENDING (%s, suggested: %s)", emp['name'], confidence, matched_name)

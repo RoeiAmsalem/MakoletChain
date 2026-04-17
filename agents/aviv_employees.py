@@ -64,24 +64,25 @@ def _friendly_error(e):
     return msg[:120] if msg else "Unknown error."
 
 
-def _match_employee(aviv_name, aviv_emp_id, db_employees, branch_name=''):
+def _match_employee(aviv_name, aviv_emp_id, db_employees, branch_name='', branch_id=0):
     """Match Aviv employee to DB employee. Returns (emp_id, confidence).
 
     Priority:
     1. Match by aviv_employee_id (exact link from previous approval)
-    2. Fuzzy name matching (reuses gmail_agent logic)
+    2. Alias table match
+    3. Fuzzy name matching (reuses gmail_agent logic)
     """
     # First: match by stored Aviv ID
     for emp in db_employees:
         if emp['aviv_employee_id'] and emp['aviv_employee_id'] == aviv_emp_id:
             return emp['id'], 'exact'
 
-    # Second: fuzzy name match
+    # Second: fuzzy name match (includes alias check)
     try:
         from agents.gmail_agent import _match_employee_name
         emp_list = [{'id': e['id'], 'name': e['name'], 'hourly_rate': e['hourly_rate']}
                     for e in db_employees]
-        emp_id, confidence, _, _ = _match_employee_name(aviv_name, emp_list, branch_name)
+        emp_id, confidence, _, _ = _match_employee_name(aviv_name, emp_list, branch_name, branch_id)
         return emp_id, confidence
     except Exception as e:
         log.warning("Fuzzy match failed for '%s': %s", aviv_name, e)
@@ -138,12 +139,23 @@ def run_aviv_employees(branch_id):
             "ALTER TABLE employees ADD COLUMN aviv_employee_id INTEGER",
             "ALTER TABLE employee_match_pending ADD COLUMN aviv_employee_id INTEGER",
             "ALTER TABLE employee_match_pending ADD COLUMN source TEXT DEFAULT 'csv'",
+            "ALTER TABLE employee_match_pending ADD COLUMN is_new_employee INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(col_sql)
                 conn.commit()
             except sqlite3.OperationalError:
                 pass
+        # Ensure employee_aliases table
+        conn.execute('''CREATE TABLE IF NOT EXISTS employee_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            alias_name TEXT NOT NULL,
+            branch_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(branch_id, alias_name)
+        )''')
+        conn.commit()
 
         # Get all known employees for this branch
         db_employees = [dict(r) for r in conn.execute(
@@ -168,7 +180,7 @@ def run_aviv_employees(branch_id):
                 if hours == 0 or not aviv_name:
                     continue
 
-                emp_id, confidence = _match_employee(aviv_name, aviv_emp_id, db_employees, branch_name)
+                emp_id, confidence = _match_employee(aviv_name, aviv_emp_id, db_employees, branch_name, branch_id)
 
                 if confidence in ('exact', 'high') and emp_id:
                     # Save aviv_employee_id link for future exact matches
@@ -202,13 +214,14 @@ def run_aviv_employees(branch_id):
                         (branch_id, month_str, aviv_name)).fetchone()
 
                     if not existing:
+                        is_new = 1 if confidence == 'none' and emp_id is None else 0
                         conn.execute('''
                             INSERT INTO employee_match_pending
                             (branch_id, month, csv_name, aviv_employee_id, suggested_employee_id,
-                             confidence, hours, salary, source)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'aviv_api')
+                             confidence, hours, salary, source, is_new_employee)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'aviv_api', ?)
                         ''', (branch_id, month_str, aviv_name, aviv_emp_id,
-                              emp_id, confidence, round(hours, 2)))
+                              emp_id, confidence, round(hours, 2), is_new))
                         flagged += 1
                         log.info("  Flagged: %s (aviv_id=%s, %.1f hrs, confidence=%s)",
                                  aviv_name, aviv_emp_id, hours, confidence)
