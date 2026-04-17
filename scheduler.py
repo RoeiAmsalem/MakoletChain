@@ -222,7 +222,15 @@ def cleanup_orphaned_runs():
     conn.close()
 
 
-# 23:45 — per-employee hours from Aviv BI API
+# 15:00 — per-employee hours from Aviv BI API (midday snapshot)
+scheduler.add_job(
+    func=run_aviv_employees,
+    trigger=CronTrigger(hour=15, minute=0, timezone=IL_TZ),
+    id='aviv_employees_midday',
+    name='Aviv employees hours 15:00',
+)
+
+# 23:45 — per-employee hours from Aviv BI API (end of day)
 scheduler.add_job(
     func=run_aviv_employees,
     trigger=CronTrigger(hour=23, minute=45, timezone=IL_TZ),

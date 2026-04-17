@@ -120,6 +120,21 @@
     </div>
 </section>
 
+<!-- Charts Row: Hours per employee + Salary donut -->
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;" id="charts-row">
+    <div class="section-card" style="margin-bottom:0;">
+        <h2 style="font-size:0.95rem; font-weight:700; margin-bottom:0.75rem;">שעות לעובד</h2>
+        <div style="position:relative; height:220px;"><canvas id="chart-hours"></canvas></div>
+    </div>
+    <div class="section-card" style="margin-bottom:0;">
+        <h2 style="font-size:0.95rem; font-weight:700; margin-bottom:0.75rem;">פילוח שכר</h2>
+        <div style="position:relative; height:220px;"><canvas id="chart-salary"></canvas></div>
+    </div>
+</div>
+<style>
+@media (max-width: 768px) { #charts-row { grid-template-columns: 1fr !important; } }
+</style>
+
 <!-- Section title -->
 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
     <h2 style="font-size:1.1rem; font-weight:700;">עובדים – <span id="month-label"></span></h2>
@@ -187,9 +202,15 @@
     <div id="pending-list"></div>
 </section>
 
+<!-- Labor Cost % Chart -->
+<section class="section-card" id="labor-chart-section" style="display:none;">
+    <h2 style="font-size:0.95rem; font-weight:700; margin-bottom:0.75rem;">אחוז עלות שכר מהכנסות – 6 חודשים</h2>
+    <div style="position:relative; height:200px;"><canvas id="chart-labor"></canvas></div>
+</section>
+
 <!-- History Table -->
 <section class="section-card">
-    <h2>היסטוריית שכר – 6 חודשים אחרונים</h2>
+    <h2>היסטוריית שכר �� 6 חודשים אחרונים</h2>
     <div style="overflow-x:auto">
         <table class="data-table" id="history-table">
             <thead>
@@ -280,6 +301,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
 <script>
 'use strict';
@@ -289,6 +311,206 @@ const monthLabel = {{ month_display | tojson }};
 document.getElementById('month-label').textContent = monthLabel;
 
 let ALL_EMPLOYEES = [];
+let hoursChart = null, salaryChart = null, laborChart = null;
+
+const CHART_COLORS = ['#22c55e','#6366f1','#f59e0b','#06b6d4','#ec4899','#8b5cf6','#14b8a6','#f43f5e','#84cc16','#a855f7'];
+
+function renderHoursChart(employees) {
+    const sorted = employees.filter(e => e.hours > 0).sort((a, b) => b.hours - a.hours);
+    if (!sorted.length) { document.getElementById('charts-row').style.display = 'none'; return; }
+    document.getElementById('charts-row').style.display = '';
+    const ctx = document.getElementById('chart-hours');
+    if (hoursChart) hoursChart.destroy();
+    hoursChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: sorted.map(e => e.name),
+            datasets: [{
+                data: sorted.map(e => e.hours),
+                backgroundColor: 'rgba(34,197,94,0.7)',
+                borderColor: '#22c55e',
+                borderWidth: 1,
+                borderRadius: 4,
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: tip => {
+                            const emp = sorted[tip.dataIndex];
+                            const sal = emp.salary > 0 ? emp.salary : (emp.hours * (emp.hourly_rate || 0));
+                            return `שעות: ${emp.hours.toFixed(1)} | שכר: ${formatMoney(sal)}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { grid: { color: 'rgba(148,163,184,0.08)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, border: { color: '#334155' } },
+                y: { grid: { display: false }, ticks: { color: '#e2e8f0', font: { size: 12, weight: '600' } }, border: { display: false } }
+            }
+        },
+        plugins: [{
+            id: 'barLabels',
+            afterDatasetsDraw(chart) {
+                const { ctx: c } = chart;
+                chart.data.datasets[0].data.forEach((v, i) => {
+                    const bar = chart.getDatasetMeta(0).data[i];
+                    c.save(); c.fillStyle = '#f1f5f9'; c.font = 'bold 11px sans-serif';
+                    c.textAlign = 'left'; c.textBaseline = 'middle';
+                    c.fillText(v.toFixed(1) + 'h', bar.x + 6, bar.y);
+                    c.restore();
+                });
+            }
+        }]
+    });
+}
+
+function renderSalaryDonut(employees) {
+    const withSalary = employees.filter(e => {
+        const sal = e.salary > 0 ? e.salary : (e.hours * (e.hourly_rate || 0));
+        return sal > 0;
+    }).sort((a, b) => {
+        const sa = a.salary > 0 ? a.salary : (a.hours * (a.hourly_rate || 0));
+        const sb = b.salary > 0 ? b.salary : (b.hours * (b.hourly_rate || 0));
+        return sb - sa;
+    });
+    if (!withSalary.length) return;
+    const salaries = withSalary.map(e => e.salary > 0 ? e.salary : (e.hours * (e.hourly_rate || 0)));
+    const total = salaries.reduce((s, v) => s + v, 0);
+    const ctx = document.getElementById('chart-salary');
+    if (salaryChart) salaryChart.destroy();
+    salaryChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: withSalary.map(e => e.name),
+            datasets: [{
+                data: salaries,
+                backgroundColor: withSalary.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            cutout: '60%',
+            plugins: {
+                legend: {
+                    position: 'right', rtl: true,
+                    labels: { color: '#e2e8f0', font: { size: 11 }, padding: 8, usePointStyle: true, pointStyleWidth: 8,
+                        generateLabels: chart => chart.data.labels.map((name, i) => {
+                            const val = chart.data.datasets[0].data[i];
+                            const pct = total > 0 ? ((val / total) * 100).toFixed(0) : 0;
+                            return { text: `${name} ${formatMoney(val)} (${pct}%)`, fillStyle: CHART_COLORS[i % CHART_COLORS.length], hidden: false, index: i };
+                        })
+                    }
+                },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: tip => {
+                            const val = tip.parsed;
+                            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+                            return ` ${tip.label}: ${formatMoney(val)} (${pct}%)`;
+                        }
+                    }
+                }
+            }
+        },
+        plugins: [{
+            id: 'centerText',
+            afterDraw(chart) {
+                const { ctx: c, width, height } = chart;
+                const cx = width / 2 - 20, cy = height / 2;
+                c.save(); c.textAlign = 'center'; c.textBaseline = 'middle';
+                c.fillStyle = '#f1f5f9'; c.font = 'bold 14px sans-serif';
+                c.fillText(formatMoney(total), cx, cy - 8);
+                c.fillStyle = '#94a3b8'; c.font = '11px sans-serif';
+                c.fillText('סה״כ שכר', cx, cy + 10);
+                c.restore();
+            }
+        }]
+    });
+}
+
+async function renderLaborChart() {
+    try {
+        const res = await fetch(`/api/labor-cost-ratio?branch_id=${BRANCH_ID}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const withData = data.filter(d => d.income > 0);
+        if (!withData.length) return;
+        document.getElementById('labor-chart-section').style.display = '';
+        const ctx = document.getElementById('chart-labor');
+        if (laborChart) laborChart.destroy();
+        laborChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: withData.map(d => { const [y, m] = d.month.split('-'); return `${parseInt(m)}/${y}`; }),
+                datasets: [{
+                    data: withData.map(d => d.ratio),
+                    borderColor: '#f59e0b',
+                    backgroundColor: 'rgba(245,158,11,0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 5,
+                    pointBackgroundColor: '#f59e0b',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        rtl: true,
+                        callbacks: {
+                            label: tip => {
+                                const d = withData[tip.dataIndex];
+                                return ` ${d.ratio}% (${formatMoney(d.salary)} / ${formatMoney(d.income)})`;
+                            }
+                        }
+                    },
+                    annotation: undefined
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 12 } }, border: { color: '#334155' } },
+                    y: {
+                        grid: { color: 'rgba(148,163,184,0.08)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + '%' },
+                        border: { color: '#334155' },
+                        beginAtZero: true
+                    }
+                }
+            },
+            plugins: [{
+                id: 'benchmarkLine',
+                beforeDraw(chart) {
+                    const yScale = chart.scales.y;
+                    const yPos = yScale.getPixelForValue(10);
+                    if (yPos < yScale.top || yPos > yScale.bottom) return;
+                    const { ctx: c } = chart;
+                    c.save();
+                    c.setLineDash([6, 4]);
+                    c.strokeStyle = 'rgba(239,68,68,0.5)';
+                    c.lineWidth = 1.5;
+                    c.beginPath();
+                    c.moveTo(chart.chartArea.left, yPos);
+                    c.lineTo(chart.chartArea.right, yPos);
+                    c.stroke();
+                    c.fillStyle = 'rgba(239,68,68,0.7)';
+                    c.font = '10px sans-serif';
+                    c.textAlign = 'left';
+                    c.fillText('שיעור מומלץ 10%', chart.chartArea.left + 4, yPos - 6);
+                    c.restore();
+                }
+            }]
+        });
+    } catch (err) { console.error('Labor chart error:', err); }
+}
 
 function showToast(msg, type) {
     const t = document.getElementById('toast');
@@ -391,6 +613,10 @@ async function loadEmployees() {
 
         // Cards
         renderCards(ALL_EMPLOYEES, d.csv_processed);
+
+        // Charts
+        renderHoursChart(ALL_EMPLOYEES);
+        renderSalaryDonut(ALL_EMPLOYEES);
 
         // History table
         if (d.history && d.history.length) {
@@ -740,5 +966,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal
 loadEmployees();
 loadPendingMatches();
 loadDiscrepancies();
+renderLaborChart();
 </script>
 {% endblock %}

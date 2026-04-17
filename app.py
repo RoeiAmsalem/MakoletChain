@@ -1070,6 +1070,8 @@ def api_employees_create():
     hourly_rate = float(data.get('hourly_rate', 0))
     if not name:
         return jsonify({'error': 'name required'}), 400
+    if hourly_rate < 0:
+        return jsonify({'error': 'hourly_rate must be non-negative'}), 400
     db = get_db()
     db.execute(
         "INSERT OR IGNORE INTO employees (branch_id, name, role, hourly_rate) VALUES (?, ?, ?, ?)",
@@ -1386,6 +1388,34 @@ def api_pending_add_new(pending_id):
     db.commit()
 
     return jsonify({'ok': True, 'employee_id': new_emp_id})
+
+
+@app.route('/api/labor-cost-ratio')
+@login_required
+def api_labor_cost_ratio():
+    """Return last 6 months of salary / income ratio."""
+    branch_id = get_branch_id()
+    db = get_db()
+    now = _now_il()
+    result = []
+    y, m = now.year, now.month
+    for _ in range(6):
+        m_str = f'{y:04d}-{m:02d}'
+        sal = _calculate_salary_cost(branch_id, m_str)
+        income_row = db.execute(
+            "SELECT COALESCE(SUM(amount), 0) as total FROM daily_sales "
+            "WHERE branch_id = ? AND strftime('%%Y-%%m', date) = ?",
+            (branch_id, m_str)).fetchone()
+        income = income_row['total'] if income_row else 0
+        salary = sal['amount']
+        ratio = round((salary / income) * 100, 2) if income > 0 else 0
+        result.append({'month': m_str, 'salary': salary, 'income': round(income, 2), 'ratio': ratio})
+        m -= 1
+        if m < 1:
+            m = 12
+            y -= 1
+    result.reverse()
+    return jsonify(result)
 
 
 @app.route('/api/employee-hours-discrepancies')
