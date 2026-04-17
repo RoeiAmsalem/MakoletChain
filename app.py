@@ -467,12 +467,13 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     is_current = current_month == _now_il().strftime('%Y-%m')
 
     # Current month: only API rows. Past months: all rows.
+    # Only include hours for ACTIVE employees (inactive employees excluded from salary).
     if is_current:
         rows = db.execute('''
             SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
                    e.hourly_rate, e.id as emp_id
             FROM employee_hours eh
-            LEFT JOIN employees e ON (
+            JOIN employees e ON (
                 e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
             )
             WHERE eh.branch_id = ? AND eh.month = ? AND eh.source = 'aviv_api'
@@ -482,7 +483,7 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
             SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
                    e.hourly_rate, e.id as emp_id
             FROM employee_hours eh
-            LEFT JOIN employees e ON (
+            JOIN employees e ON (
                 e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
             )
             WHERE eh.branch_id = ? AND eh.month = ?

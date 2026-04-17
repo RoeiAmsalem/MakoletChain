@@ -210,7 +210,7 @@
 
 <!-- History Table -->
 <section class="section-card">
-    <h2>היסטוריית שכר �� 6 חודשים אחרונים</h2>
+    <h2>היסטוריית שכר — 6 חודשים אחרונים</h2>
     <div style="overflow-x:auto">
         <table class="data-table" id="history-table">
             <thead>
@@ -313,7 +313,7 @@ document.getElementById('month-label').textContent = monthLabel;
 let ALL_EMPLOYEES = [];
 let hoursChart = null, salaryChart = null, laborChart = null;
 
-const CHART_COLORS = ['#22c55e','#6366f1','#f59e0b','#06b6d4','#ec4899','#8b5cf6','#14b8a6','#f43f5e','#84cc16','#a855f7'];
+const CHART_COLORS = ['#22c55e','#14b8a6','#06b6d4','#818cf8','#c084fc'];
 
 function renderHoursChart(employees) {
     const sorted = employees.filter(e => e.hours > 0).sort((a, b) => b.hours - a.hours);
@@ -321,16 +321,25 @@ function renderHoursChart(employees) {
     document.getElementById('charts-row').style.display = '';
     const ctx = document.getElementById('chart-hours');
     if (hoursChart) hoursChart.destroy();
+    const maxHours = Math.max(...sorted.map(e => e.hours));
     hoursChart = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: sorted.map(e => e.name),
             datasets: [{
                 data: sorted.map(e => e.hours),
-                backgroundColor: 'rgba(34,197,94,0.7)',
+                backgroundColor: (ctx2) => {
+                    const chart = ctx2.chart;
+                    const {ctx: c, chartArea} = chart;
+                    if (!chartArea) return 'rgba(34,197,94,0.7)';
+                    const grad = c.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+                    grad.addColorStop(0, 'rgba(34,197,94,0.5)');
+                    grad.addColorStop(1, 'rgba(34,197,94,0.85)');
+                    return grad;
+                },
                 borderColor: '#22c55e',
                 borderWidth: 1,
-                borderRadius: 4,
+                borderRadius: 6,
             }]
         },
         options: {
@@ -350,8 +359,18 @@ function renderHoursChart(employees) {
                 }
             },
             scales: {
-                x: { grid: { color: 'rgba(148,163,184,0.08)' }, ticks: { color: '#94a3b8', font: { size: 11 } }, border: { color: '#334155' } },
-                y: { grid: { display: false }, ticks: { color: '#e2e8f0', font: { size: 12, weight: '600' } }, border: { display: false } }
+                x: {
+                    beginAtZero: true,
+                    suggestedMax: maxHours * 1.08,
+                    grid: { color: 'rgba(148,163,184,0.08)' },
+                    ticks: { color: '#94a3b8', font: { size: 10 } },
+                    border: { color: '#334155' }
+                },
+                y: {
+                    grid: { display: false },
+                    ticks: { color: '#e2e8f0', font: { size: 12, weight: '600' } },
+                    border: { display: false }
+                }
             }
         },
         plugins: [{
@@ -360,9 +379,19 @@ function renderHoursChart(employees) {
                 const { ctx: c } = chart;
                 chart.data.datasets[0].data.forEach((v, i) => {
                     const bar = chart.getDatasetMeta(0).data[i];
-                    c.save(); c.fillStyle = '#f1f5f9'; c.font = 'bold 11px sans-serif';
-                    c.textAlign = 'left'; c.textBaseline = 'middle';
-                    c.fillText(v.toFixed(1) + 'h', bar.x + 6, bar.y);
+                    const barWidth = bar.x - chart.chartArea.left;
+                    const inside = barWidth > 60;
+                    c.save();
+                    c.fillStyle = inside ? '#fff' : '#f1f5f9';
+                    c.font = 'bold 11px sans-serif';
+                    c.textBaseline = 'middle';
+                    if (inside) {
+                        c.textAlign = 'right';
+                        c.fillText(v.toFixed(1) + 'h', bar.x - 6, bar.y);
+                    } else {
+                        c.textAlign = 'left';
+                        c.fillText(v.toFixed(1) + 'h', bar.x + 6, bar.y);
+                    }
                     c.restore();
                 });
             }
@@ -391,7 +420,8 @@ function renderSalaryDonut(employees) {
             datasets: [{
                 data: salaries,
                 backgroundColor: withSalary.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
-                borderWidth: 0
+                borderWidth: 0,
+                hoverOffset: 8
             }]
         },
         options: {
@@ -400,11 +430,13 @@ function renderSalaryDonut(employees) {
             plugins: {
                 legend: {
                     position: 'right', rtl: true,
-                    labels: { color: '#e2e8f0', font: { size: 11 }, padding: 8, usePointStyle: true, pointStyleWidth: 8,
+                    labels: {
+                        color: '#e2e8f0', font: { size: 13 }, padding: 12,
+                        usePointStyle: true, pointStyleWidth: 10,
                         generateLabels: chart => chart.data.labels.map((name, i) => {
                             const val = chart.data.datasets[0].data[i];
                             const pct = total > 0 ? ((val / total) * 100).toFixed(0) : 0;
-                            return { text: `${name} ${formatMoney(val)} (${pct}%)`, fillStyle: CHART_COLORS[i % CHART_COLORS.length], hidden: false, index: i };
+                            return { text: `${name} — ${formatMoney(val)} (${pct}%)`, fillStyle: CHART_COLORS[i % CHART_COLORS.length], hidden: false, index: i };
                         })
                     }
                 },
@@ -423,13 +455,15 @@ function renderSalaryDonut(employees) {
         plugins: [{
             id: 'centerText',
             afterDraw(chart) {
-                const { ctx: c, width, height } = chart;
-                const cx = width / 2 - 20, cy = height / 2;
+                const { ctx: c, chartArea } = chart;
+                if (!chartArea) return;
+                const cx = (chartArea.left + chartArea.right) / 2;
+                const cy = (chartArea.top + chartArea.bottom) / 2;
                 c.save(); c.textAlign = 'center'; c.textBaseline = 'middle';
-                c.fillStyle = '#f1f5f9'; c.font = 'bold 14px sans-serif';
-                c.fillText(formatMoney(total), cx, cy - 8);
-                c.fillStyle = '#94a3b8'; c.font = '11px sans-serif';
-                c.fillText('סה״כ שכר', cx, cy + 10);
+                c.fillStyle = '#f1f5f9'; c.font = 'bold 22px sans-serif';
+                c.fillText(formatMoney(total), cx, cy - 10);
+                c.fillStyle = '#94a3b8'; c.font = '12px sans-serif';
+                c.fillText('סה״כ שכר', cx, cy + 14);
                 c.restore();
             }
         }]
@@ -453,12 +487,22 @@ async function renderLaborChart() {
                 datasets: [{
                     data: withData.map(d => d.ratio),
                     borderColor: '#f59e0b',
-                    backgroundColor: 'rgba(245,158,11,0.1)',
+                    backgroundColor: (ctx2) => {
+                        const chart = ctx2.chart;
+                        const {ctx: c, chartArea} = chart;
+                        if (!chartArea) return 'rgba(245,158,11,0.1)';
+                        const grad = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+                        grad.addColorStop(0, 'rgba(245,158,11,0.25)');
+                        grad.addColorStop(1, 'rgba(245,158,11,0.02)');
+                        return grad;
+                    },
                     fill: true,
-                    tension: 0.3,
-                    pointRadius: 5,
+                    tension: 0.35,
+                    pointRadius: 6,
                     pointBackgroundColor: '#f59e0b',
-                    borderWidth: 2
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    borderWidth: 2.5
                 }]
             },
             options: {
@@ -468,17 +512,23 @@ async function renderLaborChart() {
                     tooltip: {
                         rtl: true,
                         callbacks: {
+                            title: tips => {
+                                const d = withData[tips[0].dataIndex];
+                                const [y, m] = d.month.split('-');
+                                const monthNames = ['','ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+                                return `${monthNames[parseInt(m)]} ${y}`;
+                            },
                             label: tip => {
                                 const d = withData[tip.dataIndex];
-                                return ` ${d.ratio}% (${formatMoney(d.salary)} / ${formatMoney(d.income)})`;
+                                return ` ${d.ratio}% — ${formatMoney(d.salary)} מתוך ${formatMoney(d.income)}`;
                             }
                         }
-                    },
-                    annotation: undefined
+                    }
                 },
                 scales: {
                     x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 12 } }, border: { color: '#334155' } },
                     y: {
+                        title: { display: true, text: '% שכר/הכנסות', color: '#64748b', font: { size: 11 } },
                         grid: { color: 'rgba(148,163,184,0.08)' },
                         ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + '%' },
                         border: { color: '#334155' },
@@ -506,6 +556,22 @@ async function renderLaborChart() {
                     c.textAlign = 'left';
                     c.fillText('שיעור מומלץ 10%', chart.chartArea.left + 4, yPos - 6);
                     c.restore();
+                }
+            }, {
+                id: 'valueLabels',
+                afterDatasetsDraw(chart) {
+                    const { ctx: c } = chart;
+                    const meta = chart.getDatasetMeta(0);
+                    meta.data.forEach((point, i) => {
+                        const val = withData[i].ratio;
+                        c.save();
+                        c.fillStyle = '#f59e0b';
+                        c.font = 'bold 11px sans-serif';
+                        c.textAlign = 'center';
+                        c.textBaseline = 'bottom';
+                        c.fillText(val + '%', point.x, point.y - 10);
+                        c.restore();
+                    });
                 }
             }]
         });
