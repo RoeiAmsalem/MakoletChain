@@ -833,9 +833,9 @@ def api_sales_by_hour():
     ).fetchone()[0]
 
     stats = {
-        'peak_bucket': f"{peak['label']}–{peak['end']}" if peak else None,
+        'peak_bucket': f"\u200E{peak['label']}–{peak['end']}" if peak else None,
         'peak_total': peak['total'] if peak else 0,
-        'quiet_bucket': f"{quiet['label']}–{quiet['end']}" if quiet else None,
+        'quiet_bucket': f"\u200E{quiet['label']}–{quiet['end']}" if quiet else None,
         'quiet_total': quiet['total'] if quiet else 0,
         'hourly_avg': hourly_avg,
         'total_days_data': days_with_data,
@@ -1320,12 +1320,17 @@ def api_pending_add_new(pending_id):
         "VALUES (?, ?, ?, ?, ?, ?)",
         (branch_id, row['month'], name, hours, salary, source))
 
-    # Create alias if manager changed the name (for future auto-matching)
-    csv_name = row['csv_name']
-    if csv_name and csv_name.strip() != name:
+    # Always create alias for the original Aviv/CSV name (prevents re-flagging)
+    csv_name = (row['csv_name'] or '').strip()
+    if csv_name:
         db.execute(
             'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
-            (new_emp_id, csv_name.strip(), branch_id))
+            (new_emp_id, csv_name, branch_id))
+        # If manager changed the name, also save the final name as alias
+        if csv_name != name:
+            db.execute(
+                'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
+                (new_emp_id, name, branch_id))
 
     db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (pending_id,))
     _recalculate_avg_rate(branch_id, db)
