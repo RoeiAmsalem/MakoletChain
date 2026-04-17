@@ -1332,12 +1332,27 @@ def api_pending_add_new(pending_id):
     except (IndexError, KeyError):
         pass
 
-    # Create new employee
-    cur = db.execute(
-        'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id) '
-        'VALUES (?, ?, ?, ?, 1, ?)',
-        (branch_id, name, hourly_rate, role, aviv_emp_id))
-    new_emp_id = cur.lastrowid
+    # Check if employee with this name already exists (possibly inactive)
+    existing = db.execute(
+        'SELECT id, active FROM employees WHERE branch_id = ? AND name = ?',
+        (branch_id, name)).fetchone()
+
+    if existing and existing['active']:
+        return jsonify({'error': f'עובד/ת בשם {name} כבר קיים/ת ופעיל/ה'}), 409
+
+    if existing:
+        # Reactivate inactive employee with updated details
+        new_emp_id = existing['id']
+        db.execute(
+            'UPDATE employees SET hourly_rate = ?, role = ?, active = 1, aviv_employee_id = ? '
+            'WHERE id = ?',
+            (hourly_rate, role, aviv_emp_id, new_emp_id))
+    else:
+        cur = db.execute(
+            'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id) '
+            'VALUES (?, ?, ?, ?, 1, ?)',
+            (branch_id, name, hourly_rate, role, aviv_emp_id))
+        new_emp_id = cur.lastrowid
 
     # Save hours
     hours = row['hours']
