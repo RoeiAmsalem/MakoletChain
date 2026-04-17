@@ -98,15 +98,70 @@
     .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
 
     /* Chart info tooltips */
-    .chart-info { position: relative; display: inline-block; cursor: help; color: #64748b; font-size: 1.1rem; margin-inline-start: 0.5rem; vertical-align: middle; }
-    .chart-info:hover::after {
+    .chart-info { position: relative; display: inline-block; cursor: pointer; color: #64748b; font-size: 1.1rem; margin-inline-start: 0.5rem; vertical-align: middle; }
+    .chart-info::after {
         content: attr(data-tooltip);
-        position: absolute; top: 100%; left: 0; margin-top: 0.5rem;
+        position: absolute; top: 100%; inset-inline-start: 0; margin-top: 0.5rem;
         background: #1e293b; border: 1px solid #475569; border-radius: 8px;
         padding: 0.75rem 1rem; font-size: 0.85rem; color: #e2e8f0;
-        white-space: normal; width: 280px; z-index: 100;
+        white-space: normal; width: min(280px, calc(100vw - 2rem)); z-index: 100;
         box-shadow: 0 4px 12px rgba(0,0,0,0.4);
         line-height: 1.5; text-align: right; direction: rtl; font-weight: 400;
+        display: none;
+    }
+    .chart-info:hover::after, .chart-info.open::after { display: block; }
+
+    /* ── Mobile optimizations ── */
+    @media (max-width: 768px) {
+        /* Pattern A — page wrapper */
+        h2 { font-size: 1.05rem !important; }
+
+        /* Pattern B — KPI tiles */
+        .emp-kpi-grid { grid-template-columns: repeat(3, 1fr) !important; gap: 0.5rem; }
+        .emp-kpi { padding: 0.75rem !important; }
+        .emp-kpi-value { font-size: 1.2rem !important; }
+        .emp-kpi-label { font-size: 0.68rem !important; }
+        .emp-kpi-sub { font-size: 0.7rem !important; }
+
+        /* Pattern G — employee card grid */
+        .emp-grid { grid-template-columns: 1fr !important; gap: 0.75rem; }
+        .emp-card { padding: 0.75rem !important; }
+        .emp-card-add { min-height: 60px !important; }
+
+        /* Pattern H — tap targets */
+        .btn-sm { min-height: 44px; min-width: 44px; padding: 0.5rem 0.75rem !important; font-size: 0.85rem !important; touch-action: manipulation; }
+        .btn-approve, .btn-reject, .btn-new { min-height: 44px; padding: 0.5rem 0.75rem !important; font-size: 0.82rem !important; touch-action: manipulation; }
+        .btn-primary, .btn-cancel { min-height: 44px; font-size: 0.9rem !important; touch-action: manipulation; }
+
+        /* Pattern F — modals */
+        .modal-box { max-height: 95vh; }
+        .form-group input, .form-group select { font-size: 16px !important; }
+
+        /* Pending rows — stack on mobile */
+        .pending-row { flex-direction: column; align-items: stretch !important; gap: 0.5rem; }
+        .pending-info { min-width: unset !important; }
+        .pending-actions { justify-content: flex-start; }
+        .pending-arrow { display: none; }
+
+        /* Banners — stack button rows */
+        #unknown-list > div, #csv-only-list > div, #disc-list > div {
+            flex-direction: column !important;
+            align-items: stretch !important;
+        }
+        #unknown-list > div > div:last-child,
+        #csv-only-list > div > div:last-child,
+        #disc-list > div > div:last-child {
+            display: flex; gap: 0.5rem;
+        }
+        #unknown-list button, #csv-only-list button, #disc-list button {
+            flex: 1; min-height: 44px; font-size: 0.85rem !important;
+        }
+
+        /* History table scrollable */
+        .data-table { min-width: 500px; }
+
+        /* Donut center text smaller on mobile */
+        #chart-salary { max-height: 250px; }
     }
 </style>
 {% endblock %}
@@ -326,6 +381,7 @@ let ALL_EMPLOYEES = [];
 let hoursChart = null, salaryChart = null, laborChart = null;
 
 const CHART_COLORS = ['#22c55e','#14b8a6','#06b6d4','#818cf8','#c084fc'];
+const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
 function renderHoursChart(employees) {
     const sorted = employees.filter(e => e.hours > 0).sort((a, b) => b.hours - a.hours);
@@ -380,7 +436,7 @@ function renderHoursChart(employees) {
                 },
                 y: {
                     grid: { display: false },
-                    ticks: { color: '#e2e8f0', font: { size: 12, weight: '600' } },
+                    ticks: { color: '#e2e8f0', font: { size: isMobile() ? 10 : 12, weight: '600' } },
                     border: { display: false }
                 }
             }
@@ -441,10 +497,13 @@ function renderSalaryDonut(employees) {
             cutout: '60%',
             plugins: {
                 legend: {
-                    position: 'right', rtl: true,
+                    position: isMobile() ? 'bottom' : 'right', rtl: true,
                     labels: {
-                        color: '#ffffff', font: { size: 16, weight: '600' }, padding: 14,
-                        boxWidth: 18, boxHeight: 18,
+                        color: '#ffffff',
+                        font: { size: isMobile() ? 12 : 16, weight: '600' },
+                        padding: isMobile() ? 8 : 14,
+                        boxWidth: isMobile() ? 12 : 18,
+                        boxHeight: isMobile() ? 12 : 18,
                         usePointStyle: true,
                         generateLabels: chart => chart.data.labels.map((name, i) => {
                             const val = chart.data.datasets[0].data[i];
@@ -473,10 +532,11 @@ function renderSalaryDonut(employees) {
                 const cx = (chartArea.left + chartArea.right) / 2;
                 const cy = (chartArea.top + chartArea.bottom) / 2;
                 c.save(); c.textAlign = 'center'; c.textBaseline = 'middle';
-                c.fillStyle = '#ffffff'; c.font = 'bold 22px sans-serif';
-                c.fillText(formatMoney(total), cx, cy - 10);
-                c.fillStyle = '#cbd5e1'; c.font = '12px sans-serif';
-                c.fillText('סה״כ שכר', cx, cy + 14);
+                const mob = isMobile();
+                c.fillStyle = '#ffffff'; c.font = mob ? 'bold 16px sans-serif' : 'bold 22px sans-serif';
+                c.fillText(formatMoney(total), cx, cy - (mob ? 8 : 10));
+                c.fillStyle = '#cbd5e1'; c.font = mob ? '10px sans-serif' : '12px sans-serif';
+                c.fillText('סה״כ שכר', cx, cy + (mob ? 10 : 14));
                 c.restore();
             }
         }]
@@ -1042,6 +1102,19 @@ async function resolveDisc(id, choice) {
 }
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeNewModal(); } });
+
+// Click-toggle tooltips for mobile (Pattern I)
+document.addEventListener('click', e => {
+    const info = e.target.closest('.chart-info');
+    if (info) {
+        e.stopPropagation();
+        document.querySelectorAll('.chart-info.open').forEach(o => { if (o !== info) o.classList.remove('open'); });
+        info.classList.toggle('open');
+    } else {
+        document.querySelectorAll('.chart-info.open').forEach(el => el.classList.remove('open'));
+    }
+});
+
 loadEmployees();
 loadPendingMatches();
 loadDiscrepancies();
