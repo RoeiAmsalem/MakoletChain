@@ -29,8 +29,18 @@
     .success-banner { background:rgba(34,197,94,0.15); border:1px solid rgba(34,197,94,0.3); border-radius:8px; padding:0.75rem 1rem; color:#86efac; font-size:0.9rem; font-weight:600; margin-bottom:1rem; display:none; }
     .edit-row input { background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:4px; padding:0.25rem 0.4rem; color:var(--text-primary); font-size:0.82rem; width:100%; font-family:inherit; }
     @media (max-width: 768px) {
-        .form-grid { grid-template-columns:1fr; }
-        .branch-table { font-size:0.78rem; }
+        .admin-container { padding: 0.75rem; }
+        .admin-header h1 { font-size: 1.25rem; }
+        .admin-section { padding: 1rem; }
+        .admin-section h2 { font-size: 1rem; }
+        .form-grid { grid-template-columns: 1fr; }
+        .form-group input, .form-group textarea, .form-group select { font-size: 16px !important; }
+        .branch-table { font-size: 0.75rem; }
+        .branch-table th, .branch-table td { padding: 0.4rem 0.3rem; }
+        .btn-sm { min-height: 40px; min-width: 44px; padding: 0.4rem 0.75rem; touch-action: manipulation; }
+        .btn-submit { min-height: 44px; width: 100%; touch-action: manipulation; }
+        #edit-overlay > div { max-height: 90vh; overflow-y: auto; padding: 1.25rem !important; }
+        #edit-overlay input, #edit-overlay textarea, #edit-overlay select { font-size: 16px !important; }
     }
 </style>
 {% endblock %}
