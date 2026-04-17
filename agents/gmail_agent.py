@@ -495,11 +495,27 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     has_api_data = len(api_rows) > 0
     api_hours_map = {r['employee_name']: r['total_hours'] for r in api_rows}
 
+    # Ensure is_csv_only column exists on employee_match_pending
+    try:
+        conn.execute("ALTER TABLE employee_match_pending ADD COLUMN is_csv_only INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
+    # Ensure verified_by_csv column exists on employee_hours
+    try:
+        conn.execute("ALTER TABLE employee_hours ADD COLUMN verified_by_csv INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+
     total_hours_all = sum(e['total_hours'] for e in employees)
     matched_count = 0
     discrepancy_count = 0
+    csv_only_count = 0
     saved_count = 0
     pending_count = 0
+    csv_matched_api_names = set()  # track which API employees were found in CSV
 
     for emp in employees:
         emp_id, confidence, matched_name, rate = _match_employee_name(
@@ -512,9 +528,10 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
                 # CSV is VERIFICATION — compare with existing API hours
                 api_hours = api_hours_map.get(matched_name, None)
                 if api_hours is not None:
+                    csv_matched_api_names.add(matched_name)
                     diff = abs(api_hours - emp['total_hours'])
                     if diff > 0.5:
-                        # Discrepancy found
+                        # Case 1b: Discrepancy
                         conn.execute(
                             "INSERT INTO employee_hours_discrepancies "
                             "(branch_id, month, employee_id, employee_name, api_hours, csv_hours, difference) "
@@ -526,20 +543,28 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
                         log.warning("  DISCREPANCY %s: API=%.1fh CSV=%.1fh diff=%.1fh",
                                     matched_name, api_hours, emp['total_hours'], diff)
                     else:
+                        # Case 1a: Match — mark verified
+                        conn.execute(
+                            "UPDATE employee_hours SET verified_by_csv = 1 "
+                            "WHERE branch_id = ? AND month = ? AND employee_name = ?",
+                            (branch_id, report_month, matched_name)
+                        )
                         matched_count += 1
                         log.info("  MATCH %s: API=%.1fh CSV=%.1fh (within tolerance)",
                                  matched_name, api_hours, emp['total_hours'])
                 else:
-                    # No API data for this employee — save CSV as source
+                    # Case 2: CSV employee NOT in API — flag as csv_only pending
                     conn.execute(
-                        "INSERT OR REPLACE INTO employee_hours "
-                        "(branch_id, month, employee_name, total_hours, total_salary, source) "
-                        "VALUES (?, ?, ?, ?, ?, 'csv')",
-                        (branch_id, report_month, matched_name, emp['total_hours'], salary)
+                        "INSERT INTO employee_match_pending "
+                        "(branch_id, month, csv_name, suggested_employee_id, confidence, "
+                        "hours, salary, is_new_employee, is_csv_only, source) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, 'csv')",
+                        (branch_id, report_month, matched_name, emp_id, confidence,
+                         emp['total_hours'], salary)
                     )
-                    saved_count += 1
-                    log.info("  %s → saved from CSV (no API data), %.1fh",
-                             matched_name, emp['total_hours'])
+                    csv_only_count += 1
+                    log.warning("  CSV-ONLY %s: %.1fh (not in API, pending manager approval)",
+                                matched_name, emp['total_hours'])
             else:
                 # No API data at all — save CSV as source of truth (old behavior)
                 conn.execute(
@@ -564,18 +589,42 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
             pending_count += 1
             log.warning("  %s → PENDING (%s, suggested: %s)", emp['name'], confidence, matched_name)
 
+    # Case 3: API employees NOT in CSV
+    api_only_names = []
+    if has_api_data:
+        for api_name in api_hours_map:
+            if api_name not in csv_matched_api_names:
+                api_only_names.append(api_name)
+                log.warning("  API-ONLY %s: %.1fh in API but not in CSV",
+                            api_name, api_hours_map[api_name])
+
     conn.commit()
     conn.close()
 
     # Notification
     branch_label = branch.get('name', f'Branch {branch_id}')
     if has_api_data:
-        result_msg = (f"End-of-month verification {report_month}: "
-                      f"{matched_count} employees matched, {discrepancy_count} discrepancies found")
-        if discrepancy_count > 0:
+        parts = [f"{matched_count} matched"]
+        if discrepancy_count:
+            parts.append(f"{discrepancy_count} discrepancies")
+        if csv_only_count:
+            parts.append(f"{csv_only_count} CSV-only (pending)")
+        if api_only_names:
+            parts.append(f"{len(api_only_names)} API-only")
+        detail = ', '.join(parts)
+        result_msg = f"End-of-month verification {report_month}: {detail}"
+
+        if discrepancy_count > 0 or csv_only_count > 0 or api_only_names:
+            msg_parts = []
+            if discrepancy_count:
+                msg_parts.append(f"{discrepancy_count} hour discrepancies")
+            if csv_only_count:
+                msg_parts.append(f"{csv_only_count} employees in CSV but not in API")
+            if api_only_names:
+                names_str = ', '.join(api_only_names[:5])
+                msg_parts.append(f"API-only employees not in CSV: {names_str}")
             notify(f"CSV Verification — {branch_label}",
-                   f"{matched_count} matched, {discrepancy_count} discrepancies found for {report_month}. "
-                   f"Review on the employees page.")
+                   f"{report_month}: {'. '.join(msg_parts)}. Review on the employees page.")
         else:
             notify(f"CSV Verification — {branch_label}",
                    f"All {matched_count} employees matched API data for {report_month}.")

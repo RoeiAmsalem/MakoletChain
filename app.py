@@ -70,6 +70,8 @@ def _migrate_add_columns(conn):
         ('employee_match_pending', 'aviv_employee_id', 'INTEGER'),
         ('employee_match_pending', 'source', "TEXT DEFAULT 'csv'"),
         ('employee_match_pending', 'is_new_employee', 'INTEGER DEFAULT 0'),
+        ('employee_match_pending', 'is_csv_only', 'INTEGER DEFAULT 0'),
+        ('employee_hours', 'verified_by_csv', 'INTEGER DEFAULT 0'),
     ]
     for table, col, col_type in migrations:
         try:
@@ -452,23 +454,36 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     """Single source of truth for salary calculation.
     Used by both /employees page and /api/summary.
 
-    API hours are the source of truth. CSV is verification only.
+    Current month: ONLY source='aviv_api' rows count.
+    Past months: all sources count.
     Salary = SUM(employee_hours.total_hours × employees.hourly_rate) for the month.
 
     Returns {'amount', 'source', 'hours', 'label'}
     """
     db = get_db()
+    is_current = current_month == _now_il().strftime('%Y-%m')
 
-    # Query all employee_hours for the month, joined with employees for rate
-    rows = db.execute('''
-        SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
-               e.hourly_rate, e.id as emp_id
-        FROM employee_hours eh
-        LEFT JOIN employees e ON (
-            e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
-        )
-        WHERE eh.branch_id = ? AND eh.month = ?
-    ''', (branch_id, current_month)).fetchall()
+    # Current month: only API rows. Past months: all rows.
+    if is_current:
+        rows = db.execute('''
+            SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
+                   e.hourly_rate, e.id as emp_id
+            FROM employee_hours eh
+            LEFT JOIN employees e ON (
+                e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
+            )
+            WHERE eh.branch_id = ? AND eh.month = ? AND eh.source = 'aviv_api'
+        ''', (branch_id, current_month)).fetchall()
+    else:
+        rows = db.execute('''
+            SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
+                   e.hourly_rate, e.id as emp_id
+            FROM employee_hours eh
+            LEFT JOIN employees e ON (
+                e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
+            )
+            WHERE eh.branch_id = ? AND eh.month = ?
+        ''', (branch_id, current_month)).fetchall()
 
     if not rows:
         return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
@@ -479,7 +494,6 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     for r in rows:
         hours = r['total_hours'] or 0
         rate = r['hourly_rate'] or 0
-        # Use stored salary if available, otherwise compute from rate
         salary = round(hours * rate, 2) if rate > 0 else (r['total_salary'] or 0)
         total_salary += salary
         total_hours += hours
@@ -488,8 +502,6 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     # Determine source label
     has_api = 'aviv_api' in sources
     has_csv = 'csv' in sources
-    # Check if CSV verified (discrepancies table)
-    csv_verified = False
     if has_api and has_csv:
         source = 'api+csv'
     elif has_csv:
@@ -848,12 +860,21 @@ def api_employees_list():
     ).fetchall()
     employees = [dict(r) for r in emp_rows]
 
-    # CSV hours for this month from employee_hours
-    hours_rows = db.execute(
-        "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
-        "WHERE branch_id = ? AND month = ?",
-        (branch_id, month)
-    ).fetchall()
+    # Hours for this month from employee_hours
+    # Current month: only API-sourced rows. Past months: all sources.
+    is_current_month = (month == _now_il().strftime('%Y-%m'))
+    if is_current_month:
+        hours_rows = db.execute(
+            "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
+            "WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
+            (branch_id, month)
+        ).fetchall()
+    else:
+        hours_rows = db.execute(
+            "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
+            "WHERE branch_id = ? AND month = ?",
+            (branch_id, month)
+        ).fetchall()
     hours_map = {r['employee_name']: dict(r) for r in hours_rows}
     csv_processed = len(hours_map) > 0
 
@@ -904,11 +925,19 @@ def api_employees_list():
         y, m2 = start_y, start_m
         while (y, m2) <= (end_y, end_m):
             m_str = f'{y:04d}-{m2:02d}'
-            h_row = db.execute(
-                "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-                "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ?",
-                (branch_id, m_str)
-            ).fetchone()
+            is_cur = (m_str == _now_il().strftime('%Y-%m'))
+            if is_cur:
+                h_row = db.execute(
+                    "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
+                    "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
+                    (branch_id, m_str)
+                ).fetchone()
+            else:
+                h_row = db.execute(
+                    "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
+                    "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ?",
+                    (branch_id, m_str)
+                ).fetchone()
             h_hours = h_row['hours']
             h_salary = h_row['salary']
             # Determine source from actual data
@@ -1109,6 +1138,7 @@ def api_employee_match_pending():
                p.hours, p.salary, p.month, p.aviv_employee_id,
                COALESCE(p.source, 'csv') as source,
                COALESCE(p.is_new_employee, 0) as is_new_employee,
+               COALESCE(p.is_csv_only, 0) as is_csv_only,
                e.name as suggested_name, e.hourly_rate as suggested_rate
         FROM employee_match_pending p
         LEFT JOIN employees e ON e.id = p.suggested_employee_id

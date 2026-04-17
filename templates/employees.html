@@ -157,6 +157,22 @@
   <div id="disc-list"></div>
 </div>
 
+<!-- CSV-Only Employees Banner -->
+<div id="csv-only-banner" style="display:none; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.3); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.25rem;">
+  <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem;">
+    <span style="font-size:1.25rem;">&#128203;</span>
+    <div>
+      <div style="font-weight:700; color:#a5b4fc;">
+        <span id="csv-only-count">0</span> עובדים ב-CSV לא נמצאו ב-API
+      </div>
+      <div style="font-size:0.85rem; color:#c7d2fe;">
+        עובדים אלו מופיעים ב-CSV אך לא באביב API לחודש הזה. לאשר?
+      </div>
+    </div>
+  </div>
+  <div id="csv-only-list"></div>
+</div>
+
 <!-- Employee Cards Grid -->
 <section class="emp-grid" id="emp-grid">
     <div class="loading" style="grid-column:1/-1"><div class="spinner"></div><span>טוען...</span></div>
@@ -487,9 +503,37 @@ async function loadPendingMatches() {
         const allPending = d.pending || [];
         const allEmps = d.employees || [];
 
-        // Separate unknown (new) employees from low-confidence matches
-        const unknowns = allPending.filter(p => p.is_new_employee);
-        const pending = allPending.filter(p => !p.is_new_employee);
+        // Separate unknown (new), csv-only, and low-confidence matches
+        const unknowns = allPending.filter(p => p.is_new_employee && !p.is_csv_only);
+        const csvOnly = allPending.filter(p => p.is_csv_only);
+        const pending = allPending.filter(p => !p.is_new_employee && !p.is_csv_only);
+
+        // Blue banner for CSV-only employees
+        const csvBanner = document.getElementById('csv-only-banner');
+        if (csvOnly.length) {
+            csvBanner.style.display = '';
+            document.getElementById('csv-only-count').textContent = csvOnly.length;
+            document.getElementById('csv-only-list').innerHTML = csvOnly.map(p => {
+                return `<div id="pending-${p.id}" style="background:rgba(99,102,241,0.05); border:1px solid rgba(99,102,241,0.2); border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.5rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
+                  <div>
+                    <div style="font-weight:600; color:white;">${p.csv_name}</div>
+                    <div style="font-size:0.8rem; color:#94a3b8;">${p.hours.toFixed(1)} שעות · CSV בלבד (לא ב-API)</div>
+                  </div>
+                  <div style="display:flex; gap:0.5rem;">
+                    <button onclick="approvePending(${p.id})"
+                            style="padding:0.5rem 1rem; background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.4); border-radius:6px; color:#86efac; font-weight:600; cursor:pointer; font-family:inherit; font-size:0.85rem;">
+                      אשר שעות
+                    </button>
+                    <button onclick="rejectPending(${p.id})"
+                            style="padding:0.5rem 0.75rem; background:transparent; border:1px solid #475569; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; font-size:0.85rem;">
+                      התעלם
+                    </button>
+                  </div>
+                </div>`;
+            }).join('');
+        } else {
+            csvBanner.style.display = 'none';
+        }
 
         // RED banner for unknowns
         const banner = document.getElementById('unknown-banner');
