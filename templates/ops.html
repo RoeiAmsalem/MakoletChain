@@ -96,10 +96,63 @@
     .toast.error { background:#7f1d1d; color:#fca5a5; border:1px solid rgba(239,68,68,0.3); }
 
     @media (max-width: 768px) {
+        /* Layout */
+        .ops-container { padding: 0.75rem !important; }
+        .ops-header { flex-direction:column; gap:0.75rem; align-items:stretch; }
+        .ops-header h1 { font-size: 1.2rem !important; }
+        .ops-header > div { display:flex; gap:0.5rem; }
+        .ops-header > div > button { flex:1; min-height:44px; }
+
+        /* Summary bar — hide separators, tighter layout */
+        .summary-bar { font-size:0.8rem; gap:0.5rem 1rem; padding:0.6rem 0.75rem; }
+        .summary-bar .sep { display:none; }
+
+        /* Branch cards */
         .branch-grid { grid-template-columns:1fr; }
-        .health-grid { grid-template-columns:repeat(2, 1fr); }
-        .ops-header { flex-direction:column; gap:0.75rem; align-items:flex-start; }
-        .summary-bar { font-size:0.8rem; gap:0.75rem; }
+        .branch-card { padding:1rem !important; }
+
+        /* Agent rows — allow message to wrap */
+        .agent-row { flex-wrap:wrap; gap:0.4rem; }
+        .agent-msg { white-space:normal !important; min-width:0; }
+        .agent-name { min-width:60px; font-size:0.82rem; }
+        .agent-time { font-size:0.7rem; }
+
+        /* Branch action buttons — 2-column grid for tap targets */
+        .branch-actions { display:grid !important; grid-template-columns:1fr 1fr; gap:0.4rem; }
+        .btn-action { min-height:44px; padding:0.5rem 0.5rem !important; font-size:0.82rem !important; text-align:center; touch-action:manipulation; }
+
+        /* Timeline — stack on mobile */
+        .timeline-row { flex-wrap:wrap; gap:0.3rem 0.5rem; padding:0.5rem; }
+        .timeline-time { min-width:unset; font-size:0.72rem; order:3; }
+        .timeline-branch { min-width:unset; font-size:0.85rem; }
+        .timeline-agent { min-width:unset; font-size:0.82rem; }
+        .timeline-msg { flex-basis:100%; white-space:normal !important; font-size:0.8rem; }
+
+        /* Alerts — dismiss button tap target */
+        .alert-row { flex-wrap:wrap; gap:0.4rem; }
+        .alert-dismiss { min-width:44px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
+        .alert-msg { font-size:0.82rem; }
+
+        /* Health grid */
+        .health-grid { grid-template-columns:repeat(2, 1fr); gap:0.5rem; }
+        .health-card { padding:0.75rem; }
+        .health-value { font-size:1rem; }
+        .health-label { font-size:0.72rem; }
+
+        /* Modals — prevent iOS zoom on inputs */
+        .modal-box { max-width:100%; max-height:95vh; }
+        .modal-box input, .modal-box textarea, .modal-box select { font-size:16px !important; }
+        .modal-body { padding:0.75rem 1rem; }
+
+        /* Add branch form inputs */
+        #add-branch-form input, #add-branch-form textarea, #add-branch-form select { font-size:16px !important; }
+        #submit-branch-btn { min-height:44px; width:100%; }
+
+        /* Section headings */
+        .section-card h2 { font-size:1rem !important; }
+
+        /* Refresh button */
+        .btn-refresh { min-height:44px; touch-action:manipulation; }
     }
 </style>
 {% endblock %}
