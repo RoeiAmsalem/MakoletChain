@@ -285,7 +285,7 @@ async function loadHourlyChart() {
               const bar = chart.getDatasetMeta(0).data[i];
               c.save();
               c.fillStyle = '#f1f5f9';
-              c.font = '700 12px system-ui, sans-serif';
+              c.font = 'bold 13px sans-serif';
               c.textAlign = 'center';
               c.textBaseline = 'bottom';
               const label = v >= 1000 ? '₪' + (v/1000).toFixed(1) + 'K' : '₪' + Math.round(v);
@@ -322,7 +322,7 @@ async function loadHourlyChart() {
             offset: true,
             ticks: {
               color: '#e2e8f0',
-              font: { size: 13, weight: '700' },
+              font: { size: 14, weight: '700' },
               padding: 6,
               maxRotation: 0,
               minRotation: 0,

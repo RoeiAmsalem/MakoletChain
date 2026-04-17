@@ -680,7 +680,10 @@ async function saveNewFromPending() {
         const ct = res.headers.get('content-type') || '';
         if (!ct.includes('application/json')) {
             if (res.status === 401 || res.redirected) { window.location.href = '/login'; return; }
-            showToast(`שגיאה מהשרת (${res.status})`, 'error'); return;
+            if (res.status === 404) { showToast('הכתובת לא נמצאה בשרת — ייתכן שפעולה זו טרם הוטמעה.', 'error'); }
+            else { showToast(`שגיאה מהשרת (${res.status}). פרטים בקונסול.`, 'error'); }
+            const text = await res.text(); console.error('Non-JSON response:', res.status, text.substring(0, 200));
+            return;
         }
         const d = await res.json();
         if (!res.ok) { showToast(d.error || 'שגיאה', 'error'); return; }
