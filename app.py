@@ -1394,28 +1394,32 @@ def api_pending_add_new(pending_id):
 @app.route('/api/labor-cost-ratio')
 @login_required
 def api_labor_cost_ratio():
-    """Return last 6 months of salary / income ratio."""
+    """Return labor cost ratio for months with real data (income or goods)."""
     branch_id = get_branch_id()
     db = get_db()
-    now = _now_il()
+
+    # Only months with real data — same logic as history table
+    months_rows = db.execute('''
+        SELECT DISTINCT m FROM (
+            SELECT strftime('%Y-%m', date) as m FROM daily_sales WHERE branch_id = ?
+            UNION
+            SELECT strftime('%Y-%m', doc_date) as m FROM goods_documents WHERE branch_id = ?
+        ) ORDER BY m DESC LIMIT 6
+    ''', (branch_id, branch_id)).fetchall()
+
+    months = sorted([r['m'] for r in months_rows if r['m']])
     result = []
-    y, m = now.year, now.month
-    for _ in range(6):
-        m_str = f'{y:04d}-{m:02d}'
+    for m_str in months:
         sal = _calculate_salary_cost(branch_id, m_str)
         income_row = db.execute(
             "SELECT COALESCE(SUM(amount), 0) as total FROM daily_sales "
-            "WHERE branch_id = ? AND strftime('%%Y-%%m', date) = ?",
+            "WHERE branch_id = ? AND strftime('%Y-%m', date) = ?",
             (branch_id, m_str)).fetchone()
         income = income_row['total'] if income_row else 0
         salary = sal['amount']
         ratio = round((salary / income) * 100, 2) if income > 0 else 0
-        result.append({'month': m_str, 'salary': salary, 'income': round(income, 2), 'ratio': ratio})
-        m -= 1
-        if m < 1:
-            m = 12
-            y -= 1
-    result.reverse()
+        result.append({'month': m_str, 'salary': round(salary, 2), 'income': round(income, 2), 'ratio': ratio})
+
     return jsonify(result)
 
 
