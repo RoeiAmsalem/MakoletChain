@@ -5,6 +5,9 @@ import urllib.parse
 
 def notify(title: str, message: str):
     """Send push notification to Roei's phone via brrr."""
+    if os.getenv('BRRR_SILENT', 'false').lower() == 'true':
+        print(f"[brrr] BRRR_SILENT=true — skipping: {title}")
+        return
     brrr_url = os.getenv('BRRR_URL', '')
     if not brrr_url:
         return

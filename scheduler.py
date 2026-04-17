@@ -240,6 +240,11 @@ scheduler.add_job(
 
 
 if __name__ == '__main__':
+    if os.getenv('ENABLE_AGENTS', 'true').lower() == 'false':
+        log.info('[scheduler] ENABLE_AGENTS=false — skipping all agent scheduling')
+        import sys
+        sys.exit(0)
+
     init_db()
     cleanup_orphaned_runs()
     log.info('MakoletChain scheduler started')
