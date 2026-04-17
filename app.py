@@ -797,7 +797,7 @@ def api_live_sales():
 @app.route('/api/sales-by-hour')
 @login_required
 def api_sales_by_hour():
-    """Return revenue breakdown by hour from hourly_sales table."""
+    """Return revenue breakdown by hour + 2-hour buckets from hourly_sales table."""
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
@@ -811,15 +811,66 @@ def api_sales_by_hour():
     ).fetchall()
 
     rows_by_hour = {r['hour']: r for r in rows}
-    result = []
+    hourly = []
     for h in range(24):
         row = rows_by_hour.get(h)
-        result.append({
+        hourly.append({
             'hour': h,
             'total': round(float(row['total']), 2) if row else 0,
             'count': int(row['count']) if row else 0,
         })
-    return jsonify(result)
+
+    # 2-hour buckets aligned to 6:30 opening
+    # Map integer hours to bucket indices:
+    # bucket 0 (6:30-8:30) ← hours 7,8
+    # bucket 1 (8:30-10:30) ← hours 9,10  etc.
+    bucket_defs = [
+        ('6:30',  '8:30',  [7, 8]),
+        ('8:30',  '10:30', [9, 10]),
+        ('10:30', '12:30', [11, 12]),
+        ('12:30', '14:30', [13, 14]),
+        ('14:30', '16:30', [15, 16]),
+        ('16:30', '18:30', [17, 18]),
+        ('18:30', '20:30', [19, 20]),
+        ('20:30', '22:30', [21, 22]),
+        ('22:30', '23:00', [23]),
+    ]
+
+    buckets = []
+    for label, end, hours in bucket_defs:
+        total = sum(hourly[h]['total'] for h in hours)
+        count = sum(hourly[h]['count'] for h in hours)
+        buckets.append({'label': label, 'end': end, 'total': round(total, 2), 'count': count})
+
+    # Stats
+    active_buckets = [b for b in buckets if b['total'] > 0]
+    if active_buckets:
+        peak = max(active_buckets, key=lambda b: b['total'])
+        quiet = min(active_buckets, key=lambda b: b['total'])
+        active_hours = sum(len(h) for _, _, h in bucket_defs
+                          if any(hourly[hr]['total'] > 0 for hr in h))
+        total_revenue = sum(b['total'] for b in buckets)
+        hourly_avg = round(total_revenue / max(active_hours, 1), 2)
+    else:
+        peak = quiet = None
+        hourly_avg = 0
+
+    days_with_data = db.execute(
+        '''SELECT COUNT(DISTINCT date) FROM hourly_sales
+           WHERE branch_id = ? AND strftime('%Y-%m', date) = ?''',
+        (branch_id, month)
+    ).fetchone()[0]
+
+    stats = {
+        'peak_bucket': f"{peak['label']}–{peak['end']}" if peak else None,
+        'peak_total': peak['total'] if peak else 0,
+        'quiet_bucket': f"{quiet['label']}–{quiet['end']}" if quiet else None,
+        'quiet_total': quiet['total'] if quiet else 0,
+        'hourly_avg': hourly_avg,
+        'total_days_data': days_with_data,
+    }
+
+    return jsonify({'hourly': hourly, 'buckets': buckets, 'stats': stats})
 
 
 @app.route('/api/employees', methods=['GET'])

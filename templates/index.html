@@ -100,16 +100,33 @@
     </div>
 </section>
 
-<!-- Sales by Hour chart -->
+<!-- Sales by Hour -->
 <div class="card chart-card" id="hourly-section" style="display:none;">
-  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.25rem;">
-    <h2 class="section-title" style="margin:0;">מכירות לפי שעה — החודש</h2>
-    <span id="hourly-loading" style="font-size:0.8rem; color:#94a3b8;">טוען...</span>
+  <div style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin:0 0 0.25rem 0;">מכירות לפי שעות היום</h2>
+    <div style="font-size:0.85rem; color:#94a3b8;">מבוסס על נתוני החודש הנוכחי</div>
   </div>
-  <div id="hourly-subtitle" style="font-size:0.85rem; color:#94a3b8; margin-bottom:1rem;"></div>
-  <div class="chart-wrapper">
-    <canvas id="hourly-chart" height="160"></canvas>
+
+  <!-- 3 stat cards -->
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem; margin-bottom:1.5rem;">
+    <div style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.25); border-radius:12px; padding:1rem 1.25rem;">
+      <div style="font-size:0.8rem; color:#86efac; font-weight:600; margin-bottom:0.35rem;">🏆 השעות הכי חזקות</div>
+      <div id="stat-peak-hours" style="font-size:1.25rem; font-weight:700; color:#f1f5f9; margin-bottom:0.2rem;">—</div>
+      <div id="stat-peak-amount" style="font-size:0.85rem; color:#94a3b8;">—</div>
+    </div>
+    <div style="background:rgba(100,116,139,0.08); border:1px solid rgba(100,116,139,0.25); border-radius:12px; padding:1rem 1.25rem;">
+      <div style="font-size:0.8rem; color:#cbd5e1; font-weight:600; margin-bottom:0.35rem;">💤 השעות הכי שקטות</div>
+      <div id="stat-quiet-hours" style="font-size:1.25rem; font-weight:700; color:#f1f5f9; margin-bottom:0.2rem;">—</div>
+      <div id="stat-quiet-amount" style="font-size:0.85rem; color:#94a3b8;">—</div>
+    </div>
+    <div style="background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.25); border-radius:12px; padding:1rem 1.25rem;">
+      <div style="font-size:0.8rem; color:#a5b4fc; font-weight:600; margin-bottom:0.35rem;">📊 ממוצע לשעה</div>
+      <div id="stat-avg" style="font-size:1.25rem; font-weight:700; color:#f1f5f9; margin-bottom:0.2rem;">—</div>
+      <div style="font-size:0.85rem; color:#94a3b8;">כשהחנות פעילה</div>
+    </div>
   </div>
+
+  <canvas id="hourly-chart" height="140"></canvas>
 </div>
 
 <!-- Monthly Breakdown Table -->
@@ -252,37 +269,41 @@ async function loadHourlyChart() {
   try {
     const resp = await fetch(`/api/sales-by-hour?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
     const data = await resp.json();
-    if (!data || data.length === 0) return;
+    const buckets = data.buckets || [];
+    const stats = data.stats || {};
 
-    const hasData = data.some(d => d.total > 0);
-    if (!hasData) return;
+    if (!buckets.length || !buckets.some(b => b.total > 0)) return;
 
     document.getElementById('hourly-section').style.display = 'block';
-    document.getElementById('hourly-loading').style.display = 'none';
 
-    // Show peak hour subtitle
-    const peakHour = data.reduce((a, b) => b.total > a.total ? b : a, {total: 0});
-    if (peakHour.total > 0) {
-      document.getElementById('hourly-subtitle').textContent =
-        `השעה החזקה ביותר: ${peakHour.hour}:00 (₪${Math.round(peakHour.total).toLocaleString()})`;
-    }
+    // Populate stat cards
+    document.getElementById('stat-peak-hours').textContent = stats.peak_bucket || '—';
+    document.getElementById('stat-peak-amount').textContent = stats.peak_total
+      ? '₪' + Math.round(stats.peak_total).toLocaleString() : '—';
+    document.getElementById('stat-quiet-hours').textContent = stats.quiet_bucket || '—';
+    document.getElementById('stat-quiet-amount').textContent = stats.quiet_total
+      ? '₪' + Math.round(stats.quiet_total).toLocaleString() : '—';
+    document.getElementById('stat-avg').textContent = stats.hourly_avg
+      ? '₪' + Math.round(stats.hourly_avg).toLocaleString() : '—';
+
+    // 2-hour bucket chart
+    const maxVal = Math.max(...buckets.map(b => b.total));
+    const labels = buckets.map(b => `${b.label}–${b.end}`);
 
     if (hourlyChartInstance) hourlyChartInstance.destroy();
     const ctx = document.getElementById('hourly-chart').getContext('2d');
-    const maxVal = Math.max(...data.map(x => x.total));
     hourlyChartInstance = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: data.map(d => `${d.hour}`),
+        labels: labels,
         datasets: [{
-          label: 'הכנסות',
-          data: data.map(d => d.total),
-          backgroundColor: data.map(d => {
-            if (d.total === 0) return 'rgba(100,116,139,0.15)';
-            if (d.total === maxVal && maxVal > 0) return 'rgba(34,197,94,0.95)';
-            return 'rgba(34,197,94,0.65)';
+          data: buckets.map(b => b.total),
+          backgroundColor: buckets.map(b => {
+            if (b.total === 0) return 'rgba(100,116,139,0.15)';
+            if (b.total === maxVal) return 'rgba(34,197,94,0.95)';
+            return 'rgba(34,197,94,0.55)';
           }),
-          borderRadius: 6,
+          borderRadius: 8,
           borderSkipped: false,
         }]
       },
@@ -295,11 +316,11 @@ async function loadHourlyChart() {
               const bar = chart.getDatasetMeta(0).data[i];
               c.save();
               c.fillStyle = '#f1f5f9';
-              c.font = '600 11px system-ui, sans-serif';
+              c.font = '700 12px system-ui, sans-serif';
               c.textAlign = 'center';
               c.textBaseline = 'bottom';
               const label = v >= 1000 ? '₪' + (v/1000).toFixed(1) + 'K' : '₪' + Math.round(v);
-              c.fillText(label, bar.x, bar.y - 4);
+              c.fillText(label, bar.x, bar.y - 6);
               c.restore();
             }
           });
@@ -308,41 +329,29 @@ async function loadHourlyChart() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 24 } },
+        layout: { padding: { top: 28 } },
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: 'rgba(15,23,42,0.95)',
+            backgroundColor: 'rgba(15,23,42,0.97)',
             titleColor: '#f1f5f9',
             bodyColor: '#cbd5e1',
-            padding: 10,
+            padding: 12,
             callbacks: {
-              title: (items) => `שעה ${items[0].label}:00`,
+              title: (items) => labels[items[0].dataIndex],
               label: (tip) => {
-                const d = data[tip.dataIndex];
-                return [
-                  '₪' + Math.round(d.total).toLocaleString(),
-                  d.count + ' עסקאות',
-                  'ממוצע: ₪' + Math.round(d.total / Math.max(d.count, 1))
-                ];
+                const b = buckets[tip.dataIndex];
+                return ['₪' + Math.round(b.total).toLocaleString(), b.count + ' עסקאות'];
               }
             }
           }
         },
         scales: {
           x: {
-            ticks: {
-              color: '#94a3b8',
-              font: { size: 11, weight: '600' },
-              callback: function(v) { return this.getLabelForValue(v) + ':00'; }
-            },
+            ticks: { color: '#cbd5e1', font: { size: 11, weight: '600' } },
             grid: { display: false }
           },
-          y: {
-            display: false,
-            beginAtZero: true,
-            grace: '15%'
-          }
+          y: { display: false, beginAtZero: true, grace: '20%' }
         }
       }
     });
