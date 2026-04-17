@@ -808,10 +808,16 @@ def api_sales_by_hour():
     ]
 
     buckets = []
-    for label, end, hours in bucket_defs:
+    for start, end, hours in bucket_defs:
         total = sum(hourly[h]['total'] for h in hours)
         count = sum(hourly[h]['count'] for h in hours)
-        buckets.append({'label': label, 'end': end, 'total': round(total, 2), 'count': count})
+        buckets.append({
+            'start': start,
+            'end': end,
+            'label': f'\u200E{start}-{end}',
+            'total': round(total, 2),
+            'count': count
+        })
 
     # Stats
     active_buckets = [b for b in buckets if b['total'] > 0]
@@ -833,9 +839,9 @@ def api_sales_by_hour():
     ).fetchone()[0]
 
     stats = {
-        'peak_bucket': f"\u200E{peak['label']}–{peak['end']}" if peak else None,
+        'peak_bucket': peak['label'] if peak else None,
         'peak_total': peak['total'] if peak else 0,
-        'quiet_bucket': f"\u200E{quiet['label']}–{quiet['end']}" if quiet else None,
+        'quiet_bucket': quiet['label'] if quiet else None,
         'quiet_total': quiet['total'] if quiet else 0,
         'hourly_avg': hourly_avg,
         'total_days_data': days_with_data,
