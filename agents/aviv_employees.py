@@ -52,6 +52,18 @@ def _parse_hours(s):
         return 0.0
 
 
+def _friendly_error(e):
+    """Lightweight error message formatter."""
+    msg = str(e)
+    if '500' in msg:
+        return "Aviv BI server error — their server is having issues."
+    if '401' in msg:
+        return "Aviv BI login failed — credentials may have changed."
+    if 'Timeout' in msg or 'timed out' in msg:
+        return "Aviv BI request timed out."
+    return msg[:120] if msg else "Unknown error."
+
+
 def _match_employee(aviv_name, aviv_emp_id, db_employees, branch_name=''):
     """Match Aviv employee to DB employee. Returns (emp_id, confidence).
 
@@ -224,7 +236,7 @@ def run_aviv_employees(branch_id):
 
     except Exception as e:
         log.exception('aviv_employees failed for branch %d', branch_id)
-        from agents.aviv_live import _friendly_error
+        pass  # use local _friendly_error
         msg = _friendly_error(e)
         try:
             if run_id:
@@ -247,6 +259,8 @@ def run_aviv_employees(branch_id):
 
 if __name__ == '__main__':
     import sys
+    # Allow running as standalone script
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     bid = int(sys.argv[1]) if len(sys.argv) > 1 else 126
     print(run_aviv_employees(bid))
