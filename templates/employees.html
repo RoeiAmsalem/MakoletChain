@@ -98,7 +98,8 @@
     .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
 
     /* Chart info tooltips */
-    .chart-info { position: relative; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; font-size: 1.1rem; margin-inline-start: 0.5rem; vertical-align: middle; user-select: none; }
+    .chart-info { position: relative; display: inline-block; cursor: pointer; font-size: 1rem; line-height: 1; margin-inline-start: 0.4rem; vertical-align: middle; user-select: none; opacity: 0.65; transition: opacity 0.15s; }
+    .chart-info:hover, .chart-info.open { opacity: 1; }
     .chart-info::after {
         content: attr(data-tooltip);
         position: absolute; top: 100%; right: 0; margin-top: 0.5rem;
@@ -114,24 +115,14 @@
     /* Prevent horizontal scroll */
     html, body { overflow-x: hidden; max-width: 100vw; }
 
-    /* Pulse animation for info icons */
-    @keyframes pulse-info {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.1); box-shadow: 0 0 0 4px rgba(99,102,241,0.2); }
-    }
-
     /* ── Mobile optimizations ── */
     @media (max-width: 768px) {
-        /* Info icons — bigger, visible circle on mobile */
+        /* Info icons — subtle inline, bigger tap area */
         .chart-info {
-            position: static;
-            width: 32px; height: 32px;
-            font-size: 1.4rem !important;
-            background: rgba(99,102,241,0.15);
-            border: 1px solid rgba(99,102,241,0.4);
-            border-radius: 50%;
-            color: #a5b4fc !important;
-            animation: pulse-info 2s ease-in-out 2;
+            font-size: 1.15rem;
+            opacity: 0.8;
+            padding: 0.25rem;
+            margin-inline-start: 0.3rem;
         }
 
         /* Tooltip — fixed to bottom of viewport so it never overflows */
