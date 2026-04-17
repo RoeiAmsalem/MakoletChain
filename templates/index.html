@@ -264,6 +264,12 @@ async function loadHourlyChart() {
 
     if (!buckets.length || !buckets.some(b => b.total > 0)) return;
 
+    // Trim leading/trailing empty buckets (keep gaps between active hours)
+    let start = 0, end = buckets.length;
+    while (start < end && buckets[start].total === 0) start++;
+    while (end > start && buckets[end - 1].total === 0) end--;
+    const trimmed = start < end ? buckets.slice(start, end) : buckets.slice(0, 1);
+
     document.getElementById('hourly-section').style.display = 'block';
 
     // Populate stat cards
@@ -277,8 +283,8 @@ async function loadHourlyChart() {
       ? '₪' + Math.round(stats.hourly_avg).toLocaleString() : '—';
 
     // 2-hour bucket chart — labels come pre-formatted with LTR mark from API
-    const maxVal = Math.max(...buckets.map(b => b.total));
-    const labels = buckets.map(b => b.label);
+    const maxVal = Math.max(...trimmed.map(b => b.total));
+    const labels = trimmed.map(b => b.label);
 
     if (hourlyChartInstance) hourlyChartInstance.destroy();
     const ctx = document.getElementById('hourly-chart').getContext('2d');
@@ -288,13 +294,13 @@ async function loadHourlyChart() {
         labels: labels,
         datasets: [{
           label: 'הכנסות',
-          data: buckets.map(b => b.total > 0 ? b.total : 1),
-          backgroundColor: buckets.map(b => {
+          data: trimmed.map(b => b.total > 0 ? b.total : 1),
+          backgroundColor: trimmed.map(b => {
             if (b.total === 0) return 'rgba(148,163,184,0.08)';
             if (b.total === maxVal) return 'rgba(34,197,94,0.95)';
             return 'rgba(34,197,94,0.7)';
           }),
-          borderColor: buckets.map(b =>
+          borderColor: trimmed.map(b =>
             b.total > 0 ? 'rgba(34,197,94,1)' : 'rgba(148,163,184,0.15)'
           ),
           borderWidth: 1,
@@ -308,7 +314,7 @@ async function loadHourlyChart() {
         afterDatasetsDraw(chart) {
           const {ctx: c} = chart;
           chart.data.datasets[0].data.forEach((v, i) => {
-            if (buckets[i] && buckets[i].total > 0) {
+            if (trimmed[i] && trimmed[i].total > 0) {
               const bar = chart.getDatasetMeta(0).data[i];
               c.save();
               c.fillStyle = '#f1f5f9';
@@ -336,7 +342,7 @@ async function loadHourlyChart() {
             callbacks: {
               title: (items) => labels[items[0].dataIndex],
               label: (tip) => {
-                const b = buckets[tip.dataIndex];
+                const b = trimmed[tip.dataIndex];
                 if (b.total === 0) return 'אין נתונים';
                 return ['₪' + Math.round(b.total).toLocaleString(), b.count + ' עסקאות'];
               }

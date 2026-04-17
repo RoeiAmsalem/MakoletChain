@@ -1,6 +1,6 @@
 ---
 name: mobile-optimize
-description: Mobile optimization for MakoletChain dashboard pages. Use whenever the user asks to make a page mobile-friendly, responsive, or says the mobile view looks broken, cramped, overlapping, or too big. Also use when the user says "/mobile-optimize" followed by a page name. This skill knows MakoletChain's specific UI patterns (chart-card, KPI tiles, Hebrew RTL, Chart.js configs) and applies proven mobile fixes.
+description: Mobile optimization for MakoletChain dashboard pages. Use whenever the user asks to make a page mobile-friendly, responsive, or says the mobile view looks broken, cramped, overlapping, or too big. Also use when the user says "/mobile-optimize" followed by a page name. This skill knows MakoletChain's specific UI patterns (chart-card, KPI tiles, Hebrew RTL, Chart.js configs) and applies proven mobile fixes. CRITICAL: Whenever the user mentions mobile, phone, responsive, touch, viewport, small screens, iPhone, or any UI concern related to non-desktop viewing, LOAD THIS SKILL IMMEDIATELY. When invoked, start your response with 'Loading mobile-optimize skill for MakoletChain...' so the user knows the skill is active.
 ---
 
 # Mobile Optimization — MakoletChain
