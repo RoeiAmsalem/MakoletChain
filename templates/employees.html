@@ -119,16 +119,27 @@
     @media (max-width: 768px) {
         /* Info icons — subtle inline, bigger tap area */
         .chart-info {
+            position: static;
             font-size: 1.15rem;
             opacity: 0.8;
             padding: 0.25rem;
             margin-inline-start: 0.3rem;
         }
 
-        /* Tooltip — fixed to bottom of viewport so it never overflows */
+        /* Tooltip — fixed to TOP of viewport, prominent with dim overlay */
         .chart-info::after {
-            position: fixed; top: auto; bottom: 1rem; right: 1rem; left: 1rem;
+            position: fixed; top: 1rem; bottom: auto; right: 1rem; left: 1rem;
             margin: 0; width: auto; max-width: none;
+            padding: 1.25rem 1.5rem; font-size: 1rem; line-height: 1.6;
+            background: #1e293b; border: 2px solid #818cf8; border-radius: 12px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 100vmax rgba(0,0,0,0.4);
+            animation: tooltip-slide-down 0.25s ease-out;
+            z-index: 1000;
+        }
+
+        @keyframes tooltip-slide-down {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         /* Pattern A — page wrapper */
