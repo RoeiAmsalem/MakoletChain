@@ -22,8 +22,16 @@
     .doc-badge.return { background: rgba(250,204,21,0.2); color: #fde68a; }
     .tfoot-total td { font-weight: 700; border-top: 2px solid #334155; background: #0f172a !important; }
     @media (max-width: 768px) {
-        .goods-kpis { grid-template-columns: 1fr 1fr; }
-        .filter-bar { overflow-x: auto; flex-wrap: nowrap; }
+        .goods-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .goods-kpis .kpi-card { padding: 0.75rem !important; }
+        .goods-kpis .kpi-value { font-size: 1.25rem !important; }
+        .goods-kpis .kpi-label { font-size: 0.72rem !important; }
+        .goods-kpis .kpi-icon { font-size: 1rem !important; }
+        .filter-bar { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+        .filter-btn { min-height: 40px; padding: 0.5rem 0.75rem; white-space: nowrap; touch-action: manipulation; }
+        .section-title { font-size: 1rem !important; }
+        #goods-table thead th, #goods-table tbody td { padding: 8px 6px; font-size: 0.8rem; }
+        #goods-table .money { font-size: 0.8rem; }
     }
 </style>
 {% endblock %}
