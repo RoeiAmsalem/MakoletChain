@@ -378,8 +378,8 @@ body {
 }
 
 /* --- Chart Card --------------------------------------------- */
-.chart-card { min-height: 320px; }
-.chart-wrapper { position: relative; height: 280px; }
+.chart-card { min-height: 320px; max-height: 380px; }
+.chart-wrapper { position: relative; height: 260px; max-height: 260px; }
 
 /* --- Data Table --------------------------------------------- */
 .data-table {

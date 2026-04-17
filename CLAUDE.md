@@ -144,6 +144,18 @@ reset_tokens:
   runningDealTotal, runningDealCount, currentEmployeeHours, totalEmployeeHours,
   currentEmployeeCount, payments[], firstDealOpen, tmUpdate, z, zCreate
 - Timing: ~1 second per branch (was 15-20s with Playwright)
+- Employee hours: POST /employees/sales?type=all — per-employee breakdown
+- Cancellations/Discounts: from :65010/raw/status/plain — cancellationTotal, discountTotal
+- Running deals: runningDealTotal, runningDealCount — shown as secondary KPI row when values > 0
+
+**Aviv BI REST API reference (full mapping):**
+| Endpoint | Purpose | Our usage |
+|---|---|---|
+| POST /account/login | Get token | aviv_live, aviv_employees, sales-by-hour |
+| POST /account/refresh | Refresh token | Before each call |
+| POST /dashboard/query | SQL-like query | sales-by-hour (deals table) |
+| POST /employees/sales?type=all | Employee hours | aviv_employees agent |
+| GET :65010/raw/status/plain | Live status | aviv_live (revenue, hours, cancellations) |
 
 **Fallback: Playwright scraper**
 - Playwright headless Chromium -> bi-aviv.web.app/status
@@ -163,6 +175,20 @@ reset_tokens:
   'שעות עובדים מתחילת החודש' -> monthly total (authoritative)
   'שעות עובדים במשמרת' -> current shift only
 
+### aviv_employees.py — Daily employee hours sync (23:45)
+- API: POST /employees/sales?type=all via Aviv BI REST API
+- Fetches per-employee hours breakdown (more accurate than Gmail CSV, daily updates vs monthly)
+- Uses same login flow: POST /account/login → Authtoken header
+- Same employee name matching logic as gmail_agent (exact → strip suffix → first name → fuzzy)
+- Pending matches go to employee_match_pending table for manager review
+- Supplements Gmail CSV attendance data
+
+### Sales by Hour API
+- GET /api/sales-by-hour?month=&branch_id= returns 12 buckets (2-hour windows starting 06:30)
+- Data source: Aviv BI POST /dashboard/query on deals table grouped by hour
+- Home page shows 3 summary cards: peak hour, slowest hour, avg per hour
+- Only displays when Aviv API returns data
+
 ### Hours scraping (separate from revenue)
 - 16:00 daily (scrape_hours_midday):
   - Scrapes 'שעות עובדים במשמרת' (current shift)
@@ -180,6 +206,7 @@ reset_tokens:
 - aviv_live: 07:00-22:55 IL every 5 min — Aviv live revenue
 - hours_midday: 16:00 IL — hours estimate (baseline + shift)
 - hours_end_of_day: 23:30 IL — authoritative hours total
+- aviv_employees: 23:45 IL — per-employee hours from Aviv BI API
 
 ---
 

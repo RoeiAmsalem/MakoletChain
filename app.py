@@ -928,29 +928,41 @@ def api_employees_list():
     salary_hours = salary_data['hours']
     salary_source = salary_data['source']
 
-    # History: last 6 months
-    year, mon = map(int, month.split('-'))
+    # History: only months with real data (daily_sales or goods_documents)
+    earliest = db.execute('''
+        SELECT MIN(month) as m FROM (
+            SELECT strftime('%Y-%m', date) as month
+            FROM daily_sales WHERE branch_id=?
+            UNION
+            SELECT strftime('%Y-%m', doc_date) as month
+            FROM goods_documents WHERE branch_id=?
+        )
+    ''', (branch_id, branch_id)).fetchone()
+
     history = []
-    for i in range(5, -1, -1):
-        m = mon - i
-        y = year
-        while m <= 0:
-            m += 12
-            y -= 1
-        m_str = f'{y:04d}-{m:02d}'
-        h_row = db.execute(
-            "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-            "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ?",
-            (branch_id, m_str)
-        ).fetchone()
-        h_hours = h_row['hours']
-        h_salary = h_row['salary']
-        h_source = 'csv' if h_row['cnt'] > 0 else 'משוער'
-        h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
-        history.append({
-            'month': m_str, 'hours': h_hours, 'salary': h_salary,
-            'avg_rate': h_rate, 'source': h_source,
-        })
+    if earliest and earliest['m']:
+        start_y, start_m = map(int, earliest['m'].split('-'))
+        end_y, end_m = map(int, month.split('-'))
+        y, m2 = start_y, start_m
+        while (y, m2) <= (end_y, end_m):
+            m_str = f'{y:04d}-{m2:02d}'
+            h_row = db.execute(
+                "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
+                "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ?",
+                (branch_id, m_str)
+            ).fetchone()
+            h_hours = h_row['hours']
+            h_salary = h_row['salary']
+            h_source = 'csv' if h_row['cnt'] > 0 else 'משוער'
+            h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
+            history.append({
+                'month': m_str, 'hours': h_hours, 'salary': h_salary,
+                'avg_rate': h_rate, 'source': h_source,
+            })
+            m2 += 1
+            if m2 > 12:
+                m2 = 1
+                y += 1
 
     return jsonify({
         'employees': employees,
