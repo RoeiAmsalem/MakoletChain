@@ -262,18 +262,18 @@ async function saveNewExpense() {
         await loadExpenses();
         document.getElementById('new-name').value = ''; document.getElementById('new-amount').value = '';
         document.getElementById('add-form-card').classList.remove('open');
-    } catch(err) { console.error(err); alert('שגיאה.'); }
+    } catch(err) { console.error(err); await mkAlert({ type: 'danger', title: 'שגיאה', message: 'אירעה שגיאה — נסה שוב.' }); }
 }
 
 async function deleteExpense(id) {
     const exp = allExpenses.find(e => e.id === id);
-    if (!confirm(`למחוק את "${exp.name}"?`)) return;
+    if (!await mkConfirm({ type: 'danger', title: 'מחיקת הוצאה', message: `האם למחוק את "${exp.name}"?`, confirmText: 'מחק' })) return;
     try {
         const res = await fetch(`/api/fixed-expenses/${id}`, { method:'DELETE' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         allExpenses = allExpenses.filter(e => e.id !== id);
         renderTable(document.getElementById('expenses-tbody'), allExpenses);
-    } catch(err) { console.error(err); alert('שגיאה.'); }
+    } catch(err) { console.error(err); await mkAlert({ type: 'danger', title: 'שגיאה', message: 'אירעה שגיאה — נסה שוב.' }); }
 }
 
 let editAmountType = 'fixed', editWhenType = 'monthly';
@@ -348,7 +348,7 @@ async function saveEditModal() {
         await loadExpenses();
     } catch(err) {
         console.error(err);
-        alert('שגיאה.');
+        await mkAlert({ type: 'danger', title: 'שגיאה', message: 'אירעה שגיאה — נסה שוב.' });
     }
 }
 

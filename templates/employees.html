@@ -878,7 +878,7 @@ async function saveEmployee() {
 }
 
 async function deleteEmployee(id, name) {
-    if (!confirm(`למחוק את ${name}?`)) return;
+    if (!await mkConfirm({ type: 'danger', title: 'מחיקת עובד', message: `האם למחוק את ${name}? פעולה זו לא הפיכה.`, confirmText: 'מחק' })) return;
     try {
         const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('שגיאה');
@@ -1007,7 +1007,7 @@ async function approvePending(id) {
 }
 
 async function rejectPending(id) {
-    if (!confirm('לדחות את השעות? לא יישמרו במערכת.')) return;
+    if (!await mkConfirm({ type: 'warning', title: 'דחיית שעות', message: 'לדחות את השעות? לא יישמרו במערכת.', confirmText: 'דחה' })) return;
     try {
         const res = await fetch(`/api/employee-match-pending/${id}/reject`, { method: 'POST' });
         if (!res.ok) throw new Error('שגיאה');
@@ -1043,7 +1043,7 @@ function openNewFromPending(pendingId, csvName) {
 }
 
 async function dismissUnknown(pendingId) {
-    if (!confirm('להתעלם מעובד זה?')) return;
+    if (!await mkConfirm({ type: 'warning', title: 'התעלמות מעובד', message: 'להתעלם מעובד זה? השעות לא יישמרו.', confirmText: 'התעלם' })) return;
     try {
         const res = await fetch(`/api/employee-match-pending/${pendingId}/reject`, {method:'POST'});
         if (!res.ok) throw new Error('שגיאה');

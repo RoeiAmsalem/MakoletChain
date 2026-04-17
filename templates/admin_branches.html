@@ -220,7 +220,7 @@ async function addBranch(e) {
             setTimeout(() => location.reload(), 2000);
         }
     } catch (err) {
-        alert('שגיאה: ' + err.message);
+        await mkAlert({ type: 'danger', title: 'שגיאה', message: err.message });
     } finally {
         btn.disabled = false;
         btn.textContent = 'הוסף סניף';
@@ -273,7 +273,7 @@ async function saveEdit(e) {
             location.reload();
         }
     } catch (err) {
-        alert('שגיאה: ' + err.message);
+        await mkAlert({ type: 'danger', title: 'שגיאה', message: err.message });
     }
 }
 
