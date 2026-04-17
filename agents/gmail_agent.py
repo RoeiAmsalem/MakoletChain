@@ -229,7 +229,9 @@ def _check_alias(csv_name: str, branch_id: int, db_employees: list):
         conn = sqlite3.connect(DB_PATH, timeout=10)
         conn.row_factory = sqlite3.Row
         alias = conn.execute(
-            'SELECT employee_id FROM employee_aliases WHERE branch_id=? AND alias_name=?',
+            '''SELECT ea.employee_id FROM employee_aliases ea
+               JOIN employees e ON e.id = ea.employee_id
+               WHERE ea.branch_id=? AND ea.alias_name=? AND e.active=1''',
             (branch_id, csv_name.strip())
         ).fetchone()
         conn.close()

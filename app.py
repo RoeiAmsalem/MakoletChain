@@ -1099,14 +1099,39 @@ def api_employees_update(emp_id):
 @app.route('/api/employees/<int:emp_id>', methods=['DELETE'])
 @login_required
 def api_employees_delete(emp_id):
-    """Soft-delete an employee (set active=0)."""
+    """Soft-delete an employee (set active=0) and cascade cleanup."""
     db = get_db()
-    row = db.execute("SELECT branch_id FROM employees WHERE id = ?", (emp_id,)).fetchone()
+    row = db.execute("SELECT branch_id, name FROM employees WHERE id = ?", (emp_id,)).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     branch_id = get_branch_id()
     if row['branch_id'] != branch_id:
         return jsonify({'error': 'forbidden'}), 403
+
+    # Collect alias names before deleting them (needed for reopening pending records)
+    alias_rows = db.execute(
+        'SELECT alias_name FROM employee_aliases WHERE employee_id = ?', (emp_id,)
+    ).fetchall()
+    alias_names = [r['alias_name'] for r in alias_rows]
+    alias_names.append(row['name'])
+
+    # Reopen resolved pending records for this employee's names/aliases
+    for name in set(alias_names):
+        db.execute('''
+            UPDATE employee_match_pending
+            SET resolved = 0, is_new_employee = 1, suggested_employee_id = NULL
+            WHERE branch_id = ? AND csv_name = ? AND resolved = 1
+        ''', (branch_id, name))
+
+    # Delete unresolved pending records that suggest this employee
+    db.execute(
+        'DELETE FROM employee_match_pending WHERE suggested_employee_id = ? AND resolved = 0',
+        (emp_id,))
+
+    # Cascade-delete aliases
+    db.execute('DELETE FROM employee_aliases WHERE employee_id = ?', (emp_id,))
+
+    # Soft-delete the employee
     db.execute("UPDATE employees SET active=0 WHERE id=?", (emp_id,))
     _recalculate_avg_rate(branch_id, db)
     db.commit()

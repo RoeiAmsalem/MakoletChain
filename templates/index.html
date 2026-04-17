@@ -72,7 +72,7 @@
 </section>
 
 <!-- Sales by Hour (first chart) -->
-<div class="card chart-card" id="hourly-section" style="display:none; padding-bottom:1.5rem;">
+<div class="card chart-card" id="hourly-section" style="display:none; padding-bottom:2rem;">
   <div style="margin-bottom:1.25rem;">
     <h2 class="section-title" style="margin:0 0 0.25rem 0;">מכירות לפי שעות היום</h2>
     <div style="font-size:0.85rem; color:#94a3b8;">מבוסס על נתוני החודש הנוכחי</div>
@@ -260,14 +260,16 @@ async function loadHourlyChart() {
       data: {
         labels: labels,
         datasets: [{
-          data: buckets.map(b => b.total),
+          data: buckets.map(b => b.total || 1),
           backgroundColor: buckets.map(b => {
-            if (b.total === 0) return 'rgba(100,116,139,0.15)';
+            if (b.total === 0) return 'rgba(148,163,184,0.08)';
             if (b.total === maxVal) return 'rgba(34,197,94,0.95)';
             return 'rgba(34,197,94,0.55)';
           }),
           borderRadius: 8,
           borderSkipped: false,
+          barPercentage: 0.7,
+          categoryPercentage: 0.8,
         }]
       },
       plugins: [{
@@ -275,7 +277,7 @@ async function loadHourlyChart() {
         afterDatasetsDraw(chart) {
           const {ctx: c} = chart;
           chart.data.datasets[0].data.forEach((v, i) => {
-            if (v > 0) {
+            if (buckets[i] && buckets[i].total > 0) {
               const bar = chart.getDatasetMeta(0).data[i];
               c.save();
               c.fillStyle = '#f1f5f9';
@@ -304,6 +306,7 @@ async function loadHourlyChart() {
               title: (items) => labels[items[0].dataIndex],
               label: (tip) => {
                 const b = buckets[tip.dataIndex];
+                if (b.total === 0) return 'אין נתונים';
                 return ['₪' + Math.round(b.total).toLocaleString(), b.count + ' עסקאות'];
               }
             }
@@ -311,8 +314,16 @@ async function loadHourlyChart() {
         },
         scales: {
           x: {
-            reverse: false,
-            ticks: { padding: 8, color: '#cbd5e1', font: { size: 11, weight: '600' } },
+            type: 'category',
+            offset: true,
+            ticks: {
+              padding: 8,
+              color: '#cbd5e1',
+              font: { size: 11, weight: '600' },
+              align: 'center',
+              maxRotation: 0,
+              autoSkip: false
+            },
             grid: { display: false },
             border: { color: 'rgba(255,255,255,0.1)', width: 1 }
           },
