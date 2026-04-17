@@ -60,7 +60,7 @@ def init_db():
 
 
 def _migrate_add_columns(conn):
-    """Add new columns to existing tables (safe to run repeatedly)."""
+    """Add new columns/tables to existing DB (safe to run repeatedly)."""
     migrations = [
         ('live_sales', 'cancellation_total', 'REAL DEFAULT 0'),
         ('live_sales', 'discount_total', 'REAL DEFAULT 0'),
@@ -73,6 +73,16 @@ def _migrate_add_columns(conn):
             conn.commit()
         except sqlite3.OperationalError:
             pass  # column already exists
+    # Ensure hourly_sales table exists
+    conn.execute('''CREATE TABLE IF NOT EXISTS hourly_sales (
+        branch_id INTEGER NOT NULL REFERENCES branches(id),
+        date TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        amount REAL DEFAULT 0,
+        transactions INTEGER DEFAULT 0,
+        PRIMARY KEY (branch_id, date, hour)
+    )''')
+    conn.commit()
 
 
 def seed_admin():
@@ -787,83 +797,29 @@ def api_live_sales():
 @app.route('/api/sales-by-hour')
 @login_required
 def api_sales_by_hour():
-    """Return revenue breakdown by hour for a given month via Aviv BI REST API."""
-    import calendar
-    import requests as req
-    import urllib3 as _urllib3
-    _urllib3.disable_warnings()
-
+    """Return revenue breakdown by hour from hourly_sales table."""
     branch_id = get_branch_id()
-    month = request.args.get('month', date.today().strftime('%Y-%m'))
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
-    branch = db.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
 
-    if not branch or not branch['aviv_user_id']:
-        return jsonify([])
+    rows = db.execute(
+        '''SELECT hour, SUM(amount) as total, SUM(transactions) as count
+           FROM hourly_sales
+           WHERE branch_id = ? AND strftime('%Y-%m', date) = ?
+           GROUP BY hour ORDER BY hour''',
+        (branch_id, month)
+    ).fetchall()
 
-    try:
-        # Login
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'MakoletChain/1.0',
-        }
-        r = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/account/login',
-            json={'user': branch['aviv_user_id'], 'password': branch['aviv_password']},
-            headers=headers, timeout=15, verify=False)
-        r.raise_for_status()
-        login_data = r.json()
-        token = login_data.get('value')
-        branches_list = login_data.get('branches') or []
-        aviv_branch_id = branches_list[0]['id'] if branches_list else None
-
-        if not token or not aviv_branch_id:
-            return jsonify([])
-
-        # Refresh token before query (single-use tokens)
-        r2 = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/account/refresh',
-            headers={**headers, 'Authtoken': token},
-            json={}, timeout=10, verify=False)
-        token = r2.json().get('value') or token
-
-        # Query deals by hour
-        year, mo = month.split('-')
-        last_day = calendar.monthrange(int(year), int(mo))[1]
-        date_from = f'{month}-01'
-        date_to = f'{month}-{last_day}'
-
-        r3 = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/dashboard/query',
-            headers={**headers, 'Authtoken': token},
-            json={
-                'table': 'deals',
-                'select': ['hour', 'SUM(sum) as total', 'COUNT(*) as count'],
-                'where': {'branch': aviv_branch_id, 'date': {'from': date_from, 'to': date_to}},
-                'groupBy': ['hour'],
-                'orderBy': 'hour'
-            },
-            timeout=15, verify=False)
-
-        rows = r3.json()
-        if isinstance(rows, dict):
-            rows = rows.get('data', [])
-
-        rows_by_hour = {}
-        for row in (rows if isinstance(rows, list) else []):
-            h = int(row.get('hour', 0))
-            rows_by_hour[h] = row
-
-        result = []
-        for h in range(24):
-            row = rows_by_hour.get(h, {})
-            result.append({
-                'hour': h,
-                'total': float(row.get('total') or row.get('sum') or 0),
-                'count': int(row.get('count') or 0)
-            })
-        return jsonify(result)
-    except Exception as e:
-        app.logger.error('sales-by-hour failed: %s', e)
-        return jsonify([])
+    rows_by_hour = {r['hour']: r for r in rows}
+    result = []
+    for h in range(24):
+        row = rows_by_hour.get(h)
+        result.append({
+            'hour': h,
+            'total': round(float(row['total']), 2) if row else 0,
+            'count': int(row['count']) if row else 0,
+        })
+    return jsonify(result)
 
 
 @app.route('/api/employees', methods=['GET'])

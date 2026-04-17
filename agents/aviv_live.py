@@ -333,6 +333,49 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
         return _scrape_playwright(branch, log)
 
 
+def _save_hourly_snapshot(conn, branch_id: int, data: dict, log: logging.Logger):
+    """Save revenue to hourly_sales by computing delta from last snapshot.
+
+    Each scrape gives cumulative dealTotal for the day. We find the previous
+    snapshot's cumulative total, compute the delta, and add it to the current hour.
+    """
+    try:
+        today = data['date']
+        now = datetime.now(IL_TZ)
+        current_hour = now.hour
+        amount = data['amount']
+        transactions = data['transactions']
+
+        # Get previous cumulative total from live_sales (before we overwrote it)
+        prev = conn.execute(
+            'SELECT amount, transactions FROM live_sales WHERE branch_id=? AND date=?',
+            (branch_id, today)
+        ).fetchone()
+
+        if prev and prev['amount']:
+            prev_amount = float(prev['amount'])
+            prev_tx = int(prev['transactions'] or 0)
+        else:
+            prev_amount = 0
+            prev_tx = 0
+
+        delta_amount = amount - prev_amount
+        delta_tx = transactions - prev_tx
+
+        if delta_amount > 0:
+            conn.execute(
+                '''INSERT INTO hourly_sales (branch_id, date, hour, amount, transactions)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(branch_id, date, hour)
+                   DO UPDATE SET amount = amount + ?, transactions = transactions + ?''',
+                (branch_id, today, current_hour, delta_amount, delta_tx,
+                 delta_amount, delta_tx)
+            )
+            log.info("Hourly snapshot: hour=%d, delta=₪%.2f (%d tx)", current_hour, delta_amount, delta_tx)
+    except Exception as e:
+        log.warning("Failed to save hourly snapshot: %s", e)
+
+
 def handle_zero_detection(branch_id: int, conn, logger: logging.Logger):
     """
     Called when Aviv BI returns amount=0.
@@ -451,6 +494,9 @@ def run_aviv_live(branch_id: int) -> dict:
             handle_zero_detection(branch_id, conn, log)
             conn.close()
             return {'success': True, 'amount': 0, 'transactions': 0, 'zero_detected': True}
+
+        # Save hourly snapshot BEFORE overwriting live_sales (needs previous cumulative total)
+        _save_hourly_snapshot(conn, branch_id, data, log)
 
         # Save to DB
         conn.execute(

@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS live_sales (
   PRIMARY KEY (branch_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS hourly_sales (
+  branch_id INTEGER NOT NULL REFERENCES branches(id),
+  date TEXT NOT NULL,
+  hour INTEGER NOT NULL,
+  amount REAL DEFAULT 0,
+  transactions INTEGER DEFAULT 0,
+  PRIMARY KEY (branch_id, date, hour)
+);
+
 CREATE TABLE IF NOT EXISTS agent_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   branch_id INTEGER NOT NULL,
