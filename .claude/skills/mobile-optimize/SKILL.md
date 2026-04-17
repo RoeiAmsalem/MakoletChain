@@ -40,6 +40,14 @@ MakoletChain's dashboard is desktop-perfect but breaks on mobile. This skill app
 
 ## Workflow
 
+### Step 0 — Announce skill activation
+
+ALWAYS start your response with this exact line so the user knows the skill is active:
+
+"🎯 mobile-optimize skill loaded for MakoletChain — targeting {page_name}"
+
+Do not skip this. The user has explicitly requested this visibility.
+
 ### Step 1 — Audit current state
 
 1. Read templates/{page}.html

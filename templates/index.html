@@ -18,10 +18,11 @@
         #profit-pct-badge { font-size: 0.8rem !important; }
         #profit-month-sub { font-size: 0.75rem !important; }
 
-        /* Hourly section — stat cards stack + chart height */
-        #hourly-section { padding: 0.75rem !important; }
+        /* Hourly section — dominate mobile view */
+        #hourly-section { padding: 1rem 0.5rem !important; margin: 0 -0.5rem 1rem -0.5rem !important; }
         #hourly-section > div:first-child h2 { font-size: 1rem !important; }
         #hourly-section > div:first-child > div { font-size: 0.78rem !important; }
+        #hourly-section .hourly-canvas-wrap { height: 280px !important; }
 
         /* Chart cards */
         .chart-card { min-height: unset !important; max-height: unset !important; padding: 0.75rem !important; }
@@ -123,7 +124,7 @@
     </div>
   </div>
 
-  <div style="position:relative; height:180px;">
+  <div class="hourly-canvas-wrap" style="position:relative; height:180px;">
     <canvas id="hourly-chart"></canvas>
   </div>
 </div>
@@ -303,10 +304,10 @@ async function loadHourlyChart() {
           borderColor: trimmed.map(b =>
             b.total > 0 ? 'rgba(34,197,94,1)' : 'rgba(148,163,184,0.15)'
           ),
-          borderWidth: 1,
+          borderWidth: isMobile() ? 0 : 1,
           borderRadius: 4,
-          barPercentage: 0.85,
-          categoryPercentage: 0.9,
+          barPercentage: isMobile() ? 0.95 : 0.85,
+          categoryPercentage: isMobile() ? 0.95 : 0.9,
         }]
       },
       plugins: [{
@@ -331,7 +332,7 @@ async function loadHourlyChart() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        layout: { padding: { top: 30, bottom: 0, left: 10, right: 10 } },
+        layout: { padding: { top: 30, bottom: 0, left: isMobile() ? 0 : 10, right: isMobile() ? 0 : 10 } },
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -355,7 +356,7 @@ async function loadHourlyChart() {
             offset: true,
             ticks: {
               color: '#e2e8f0',
-              font: { size: isMobile() ? 9 : 14, weight: '700' },
+              font: { size: isMobile() ? 12 : 14, weight: '700' },
               padding: isMobile() ? 2 : 6,
               maxRotation: 0,
               minRotation: 0,
@@ -377,13 +378,14 @@ async function loadHourlyChart() {
           y: {
             beginAtZero: true,
             ticks: {
+              display: !isMobile(),
               color: '#94a3b8',
               font: { size: 10 },
               callback: v => '₪' + Math.round(v/1000) + 'K',
               padding: 4,
               maxTicksLimit: 5
             },
-            grid: { color: 'rgba(255,255,255,0.04)', drawBorder: false },
+            grid: { display: !isMobile(), color: 'rgba(255,255,255,0.04)', drawBorder: false },
             border: { display: false }
           }
         }
