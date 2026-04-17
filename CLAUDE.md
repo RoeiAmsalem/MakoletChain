@@ -210,6 +210,14 @@ reset_tokens:
 
 ---
 
+## Database Migrations
+- All schema changes go in `migrations/NNN_description.sql`. See `migrations/README.md` for naming and rules.
+- `scripts/migrate.py` is the only supported way to change the DB schema (locally, staging, and prod).
+- NEVER modify schema via ad-hoc SQL on the server.
+- ALWAYS create a numbered migration file and apply it with `scripts/migrate.py`.
+
+---
+
 ## Salary Calculation — Single Source of Truth
 
 Function: _calculate_salary_cost(branch_id, current_month) in app.py
