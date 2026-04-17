@@ -109,19 +109,48 @@ reset_tokens:
 
 ### gmail_agent.py — Nightly email processing (02:00)
 - IMAP to makoletdashboard@gmail.com using GMAIL_APP_PASSWORD from .env
+- Old address makoletdeshboard@gmail.com (typo) forwards to new one permanently
+- Shimon's Gmail (shimonmakolet@gmail.com) has forwarding filter:
+  from:avivpost@avivpos.co.il + subject:נוכחות באקסל → forwards to makoletdashboard@gmail.com
+- Branch 127 (Gal) sends attendance CSV directly to makoletdashboard@gmail.com
 - Z-reports: finds emails from avivpost@avivpos.co.il matching branches.gmail_label
   - Downloads PDF, parses total with regex
   - Saves to daily_sales
 - Attendance CSV: finds emails with 'נוכחות באקסל' + branch label in subject
   - CSV columns: עובד, יום בשבוע, תאריך כניסה, תאריך יציאה, הערות, כמות שעות
   - If email arrives on 1st-5th of month -> report belongs to PREVIOUS month
-  - Smart fuzzy name matching: strips store suffixes (איינשטיין etc.), handles middle names, token overlap
+  - Employee name matching (see Employee Name Matching section below)
   - Calculates salary = hours x employee.hourly_rate from employees table
   - Saves to employee_hours, updates branches.avg_hourly_rate
   - Skips month if already processed
 
 ### aviv_live.py — Live revenue scraper (every 5 min during store hours)
+
+**Primary: Aviv BI REST API**
+- Base: https://bi1.aviv-pos.co.il:8443/avivbi/v2/
+- Status: https://bi1.aviv-pos.co.il:65010/raw/status/plain
+- Login: POST /account/login with {user, password} → returns token
+- Auth: Authtoken: <token> header (single-use — must refresh before each call)
+- Refresh: POST /account/refresh with Authtoken header → new token
+- Branches: POST /account/branches → list of branches with IDs
+- Query engine: POST /dashboard/query — SQL-like queries on tables:
+  - deals: sum, branch, tip, tax, hour, type
+  - items: branch, name, code, price, cost, sum, weight, count, tax, supplier, type, date, hour, family
+  - employees: branch, id, name, position
+- Bulk queries: POST /dashboard/query/envelope
+- Receipts: POST /raw/deals/list
+- 102 reports: GET /reports?branch=X
+- Status fields: dealTotal, dealCount, cancellationTotal, discountTotal,
+  runningDealTotal, runningDealCount, currentEmployeeHours, totalEmployeeHours,
+  currentEmployeeCount, payments[], firstDealOpen, tmUpdate, z, zCreate
+- Timing: ~1 second per branch (was 15-20s with Playwright)
+
+**Fallback: Playwright scraper**
 - Playwright headless Chromium -> bi-aviv.web.app/status
+- bi-aviv.web.app uses Firebase — goes down when monthly bandwidth quota exceeded
+- If REST API fails → falls back to Playwright automatically
+
+**Common behavior:**
 - Credentials: branches.aviv_user_id + branches.aviv_password
 - Scrapes: daily revenue + transactions
 - Zero detection: amount=0 after non-zero -> save provisional Z, brrr alert
@@ -171,6 +200,27 @@ avg_hourly_rate auto-recalculates when:
 
 ---
 
+## Employee Name Matching (CSV → employees table)
+- CSV names often include employee ID prefix: "441 עידן בקון" → strip leading numbers
+- CSV names often include branch suffix: "עידן בקון איינשטיין" → strip known suffixes
+- Same employee can appear with different name variants in same CSV
+  (e.g., "עידן בקון" for manual entries, "עידן בקון איינשטיין" for clock entries)
+  → parser tracks by employee ID, keeps longest name variant
+- Matching logic: exact → strip suffix → first name → fuzzy overlap
+- Low confidence matches → saved to employee_match_pending table for manager review
+- Pending matches UI on /employees page with approve/reject/reassign
+
+---
+
+## Fixed Expenses — Details
+- 3 types: חודשי (monthly) / חד פעמי (one-time) / % מהכנסות (percent of income)
+- % type expenses (pct_value > 0) store amount=0 in DB, calculated live from income
+- _get_fixed_total(branch_id, month, income, db) helper calculates % types dynamically
+- Monthly (חודשי) expenses auto-carry-forward to next month via _ensure_monthly_expenses()
+- Only daily_sales and goods_documents count as "real data" for history start month
+
+---
+
 ## Auth & Security
 - Login: email + password (bcrypt hash)
 - Session: Flask session, SECRET_KEY from .env
@@ -185,6 +235,15 @@ avg_hourly_rate auto-recalculates when:
 ## Users
 - admin@makolet.com — CEO — Roei
 - shimonmakolet@gmail.com — manager — Shimon (dad, branch 126)
+- Branch 127 — המכולת תיכון (Gal) — onboarding in progress
+
+### Branch 127 — המכולת תיכון Status
+- Aviv credentials: Tichon123/Tichon123 ✅
+- BilBoy token: set, expires Mar 2027 ✅
+- Gmail label: התיכון ✅
+- IEC contract: ⏳ pending
+- Employees: ⏳ pending (Gal hasn't sent list yet)
+- Fixed expenses: ⏳ pending
 
 ---
 
@@ -193,6 +252,12 @@ avg_hourly_rate auto-recalculates when:
 - HTTP GET with User-Agent: MakoletChain/1.0 (Cloudflare bypass)
 - Helper: utils/notify.py -> notify(title, message)
 - Free tier expires Apr 9 2026 — subscribe before then
+- All notify() calls use plain English messages (no Hebrew technical jargon)
+- Aviv Live: alerts after 6 consecutive failures (~30 min) via _check_consecutive_failures()
+- Recovery alert fires on first success after 6+ consecutive failures
+- Message format example: "Aviv BI is down — bandwidth quota exceeded on their end."
+- BilBoy alerts: token expired, reconciliation gap, general errors
+- Gmail alerts: auth failed, no Z-reports found, pending employee matches
 
 ---
 
@@ -231,6 +296,17 @@ BRRR_URL
 4. Franchise supplier name to exclude from BilBoy
 5. Branch ID = franchise number
 6. Create manager user + link to branch in user_branches table
+
+---
+
+## Lessons Learned / Key Bugs Fixed
+- franchise_supplier must use straight double quote " not Hebrew typographic ״
+- BilBoy suppliers must be batched in chunks of 30 (URL length limit)
+- Aviv Live Playwright: use domcontentloaded + wait_for_timeout(3000), never networkidle
+- % fixed expenses: store amount=0, calculate live — never store stale calculated amount
+- Monthly fixed expenses: carry forward from last month with data automatically
+- History table: start from first month with income/goods data (not employee hours)
+- Aviv BI REST API (bi1.aviv-pos.co.il) is totally separate from Firebase (bi-aviv.web.app)
 
 ---
 
