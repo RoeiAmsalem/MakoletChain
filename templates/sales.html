@@ -48,8 +48,18 @@
     .pdf-nav button:disabled { opacity: 0.3; cursor: default; }
     .pdf-nav span { color: #94a3b8; font-size: 0.85rem; }
     @media (max-width: 768px) {
-        .sales-kpis { grid-template-columns: 1fr 1fr; }
+        .sales-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .sales-kpis .kpi-card { padding: 0.75rem !important; }
+        .sales-kpis .kpi-value { font-size: 1.15rem !important; }
+        .sales-kpis .kpi-label { font-size: 0.7rem !important; }
+        .sales-kpis .kpi-icon { font-size: 1rem !important; }
+        .section-title { font-size: 1rem !important; }
+        .data-table thead th, .data-table tbody td { padding: 8px 6px; font-size: 0.8rem; }
+        .btn-pdf { min-height: 36px; min-width: 44px; padding: 0.3rem 0.5rem; touch-action: manipulation; }
         .pdf-modal { max-width: 100%; border-radius: 0; max-height: 100vh; }
+        .pdf-modal-body img { width: 100%; height: auto; }
+        .pdf-nav button { min-height: 44px; min-width: 44px; padding: 0.5rem 1rem; touch-action: manipulation; }
+        .pdf-modal-close { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
     }
 </style>
 {% endblock %}
