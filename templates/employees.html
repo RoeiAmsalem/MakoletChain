@@ -677,12 +677,19 @@ async function saveNewFromPending() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, hourly_rate, role })
         });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'שגיאה'); }
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+            if (res.status === 401 || res.redirected) { window.location.href = '/login'; return; }
+            showToast(`שגיאה מהשרת (${res.status})`, 'error'); return;
+        }
+        const d = await res.json();
+        if (!res.ok) { showToast(d.error || 'שגיאה', 'error'); return; }
         closeNewModal();
         showToast('עובד חדש נוצר ושעות נשמרו', 'success');
-        document.getElementById(`pending-${pendingId}`).remove();
+        const el = document.getElementById(`pending-${pendingId}`);
+        if (el) el.remove();
         loadEmployees();
-    } catch (err) { showToast(err.message, 'error'); }
+    } catch (err) { showToast(err.message || 'שגיאת רשת', 'error'); }
 }
 
 async function loadDiscrepancies() {

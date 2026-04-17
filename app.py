@@ -187,6 +187,9 @@ def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
+            # Return JSON 401 for API requests, redirect for page requests
+            if request.path.startswith('/api/') or request.is_json:
+                return jsonify({'error': 'יש להתחבר מחדש', 'redirect': '/login'}), 401
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated
