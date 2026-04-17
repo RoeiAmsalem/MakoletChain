@@ -272,8 +272,14 @@ def _match_employee_name(csv_name: str, db_employees: list, branch_name: str = '
             return (emp['id'], 'exact', db_name, emp['hourly_rate'])
 
         # One contains the other (handles "עידן" matching "עידן בקון")
+        # But require the shorter name to be at least 2 words OR an exact first-name match
+        csv_words_check = cleaned.split()
+        db_words_check = db_clean.split()
         if cleaned.startswith(db_clean) or db_clean.startswith(cleaned):
-            return (emp['id'], 'exact', db_name, emp['hourly_rate'])
+            shorter_len = min(len(csv_words_check), len(db_words_check))
+            # Only accept if first names match exactly
+            if csv_words_check and db_words_check and csv_words_check[0] == db_words_check[0]:
+                return (emp['id'], 'exact', db_name, emp['hourly_rate'])
 
         csv_words = cleaned.split()
         db_words = db_clean.split()

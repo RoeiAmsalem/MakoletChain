@@ -689,9 +689,8 @@ async function saveNewFromPending() {
         if (!res.ok) { showToast(d.error || 'שגיאה', 'error'); return; }
         closeNewModal();
         showToast('עובד חדש נוצר ושעות נשמרו', 'success');
-        const el = document.getElementById(`pending-${pendingId}`);
-        if (el) el.remove();
-        loadEmployees();
+        await loadPendingMatches();
+        await loadEmployees();
     } catch (err) { showToast(err.message || 'שגיאת רשת', 'error'); }
 }
 
