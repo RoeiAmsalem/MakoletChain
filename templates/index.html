@@ -285,7 +285,10 @@ async function loadHourlyChart() {
 
     // 2-hour bucket chart — labels come pre-formatted with LTR mark from API
     const maxVal = Math.max(...trimmed.map(b => b.total));
-    const labels = trimmed.map(b => b.label);
+    const labels = trimmed.map(b => {
+      const parts = b.label.replace(/\u200e/g, '').split('-');
+      return parts.length === 2 ? [parts[0].trim(), parts[1].trim()] : b.label;
+    });
 
     if (hourlyChartInstance) hourlyChartInstance.destroy();
     const ctx = document.getElementById('hourly-chart').getContext('2d');
@@ -356,8 +359,8 @@ async function loadHourlyChart() {
             offset: true,
             ticks: {
               color: '#e2e8f0',
-              font: { size: isMobile() ? 12 : 14, weight: '700' },
-              padding: isMobile() ? 2 : 6,
+              font: { size: isMobile() ? 10 : 14, weight: '700' },
+              padding: isMobile() ? 4 : 6,
               maxRotation: 0,
               minRotation: 0,
               autoSkip: false
@@ -376,6 +379,7 @@ async function loadHourlyChart() {
             }
           },
           y: {
+            display: !isMobile(),
             beginAtZero: true,
             ticks: {
               display: !isMobile(),
