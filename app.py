@@ -803,9 +803,14 @@ def api_sales_by_hour():
 
     try:
         # Login
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'MakoletChain/1.0',
+        }
         r = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/account/login',
             json={'user': branch['aviv_user_id'], 'password': branch['aviv_password']},
-            timeout=15, verify=False)
+            headers=headers, timeout=15, verify=False)
         r.raise_for_status()
         login_data = r.json()
         token = login_data.get('value')
@@ -815,11 +820,11 @@ def api_sales_by_hour():
         if not token or not aviv_branch_id:
             return jsonify([])
 
-        # Refresh token before query
+        # Refresh token before query (single-use tokens)
         r2 = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/account/refresh',
-            headers={'Authtoken': token, 'Content-Type': 'application/json'},
+            headers={**headers, 'Authtoken': token},
             json={}, timeout=10, verify=False)
-        token = r2.json().get('value') or r2.json().get('token') or token
+        token = r2.json().get('value') or token
 
         # Query deals by hour
         year, mo = month.split('-')
@@ -828,7 +833,7 @@ def api_sales_by_hour():
         date_to = f'{month}-{last_day}'
 
         r3 = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/dashboard/query',
-            headers={'Authtoken': token, 'Content-Type': 'application/json'},
+            headers={**headers, 'Authtoken': token},
             json={
                 'table': 'deals',
                 'select': ['hour', 'SUM(sum) as total', 'COUNT(*) as count'],
