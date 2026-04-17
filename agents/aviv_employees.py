@@ -157,14 +157,29 @@ def run_aviv_employees(branch_id):
         )''')
         conn.commit()
 
-        # Get all known employees for this branch
+        # Get all ACTIVE employees for this branch (inactive employees should not match)
         db_employees = [dict(r) for r in conn.execute(
-            'SELECT id, name, hourly_rate, aviv_employee_id FROM employees WHERE branch_id=?',
+            'SELECT id, name, hourly_rate, aviv_employee_id FROM employees WHERE branch_id=? AND active=1',
             (branch_id,)).fetchall()]
 
         branch_name = branch['name'] or ''
         saved = 0
         flagged = 0
+
+        # Log all employees from Aviv before matching
+        all_aviv_emps = []
+        for group in data:
+            title = group.get('title', '')
+            if title == '---' or title == 'Unknown user':
+                continue
+            for emp in group.get('employees', []):
+                n = (emp.get('name') or '').strip()
+                h = _parse_hours(emp.get('workingHours', '0:00'))
+                if n and h > 0:
+                    all_aviv_emps.append((n, emp.get('id'), h))
+        log.info("Aviv returned %d employees for branch %d:", len(all_aviv_emps), branch_id)
+        for n, eid, h in all_aviv_emps:
+            log.info("  %s (id=%s) — %.2fh", n, eid, h)
 
         for group in data:
             title = group.get('title', '')
