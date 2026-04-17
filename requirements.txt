@@ -10,3 +10,4 @@ python-dotenv
 resend
 openpyxl
 xlrd
+iec-api>=0.5.13

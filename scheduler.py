@@ -239,6 +239,27 @@ scheduler.add_job(
 )
 
 
+def run_iec_sync():
+    """06:00 — daily IEC electricity invoice sync."""
+    from agents.iec_agent import run_iec_all
+    log.info("Running IEC sync for all branches")
+    try:
+        results = run_iec_all()
+        for bid, result in results.items():
+            log.info("Branch %d IEC: %s", bid, result.get('message', ''))
+    except Exception as e:
+        log.error("IEC sync failed: %s", e)
+
+
+# 06:00 — daily IEC electricity invoice sync
+scheduler.add_job(
+    func=run_iec_sync,
+    trigger=CronTrigger(hour=6, minute=0, timezone=IL_TZ),
+    id='iec_sync',
+    name='IEC electricity sync 06:00',
+)
+
+
 if __name__ == '__main__':
     if os.getenv('ENABLE_AGENTS', 'true').lower() == 'false':
         log.info('[scheduler] ENABLE_AGENTS=false — skipping all agent scheduling')
