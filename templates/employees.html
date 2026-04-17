@@ -101,18 +101,28 @@
     .chart-info { position: relative; display: inline-block; cursor: pointer; color: #64748b; font-size: 1.1rem; margin-inline-start: 0.5rem; vertical-align: middle; }
     .chart-info::after {
         content: attr(data-tooltip);
-        position: absolute; top: 100%; inset-inline-start: 0; margin-top: 0.5rem;
+        position: absolute; top: 100%; right: 0; margin-top: 0.5rem;
         background: #1e293b; border: 1px solid #475569; border-radius: 8px;
         padding: 0.75rem 1rem; font-size: 0.85rem; color: #e2e8f0;
-        white-space: normal; width: min(280px, calc(100vw - 2rem)); z-index: 100;
+        white-space: normal; width: max-content; max-width: min(280px, calc(100vw - 2rem)); z-index: 100;
         box-shadow: 0 4px 12px rgba(0,0,0,0.4);
         line-height: 1.5; text-align: right; direction: rtl; font-weight: 400;
-        display: none;
+        display: none; pointer-events: none;
     }
     .chart-info:hover::after, .chart-info.open::after { display: block; }
 
+    /* Prevent horizontal scroll */
+    html, body { overflow-x: hidden; max-width: 100vw; }
+
     /* ── Mobile optimizations ── */
     @media (max-width: 768px) {
+        /* Tooltip — fixed to bottom of viewport so it never overflows */
+        .chart-info { position: static; }
+        .chart-info::after {
+            position: fixed; top: auto; bottom: 1rem; right: 1rem; left: 1rem;
+            margin: 0; width: auto; max-width: none;
+        }
+
         /* Pattern A — page wrapper */
         h2 { font-size: 1.05rem !important; }
 
