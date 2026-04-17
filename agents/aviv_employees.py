@@ -246,13 +246,18 @@ def run_aviv_employees(branch_id):
                             (round(hours, 2), aviv_emp_id, existing['id']))
 
         conn.commit()
-        msg = f'{saved} employees updated, {flagged} flagged for review'
 
-        if flagged > 0:
+        # Count ALL unresolved pending (including pre-existing from prior runs)
+        total_pending = conn.execute(
+            'SELECT COUNT(*) as cnt FROM employee_match_pending WHERE branch_id=? AND month=? AND resolved=0',
+            (branch_id, month_str)).fetchone()['cnt']
+        msg = f'{saved} employees updated, {total_pending} flagged for review'
+
+        if total_pending > 0:
             try:
                 from utils.notify import notify
                 notify(f'Attendance — {branch_name}',
-                       f'{flagged} employees from Aviv need review on the employees page.')
+                       f'{total_pending} employees from Aviv need review on the employees page.')
             except Exception:
                 pass
 
@@ -261,7 +266,7 @@ def run_aviv_employees(branch_id):
             (saved, msg, run_id))
         conn.commit()
         log.info("aviv_employees branch %d: %s", branch_id, msg)
-        return {'success': True, 'message': msg, 'saved': saved, 'flagged': flagged}
+        return {'success': True, 'message': msg, 'saved': saved, 'flagged': total_pending}
 
     except Exception as e:
         log.exception('aviv_employees failed for branch %d', branch_id)
