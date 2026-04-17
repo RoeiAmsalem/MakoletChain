@@ -260,7 +260,7 @@
 
 {% block scripts %}
 <script>
-const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live' };
+const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', aviv_employees: 'עובדים' };
 const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
 const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
 
@@ -298,7 +298,7 @@ function renderBranches(branches) {
         return;
     }
     grid.innerHTML = branches.map(b => {
-        const agentRows = ['bilboy', 'gmail', 'aviv_live'].map(agent => {
+        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'aviv_employees'].map(agent => {
             const a = b.agents[agent];
             if (!a) return `<div class="agent-row"><span class="agent-name">${AGENT_LABELS[agent]}</span><span class="agent-msg">לא רץ</span><span class="agent-badge skipped">–</span></div>`;
             const badge = a.status || 'unknown';
@@ -331,6 +331,7 @@ function renderBranches(branches) {
                 <button class="btn-action" onclick="runAgent(${b.id},'bilboy',this)">הרץ BilBoy</button>
                 <button class="btn-action" onclick="runAgent(${b.id},'gmail',this)">הרץ Gmail</button>
                 <button class="btn-action" onclick="runAgent(${b.id},'aviv_live',this)">הרץ Aviv</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'aviv_employees',this)">הרץ עובדים</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'bilboy')">לוגים BB</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'gmail')">לוגים GM</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'aviv_live')">לוגים AV</button>

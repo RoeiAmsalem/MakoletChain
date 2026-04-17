@@ -8,3 +8,5 @@ pymupdf
 pdfplumber
 python-dotenv
 resend
+openpyxl
+xlrd

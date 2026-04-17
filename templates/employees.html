@@ -84,6 +84,8 @@
     .btn-approve:hover { background: rgba(34,197,94,0.35); }
     .btn-reject { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.25); border-radius: 6px; padding: 0.3rem 0.6rem; color: #fca5a5; cursor: pointer; font-size: 0.75rem; font-family: inherit; font-weight: 600; }
     .btn-reject:hover { background: rgba(239,68,68,0.3); }
+    .btn-new { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.25); border-radius: 6px; padding: 0.3rem 0.6rem; color: #a5b4fc; cursor: pointer; font-size: 0.75rem; font-family: inherit; font-weight: 600; }
+    .btn-new:hover { background: rgba(99,102,241,0.3); }
 
     /* Toast */
     .toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
@@ -128,7 +130,7 @@
 <section class="section-card" id="pending-section" style="display:none; border: 1px solid rgba(245,158,11,0.3);">
     <h2 style="color:#fde68a;">התאמות ממתינות לאישור</h2>
     <p style="font-size:0.82rem; color:var(--text-secondary); margin-bottom:1rem;">
-        עובדים מה-CSV שלא זוהו אוטומטית — נדרש אישור ידני
+        עובדים מ-Aviv שלא זוהו אוטומטית — נדרש אישור ידני
     </p>
     <div id="pending-list"></div>
 </section>
@@ -182,6 +184,39 @@
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal()">ביטול</button>
                 <button class="btn-primary" id="modal-save-btn" onclick="saveEmployee()">שמור</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add-as-New Modal -->
+<div class="modal-overlay" id="new-emp-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3>הוסף כעובד חדש</h3>
+            <button class="modal-close" onclick="closeNewModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="new-pending-id">
+            <div class="form-group">
+                <label>שם עובד</label>
+                <input type="text" id="new-emp-name" placeholder="שם מלא">
+            </div>
+            <div class="form-group">
+                <label>תפקיד</label>
+                <div class="role-toggle">
+                    <label><input type="radio" name="new-emp-role" value="בוקר"><span>בוקר</span></label>
+                    <label><input type="radio" name="new-emp-role" value="ערב" checked><span>ערב</span></label>
+                    <label><input type="radio" name="new-emp-role" value="מנהל"><span>מנהל</span></label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>תעריף שעתי (₪)</label>
+                <input type="number" id="new-emp-rate" placeholder="0" min="0" step="0.5">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeNewModal()">ביטול</button>
+                <button class="btn-primary" onclick="saveNewFromPending()">שמור</button>
             </div>
         </div>
     </div>
@@ -407,10 +442,11 @@ async function loadPendingMatches() {
                 `<option value="${e.id}" ${e.id === p.suggested_employee_id ? 'selected' : ''}>${e.name} (₪${e.hourly_rate}/שעה)</option>`
             ).join('');
 
+            const srcLabel = p.source === 'aviv_api' ? 'Aviv' : 'CSV';
             return `<div class="pending-row" id="pending-${p.id}">
                 <div class="pending-info">
                     <div class="pending-csv-name">${p.csv_name}</div>
-                    <div class="pending-meta">${p.hours.toFixed(1)} שעות · ${p.confidence === 'low' ? 'התאמה חלשה' : 'לא זוהה'}</div>
+                    <div class="pending-meta">${p.hours.toFixed(1)} שעות · ${srcLabel} · ${p.confidence === 'low' ? 'התאמה חלשה' : 'לא זוהה'}</div>
                 </div>
                 <span class="pending-arrow">&larr;</span>
                 <div class="pending-suggestion">
@@ -420,6 +456,7 @@ async function loadPendingMatches() {
                     <select id="reassign-${p.id}">${opts}</select>
                     <button class="btn-approve" onclick="approvePending(${p.id})">אשר</button>
                     <button class="btn-approve" onclick="reassignPending(${p.id})" style="background:rgba(99,102,241,0.2);border-color:rgba(99,102,241,0.3);color:#a5b4fc;">שייך</button>
+                    <button class="btn-new" onclick="openNewFromPending(${p.id}, '${p.csv_name.replace(/'/g, "\\'")}')">+ חדש</button>
                     <button class="btn-reject" onclick="rejectPending(${p.id})">דחה</button>
                 </div>
             </div>`;
@@ -466,7 +503,43 @@ async function reassignPending(id) {
     } catch (err) { showToast(err.message, 'error'); }
 }
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+function openNewFromPending(pendingId, csvName) {
+    document.getElementById('new-pending-id').value = pendingId;
+    document.getElementById('new-emp-name').value = csvName;
+    document.getElementById('new-emp-rate').value = '';
+    document.querySelector('input[name="new-emp-role"][value="ערב"]').checked = true;
+    document.getElementById('new-emp-modal').classList.add('open');
+    document.getElementById('new-emp-rate').focus();
+}
+
+function closeNewModal() {
+    document.getElementById('new-emp-modal').classList.remove('open');
+}
+
+async function saveNewFromPending() {
+    const pendingId = document.getElementById('new-pending-id').value;
+    const name = document.getElementById('new-emp-name').value.trim();
+    const hourly_rate = parseFloat(document.getElementById('new-emp-rate').value) || 0;
+    const role = document.querySelector('input[name="new-emp-role"]:checked')?.value || 'ערב';
+
+    if (!name) { showToast('נא למלא שם עובד', 'error'); return; }
+    if (hourly_rate <= 0) { showToast('נא להגדיר תעריף שעתי', 'error'); return; }
+
+    try {
+        const res = await fetch(`/api/employee-match-pending/${pendingId}/add-new`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, hourly_rate, role })
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'שגיאה'); }
+        closeNewModal();
+        showToast('עובד חדש נוצר ושעות נשמרו', 'success');
+        document.getElementById(`pending-${pendingId}`).remove();
+        loadEmployees();
+    } catch (err) { showToast(err.message, 'error'); }
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeNewModal(); } });
 loadEmployees();
 loadPendingMatches();
 </script>

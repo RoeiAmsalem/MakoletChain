@@ -196,6 +196,19 @@ scheduler.add_job(
 )
 
 
+def run_aviv_employees():
+    """23:45 — fetch per-employee hours from Aviv BI API."""
+    from agents.aviv_employees import run_aviv_employees as _run
+    branches = get_active_branches()
+    for bid in branches:
+        log.info("Aviv employees for branch %d", bid)
+        try:
+            result = _run(bid)
+            log.info("Branch %d employees: %s", bid, result)
+        except Exception as e:
+            log.error("Branch %d aviv_employees failed: %s", bid, e)
+
+
 def cleanup_orphaned_runs():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     result = conn.execute(
@@ -207,6 +220,15 @@ def cleanup_orphaned_runs():
         log.warning("Cleaned up %d orphaned agent_runs on startup", result.rowcount)
     conn.commit()
     conn.close()
+
+
+# 23:45 — per-employee hours from Aviv BI API
+scheduler.add_job(
+    func=run_aviv_employees,
+    trigger=CronTrigger(hour=23, minute=45, timezone=IL_TZ),
+    id='aviv_employees',
+    name='Aviv employees hours 23:45',
+)
 
 
 if __name__ == '__main__':

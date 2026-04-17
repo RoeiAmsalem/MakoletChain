@@ -66,6 +66,9 @@ def _migrate_add_columns(conn):
         ('live_sales', 'discount_total', 'REAL DEFAULT 0'),
         ('live_sales', 'running_total', 'REAL DEFAULT 0'),
         ('live_sales', 'running_count', 'INTEGER DEFAULT 0'),
+        ('employees', 'aviv_employee_id', 'INTEGER'),
+        ('employee_match_pending', 'aviv_employee_id', 'INTEGER'),
+        ('employee_match_pending', 'source', "TEXT DEFAULT 'csv'"),
     ]
     for table, col, col_type in migrations:
         try:
@@ -1114,7 +1117,8 @@ def api_employee_match_pending():
 
     rows = db.execute('''
         SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
-               p.hours, p.salary, p.month,
+               p.hours, p.salary, p.month, p.aviv_employee_id,
+               COALESCE(p.source, 'csv') as source,
                e.name as suggested_name, e.hourly_rate as suggested_rate
         FROM employee_match_pending p
         LEFT JOIN employees e ON e.id = p.suggested_employee_id
@@ -1155,12 +1159,30 @@ def api_pending_approve(pending_id):
     rate = emp['hourly_rate'] if emp else 0
     salary = round(row['hours'] * rate, 2) if rate > 0 else 0
 
+    # Determine source from pending row
+    source = 'csv'
+    try:
+        source = row['source'] or 'csv'
+    except (IndexError, KeyError):
+        pass
+
     db.execute(
         "INSERT OR REPLACE INTO employee_hours "
         "(branch_id, month, employee_name, total_hours, total_salary, source) "
-        "VALUES (?, ?, ?, ?, ?, 'csv')",
-        (branch_id, row['month'], row['csv_name'], row['hours'], salary)
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (branch_id, row['month'], row['csv_name'], row['hours'], salary, source)
     )
+
+    # Save aviv_employee_id link for future auto-matching
+    try:
+        aviv_emp_id = row['aviv_employee_id']
+        if aviv_emp_id and row['suggested_employee_id']:
+            db.execute(
+                'UPDATE employees SET aviv_employee_id=? WHERE id=? AND (aviv_employee_id IS NULL OR aviv_employee_id != ?)',
+                (aviv_emp_id, row['suggested_employee_id'], aviv_emp_id))
+    except (IndexError, KeyError):
+        pass
+
     db.execute("UPDATE employee_match_pending SET resolved = 1 WHERE id = ?", (pending_id,))
     db.commit()
 
@@ -1226,6 +1248,63 @@ def api_pending_reassign(pending_id):
     _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True, 'hours': row['hours'], 'salary': salary})
+
+
+@app.route('/api/employee-match-pending/<int:pending_id>/add-new', methods=['POST'])
+@login_required
+def api_pending_add_new(pending_id):
+    """Create a new employee from a pending match and save their hours."""
+    db = get_db()
+    branch_id = get_branch_id()
+    row = db.execute(
+        "SELECT * FROM employee_match_pending WHERE id = ? AND branch_id = ?",
+        (pending_id, branch_id)
+    ).fetchone()
+    if not row or row['resolved']:
+        return jsonify({'error': 'not found'}), 404
+
+    data = request.get_json()
+    name = (data.get('name') or '').strip()
+    hourly_rate = float(data.get('hourly_rate', 0))
+    role = (data.get('role') or 'ערב').strip()
+
+    if not name or hourly_rate <= 0:
+        return jsonify({'error': 'name and hourly_rate required'}), 400
+
+    # Get aviv_employee_id from pending row if available
+    aviv_emp_id = None
+    try:
+        aviv_emp_id = row['aviv_employee_id']
+    except (IndexError, KeyError):
+        pass
+
+    # Create new employee
+    cur = db.execute(
+        'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id) '
+        'VALUES (?, ?, ?, ?, 1, ?)',
+        (branch_id, name, hourly_rate, role, aviv_emp_id))
+    new_emp_id = cur.lastrowid
+
+    # Save hours
+    hours = row['hours']
+    salary = round(hours * hourly_rate, 2)
+    source = 'aviv_api'
+    try:
+        source = row['source'] or 'csv'
+    except (IndexError, KeyError):
+        pass
+
+    db.execute(
+        "INSERT OR REPLACE INTO employee_hours "
+        "(branch_id, month, employee_name, total_hours, total_salary, source) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (branch_id, row['month'], name, hours, salary, source))
+
+    db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (pending_id,))
+    _recalculate_avg_rate(branch_id, db)
+    db.commit()
+
+    return jsonify({'ok': True, 'employee_id': new_emp_id})
 
 
 def _get_fixed_total(branch_id: int, month: str, income: float, db) -> float:
@@ -1658,7 +1737,7 @@ def ops_run_agent():
     branch_id = data.get('branch_id')
     agent = data.get('agent')
 
-    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live'):
+    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees'):
         return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
 
     t0 = time.time()
@@ -1671,10 +1750,14 @@ def ops_run_agent():
             from agents.gmail_agent import run_gmail_sync
             result = run_gmail_sync(int(branch_id))
             msg = f"{result.get('new_reports', 0)} דוחות חדשים"
-        else:
+        elif agent == 'aviv_live':
             from agents.aviv_live import run_aviv_live
             result = run_aviv_live(int(branch_id))
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
+        else:  # aviv_employees
+            from agents.aviv_employees import run_aviv_employees
+            result = run_aviv_employees(int(branch_id))
+            msg = result.get('message', 'done')
 
         duration = round(time.time() - t0, 1)
         status = 'success' if result.get('success') else 'error'
@@ -1694,7 +1777,7 @@ def ops_run_agent():
 @_ceo_required
 def ops_logs(branch_id, agent):
     import re as _re
-    if agent not in ('bilboy', 'gmail', 'aviv_live'):
+    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees'):
         abort(400)
 
     # Get branch name for modal title
