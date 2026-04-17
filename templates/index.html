@@ -102,12 +102,13 @@
 
 <!-- Sales by Hour chart -->
 <div class="card chart-card" id="hourly-section" style="display:none;">
-  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.25rem;">
     <h2 class="section-title" style="margin:0;">מכירות לפי שעה — החודש</h2>
     <span id="hourly-loading" style="font-size:0.8rem; color:#94a3b8;">טוען...</span>
   </div>
+  <div id="hourly-subtitle" style="font-size:0.85rem; color:#94a3b8; margin-bottom:1rem;"></div>
   <div class="chart-wrapper">
-    <canvas id="hourly-chart"></canvas>
+    <canvas id="hourly-chart" height="160"></canvas>
   </div>
 </div>
 
@@ -259,45 +260,88 @@ async function loadHourlyChart() {
     document.getElementById('hourly-section').style.display = 'block';
     document.getElementById('hourly-loading').style.display = 'none';
 
+    // Show peak hour subtitle
+    const peakHour = data.reduce((a, b) => b.total > a.total ? b : a, {total: 0});
+    if (peakHour.total > 0) {
+      document.getElementById('hourly-subtitle').textContent =
+        `השעה החזקה ביותר: ${peakHour.hour}:00 (₪${Math.round(peakHour.total).toLocaleString()})`;
+    }
+
     if (hourlyChartInstance) hourlyChartInstance.destroy();
     const ctx = document.getElementById('hourly-chart').getContext('2d');
+    const maxVal = Math.max(...data.map(x => x.total));
     hourlyChartInstance = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: data.map(d => `${d.hour}:00`),
+        labels: data.map(d => `${d.hour}`),
         datasets: [{
           label: 'הכנסות',
           data: data.map(d => d.total),
-          backgroundColor: data.map(d => d.total > 0 ? 'rgba(34,197,94,0.7)' : 'rgba(34,197,94,0.1)'),
-          borderColor: 'rgba(34,197,94,0.9)',
-          borderWidth: 1,
-          borderRadius: 3,
+          backgroundColor: data.map(d => {
+            if (d.total === 0) return 'rgba(100,116,139,0.15)';
+            if (d.total === maxVal && maxVal > 0) return 'rgba(34,197,94,0.95)';
+            return 'rgba(34,197,94,0.65)';
+          }),
+          borderRadius: 6,
+          borderSkipped: false,
         }]
       },
+      plugins: [{
+        id: 'valueLabels',
+        afterDatasetsDraw(chart) {
+          const {ctx: c} = chart;
+          chart.data.datasets[0].data.forEach((v, i) => {
+            if (v > 0) {
+              const bar = chart.getDatasetMeta(0).data[i];
+              c.save();
+              c.fillStyle = '#f1f5f9';
+              c.font = '600 11px system-ui, sans-serif';
+              c.textAlign = 'center';
+              c.textBaseline = 'bottom';
+              const label = v >= 1000 ? '₪' + (v/1000).toFixed(1) + 'K' : '₪' + Math.round(v);
+              c.fillText(label, bar.x, bar.y - 4);
+              c.restore();
+            }
+          });
+        }
+      }],
       options: {
         responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 24 } },
         plugins: {
           legend: { display: false },
           tooltip: {
+            backgroundColor: 'rgba(15,23,42,0.95)',
+            titleColor: '#f1f5f9',
+            bodyColor: '#cbd5e1',
+            padding: 10,
             callbacks: {
+              title: (items) => `שעה ${items[0].label}:00`,
               label: (tip) => {
                 const d = data[tip.dataIndex];
-                return [`₪${Math.round(d.total).toLocaleString()}`, `${d.count} עסקאות`];
+                return [
+                  '₪' + Math.round(d.total).toLocaleString(),
+                  d.count + ' עסקאות',
+                  'ממוצע: ₪' + Math.round(d.total / Math.max(d.count, 1))
+                ];
               }
             }
           }
         },
         scales: {
           x: {
-            ticks: { color: '#94a3b8', font: { size: 10 } },
-            grid: { color: 'rgba(255,255,255,0.05)' }
-          },
-          y: {
             ticks: {
               color: '#94a3b8',
-              callback: v => '₪' + Math.round(v/1000) + 'K'
+              font: { size: 11, weight: '600' },
+              callback: function(v) { return this.getLabelForValue(v) + ':00'; }
             },
-            grid: { color: 'rgba(255,255,255,0.05)' }
+            grid: { display: false }
+          },
+          y: {
+            display: false,
+            beginAtZero: true,
+            grace: '15%'
           }
         }
       }
