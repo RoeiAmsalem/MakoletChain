@@ -113,8 +113,9 @@ def run_aviv_employees(branch_id):
             conn.commit()
             return {'success': False, 'message': msg}
 
-        # Login + refresh
-        token, aviv_branch_id = _login(branch['aviv_user_id'], branch['aviv_password'])
+        # Login + refresh (password defaults to user_id if empty)
+        password = branch['aviv_password'] or branch['aviv_user_id']
+        token, aviv_branch_id = _login(branch['aviv_user_id'], password)
         token = _refresh(token)
 
         # Fetch current month's employee data
