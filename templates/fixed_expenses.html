@@ -54,11 +54,21 @@
     @media (max-width:768px) {
         .add-form-card { padding:1.25rem 1rem; }
         .form-field { min-width:100%; }
-        .type-btn { font-size:0.92rem; padding:0.55rem 0.9rem; flex:1; justify-content:center; }
-        .hide-mobile { display:none !important; }
+        .type-btn { font-size:0.92rem; padding:0.55rem 0.9rem; flex:1; justify-content:center; text-align:center; }
         .data-table thead th,.data-table tbody td { padding:10px 8px; font-size:0.88rem; }
         .btn-save-form { flex:1; min-height:44px; }
-        .btn-add-main { min-height:40px; }
+        .btn-cancel-form { min-height:44px; }
+        .btn-add-main { min-height:44px; }
+        .kpi-card--fixed .kpi-value { font-size:1.5rem !important; }
+        .kpi-card--fixed { padding:1rem 1.25rem !important; }
+        .table-header { flex-direction:column; align-items:stretch !important; gap:0.75rem; padding:1rem; }
+        .table-header h2 { font-size:1rem; }
+        .actions-cell { gap:0.25rem; }
+        .btn-icon { min-width:40px; min-height:40px; display:flex; align-items:center; justify-content:center; }
+        .btn-delete-icon { min-width:40px; min-height:40px; display:flex; align-items:center; justify-content:center; }
+        #edit-modal-overlay > div { padding:1.25rem !important; max-height:90vh; overflow-y:auto; }
+        #edit-modal-overlay input, #edit-modal-overlay select { font-size:16px !important; }
+        .form-field input, .form-field select { font-size:16px !important; }
     }
 </style>
 {% endblock %}
@@ -123,7 +133,7 @@
     </div>
     <div style="overflow-x:auto">
         <table class="data-table">
-            <thead><tr><th>שם</th><th>סוג</th><th>סכום חודשי</th><th class="hide-mobile">פעולות</th></tr></thead>
+            <thead><tr><th>שם</th><th>סוג</th><th>סכום חודשי</th><th>פעולות</th></tr></thead>
             <tbody id="expenses-tbody"><tr><td colspan="4"><div class="loading"><div class="spinner"></div><span>טוען...</span></div></td></tr></tbody>
             <tfoot id="expenses-tfoot"></tfoot>
         </table>
@@ -230,7 +240,7 @@ function renderTable(tbody, exps) {
         <td class="money fixed" style="font-size:1rem">
             <span>${formatMoney(e.amount)}</span>
         </td>
-        <td class="hide-mobile"><div class="actions-cell">
+        <td><div class="actions-cell">
             <button class="btn-icon" onclick="openEditModal(${e.id})">✏️</button>
             <button onclick="deleteExpense(${e.id})" class="btn-delete-icon">🗑️</button>
         </div></td>
@@ -240,7 +250,7 @@ function renderTable(tbody, exps) {
 
 function updateTotals(exps) {
     const total = exps.reduce((a,e) => a + e.amount, 0);
-    document.getElementById('expenses-tfoot').innerHTML = `<tr><td colspan="2">סה"כ</td><td class="money" style="color:#c7d2fe">${formatMoney(total)}</td><td class="hide-mobile"></td></tr>`;
+    document.getElementById('expenses-tfoot').innerHTML = `<tr><td colspan="2">סה"כ</td><td class="money" style="color:#c7d2fe">${formatMoney(total)}</td><td></td></tr>`;
     document.getElementById('header-total').textContent = `סה"כ: ${formatMoney(total)}`;
 }
 
