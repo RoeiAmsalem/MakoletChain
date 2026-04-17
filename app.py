@@ -54,7 +54,25 @@ def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     with open(SCHEMA_PATH, 'r') as f:
         conn.executescript(f.read())
+    # Migrations: add columns if missing
+    _migrate_add_columns(conn)
     conn.close()
+
+
+def _migrate_add_columns(conn):
+    """Add new columns to existing tables (safe to run repeatedly)."""
+    migrations = [
+        ('live_sales', 'cancellation_total', 'REAL DEFAULT 0'),
+        ('live_sales', 'discount_total', 'REAL DEFAULT 0'),
+        ('live_sales', 'running_total', 'REAL DEFAULT 0'),
+        ('live_sales', 'running_count', 'INTEGER DEFAULT 0'),
+    ]
+    for table, col, col_type in migrations:
+        try:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN {col} {col_type}')
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def seed_admin():
@@ -627,7 +645,9 @@ def api_summary():
         has_z = z_row is not None
 
         live_row = db.execute(
-            'SELECT amount, transactions, last_updated FROM live_sales WHERE branch_id = ? AND date = ?',
+            'SELECT amount, transactions, last_updated, '
+            'cancellation_total, discount_total, running_total, running_count '
+            'FROM live_sales WHERE branch_id = ? AND date = ?',
             (branch_id, today)
         ).fetchone()
 
@@ -645,12 +665,23 @@ def api_summary():
     profit = income - goods - fixed - salary
 
     live = None
+    cancellation_total = 0
+    discount_total = 0
+    running_total = 0
+    running_count = 0
     if live_row:
         live = {
             'amount': live_row['amount'],
             'transactions': live_row['transactions'],
             'last_updated': live_row['last_updated'],
         }
+        try:
+            cancellation_total = round(float(live_row['cancellation_total'] or 0), 2)
+            discount_total = round(float(live_row['discount_total'] or 0), 2)
+            running_total = round(float(live_row['running_total'] or 0), 2)
+            running_count = int(live_row['running_count'] or 0)
+        except (KeyError, TypeError):
+            pass
 
     return jsonify({
         'income': income,
@@ -665,6 +696,10 @@ def api_summary():
         'live_amount_today': live_amount_today,
         'branch_id': branch_id,
         'month': month,
+        'cancellation_total': cancellation_total,
+        'discount_total': discount_total,
+        'running_total': running_total,
+        'running_count': running_count,
     })
 
 
@@ -747,6 +782,83 @@ def api_live_sales():
             'last_updated': row['last_updated'],
         })
     return jsonify({'amount': None, 'transactions': None, 'last_updated': None})
+
+
+@app.route('/api/sales-by-hour')
+@login_required
+def api_sales_by_hour():
+    """Return revenue breakdown by hour for a given month via Aviv BI REST API."""
+    import calendar
+    import requests as req
+    import urllib3 as _urllib3
+    _urllib3.disable_warnings()
+
+    branch_id = get_branch_id()
+    month = request.args.get('month', date.today().strftime('%Y-%m'))
+    db = get_db()
+    branch = db.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
+
+    if not branch or not branch['aviv_user_id']:
+        return jsonify([])
+
+    try:
+        # Login
+        r = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/account/login',
+            json={'user': branch['aviv_user_id'], 'password': branch['aviv_password']},
+            timeout=15, verify=False)
+        r.raise_for_status()
+        login_data = r.json()
+        token = login_data.get('value')
+        branches_list = login_data.get('branches') or []
+        aviv_branch_id = branches_list[0]['id'] if branches_list else None
+
+        if not token or not aviv_branch_id:
+            return jsonify([])
+
+        # Refresh token before query
+        r2 = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/account/refresh',
+            headers={'Authtoken': token, 'Content-Type': 'application/json'},
+            json={}, timeout=10, verify=False)
+        token = r2.json().get('value') or r2.json().get('token') or token
+
+        # Query deals by hour
+        year, mo = month.split('-')
+        last_day = calendar.monthrange(int(year), int(mo))[1]
+        date_from = f'{month}-01'
+        date_to = f'{month}-{last_day}'
+
+        r3 = req.post('https://bi1.aviv-pos.co.il:8443/avivbi/v2/dashboard/query',
+            headers={'Authtoken': token, 'Content-Type': 'application/json'},
+            json={
+                'table': 'deals',
+                'select': ['hour', 'SUM(sum) as total', 'COUNT(*) as count'],
+                'where': {'branch': aviv_branch_id, 'date': {'from': date_from, 'to': date_to}},
+                'groupBy': ['hour'],
+                'orderBy': 'hour'
+            },
+            timeout=15, verify=False)
+
+        rows = r3.json()
+        if isinstance(rows, dict):
+            rows = rows.get('data', [])
+
+        rows_by_hour = {}
+        for row in (rows if isinstance(rows, list) else []):
+            h = int(row.get('hour', 0))
+            rows_by_hour[h] = row
+
+        result = []
+        for h in range(24):
+            row = rows_by_hour.get(h, {})
+            result.append({
+                'hour': h,
+                'total': float(row.get('total') or row.get('sum') or 0),
+                'count': int(row.get('count') or 0)
+            })
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error('sales-by-hour failed: %s', e)
+        return jsonify([])
 
 
 @app.route('/api/employees', methods=['GET'])

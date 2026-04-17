@@ -205,6 +205,10 @@ def _scrape_api(branch: dict, log: logging.Logger) -> dict:
     last_updated = _fmt_last_updated(row.get('tmUpdate') or '')
     monthly_hours = float(row.get('totalEmployeeHours') or 0)
     shift_hours = float(row.get('currentEmployeeHours') or 0)
+    cancellation_total = float(row.get('cancellationTotal') or 0)
+    discount_total = float(row.get('discountTotal') or 0)
+    running_total = float(row.get('runningDealTotal') or 0)
+    running_count = int(row.get('runningDealCount') or 0)
 
     log.info(
         "REST: amount=₪%.2f, tx=%d, monthly_hours=%.2f, shift_hours=%.2f, last_updated=%s",
@@ -219,6 +223,10 @@ def _scrape_api(branch: dict, log: logging.Logger) -> dict:
         'fetched_at': datetime.now(IL_TZ).isoformat(),
         'monthly_hours': monthly_hours,
         'shift_hours': shift_hours,
+        'cancellation_total': cancellation_total,
+        'discount_total': discount_total,
+        'running_total': running_total,
+        'running_count': running_count,
     }
 
 
@@ -446,10 +454,14 @@ def run_aviv_live(branch_id: int) -> dict:
 
         # Save to DB
         conn.execute(
-            "INSERT OR REPLACE INTO live_sales (branch_id, date, amount, transactions, last_updated, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO live_sales "
+            "(branch_id, date, amount, transactions, last_updated, fetched_at, "
+            "cancellation_total, discount_total, running_total, running_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (branch_id, data['date'], data['amount'], data['transactions'],
-             data['last_updated'], data['fetched_at'])
+             data['last_updated'], data['fetched_at'],
+             data.get('cancellation_total', 0), data.get('discount_total', 0),
+             data.get('running_total', 0), data.get('running_count', 0))
         )
 
         # Save employee hours to branches table

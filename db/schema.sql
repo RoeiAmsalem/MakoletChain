@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS live_sales (
   transactions INTEGER,
   last_updated TEXT,
   fetched_at TEXT,
+  cancellation_total REAL DEFAULT 0,
+  discount_total REAL DEFAULT 0,
+  running_total REAL DEFAULT 0,
+  running_count INTEGER DEFAULT 0,
   PRIMARY KEY (branch_id, date)
 );
 
