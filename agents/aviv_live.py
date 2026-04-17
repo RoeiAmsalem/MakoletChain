@@ -1,5 +1,8 @@
 """
-Aviv POS live scraper (branch-aware) — uses Playwright to scrape bi-aviv.web.app/status.
+Aviv POS live scraper (branch-aware).
+
+Primary: REST API on bi1.aviv-pos.co.il (fast, no browser).
+Fallback: Playwright scrape of bi-aviv.web.app/status if REST fails.
 
 Reads credentials from branches table. Saves to live_sales with branch_id.
 Day-aware store hours (zoneinfo, NOT pytz):
@@ -11,11 +14,16 @@ import os
 import re
 import sqlite3
 import time
+import urllib3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
+
 from utils.notify import notify
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def _friendly_error(e: Exception) -> str:
     msg = str(e)
@@ -44,6 +52,9 @@ def _friendly_error(e: Exception) -> str:
 
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 STATUS_URL = "https://bi-aviv.web.app/status"
+API_BASE = "https://bi1.aviv-pos.co.il:8443/avivbi/v2"
+API_PLAIN = "https://bi1.aviv-pos.co.il:65010"
+API_TIMEOUT = 15
 IL_TZ = ZoneInfo('Asia/Jerusalem')
 
 
@@ -131,7 +142,87 @@ def _parse_hours(pattern, text):
     return float(val.replace(',', ''))
 
 
-def _scrape(branch: dict, log: logging.Logger) -> dict:
+def _fmt_last_updated(tm: str) -> str:
+    """Convert API 'YYYY-MM-DD HH:MM:SS' to 'HH:MM dd/mm/yy'."""
+    if not tm:
+        return datetime.now(IL_TZ).strftime("%H:%M %d/%m/%y")
+    try:
+        dt = datetime.strptime(tm, "%Y-%m-%d %H:%M:%S")
+        return dt.strftime("%H:%M %d/%m/%y")
+    except Exception:
+        return tm
+
+
+def _scrape_api(branch: dict, log: logging.Logger) -> dict:
+    """REST API path: login → status. No browser."""
+    user_id = branch.get('aviv_user_id') or ''
+    password = branch.get('aviv_password') or user_id
+
+    log.info("REST API scrape for user %s", user_id)
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'MakoletChain/1.0',
+    }
+
+    # 1) Login
+    r = requests.post(
+        f"{API_BASE}/account/login",
+        json={'user': user_id, 'password': password},
+        headers=headers,
+        timeout=API_TIMEOUT,
+        verify=False,
+    )
+    if r.status_code == 401:
+        raise Exception("401 Aviv BI login failed — credentials may have changed")
+    r.raise_for_status()
+    login_data = r.json()
+
+    token = login_data.get('value')
+    branches_list = login_data.get('branches') or []
+    if not token or not branches_list:
+        raise Exception(f"Login response missing token or branches: {str(login_data)[:200]}")
+
+    api_branch_id = branches_list[0]['id']
+
+    # 2) Status
+    r2 = requests.post(
+        f"{API_PLAIN}/raw/status/plain",
+        json={'branches': [api_branch_id]},
+        headers={**headers, 'Authtoken': token},
+        timeout=API_TIMEOUT,
+        verify=False,
+    )
+    r2.raise_for_status()
+    rows = r2.json()
+    if not rows:
+        raise Exception("Status response empty")
+    row = rows[0]
+
+    amount = float(row.get('dealTotal') or 0)
+    transactions = int(row.get('dealCount') or 0)
+    last_updated = _fmt_last_updated(row.get('tmUpdate') or '')
+    monthly_hours = float(row.get('totalEmployeeHours') or 0)
+    shift_hours = float(row.get('currentEmployeeHours') or 0)
+
+    log.info(
+        "REST: amount=₪%.2f, tx=%d, monthly_hours=%.2f, shift_hours=%.2f, last_updated=%s",
+        amount, transactions, monthly_hours, shift_hours, last_updated,
+    )
+
+    return {
+        'date': date.today().isoformat(),
+        'amount': amount,
+        'transactions': transactions,
+        'last_updated': last_updated,
+        'fetched_at': datetime.now(IL_TZ).isoformat(),
+        'monthly_hours': monthly_hours,
+        'shift_hours': shift_hours,
+    }
+
+
+def _scrape_playwright(branch: dict, log: logging.Logger) -> dict:
     from playwright.sync_api import sync_playwright
 
     user_id = branch.get('aviv_user_id') or ''
@@ -223,6 +314,15 @@ def _scrape(branch: dict, log: logging.Logger) -> dict:
         'monthly_hours': monthly_hours,
         'shift_hours': shift_hours,
     }
+
+
+def _scrape(branch: dict, log: logging.Logger) -> dict:
+    """Try REST API first; fall back to Playwright if it fails."""
+    try:
+        return _scrape_api(branch, log)
+    except Exception as e:
+        log.warning("REST API failed (%s), falling back to Playwright", e)
+        return _scrape_playwright(branch, log)
 
 
 def handle_zero_detection(branch_id: int, conn, logger: logging.Logger):
