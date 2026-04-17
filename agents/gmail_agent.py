@@ -444,15 +444,15 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         conn.close()
         return None
 
-    # Check if already processed for the detected report month
-    count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM employee_hours WHERE branch_id=? AND month=?",
+    # Check if CSV already verified for this month
+    csv_verified = conn.execute(
+        "SELECT COUNT(*) as cnt FROM employee_hours_discrepancies WHERE branch_id=? AND month=?",
         (branch_id, report_month)
     ).fetchone()['cnt']
-    if count > 0:
-        log.info("Attendance CSV already processed for %s (%d employees)", report_month, count)
+    if csv_verified > 0:
+        log.info("CSV already verified for %s — skipping", report_month)
         conn.close()
-        return "already processed"
+        return "already verified"
 
     # Parse CSV
     employees = _parse_attendance_csv(csv_content)
@@ -460,6 +460,21 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         log.warning("Could not parse any employees from attendance CSV")
         conn.close()
         return None
+
+    # Ensure discrepancies table exists
+    conn.execute('''CREATE TABLE IF NOT EXISTS employee_hours_discrepancies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch_id INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        employee_id INTEGER,
+        employee_name TEXT NOT NULL,
+        api_hours REAL,
+        csv_hours REAL,
+        difference REAL,
+        created_at TEXT DEFAULT (datetime('now')),
+        resolved INTEGER DEFAULT 0,
+        resolution TEXT
+    )''')
 
     # Load DB employees for matching
     db_employees = [dict(r) for r in conn.execute(
@@ -471,9 +486,18 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
     branch_row = conn.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)).fetchone()
     branch_name = branch_row['name'] if branch_row else ''
 
-    # Match and save
+    # Check if API data exists for this month
+    api_rows = conn.execute(
+        "SELECT employee_name, total_hours, source FROM employee_hours "
+        "WHERE branch_id=? AND month=? AND source='aviv_api'",
+        (branch_id, report_month)
+    ).fetchall()
+    has_api_data = len(api_rows) > 0
+    api_hours_map = {r['employee_name']: r['total_hours'] for r in api_rows}
+
     total_hours_all = sum(e['total_hours'] for e in employees)
-    total_salary_all = 0.0
+    matched_count = 0
+    discrepancy_count = 0
     saved_count = 0
     pending_count = 0
 
@@ -483,20 +507,52 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
         )
         salary = round(emp['total_hours'] * rate, 2) if rate > 0 else 0
 
-        if confidence in ('exact', 'high'):
-            # Save directly to employee_hours
-            total_salary_all += salary
-            conn.execute(
-                "INSERT OR REPLACE INTO employee_hours "
-                "(branch_id, month, employee_name, total_hours, total_salary, source) "
-                "VALUES (?, ?, ?, ?, ?, 'csv')",
-                (branch_id, report_month, emp['name'], emp['total_hours'], salary)
-            )
-            saved_count += 1
-            log.info("  %s → %s (%s, %.1fh, ₪%.0f)",
-                      emp['name'], matched_name, confidence, emp['total_hours'], salary)
+        if confidence in ('exact', 'high') and matched_name:
+            if has_api_data:
+                # CSV is VERIFICATION — compare with existing API hours
+                api_hours = api_hours_map.get(matched_name, None)
+                if api_hours is not None:
+                    diff = abs(api_hours - emp['total_hours'])
+                    if diff > 0.5:
+                        # Discrepancy found
+                        conn.execute(
+                            "INSERT INTO employee_hours_discrepancies "
+                            "(branch_id, month, employee_id, employee_name, api_hours, csv_hours, difference) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (branch_id, report_month, emp_id, matched_name,
+                             api_hours, emp['total_hours'], round(diff, 2))
+                        )
+                        discrepancy_count += 1
+                        log.warning("  DISCREPANCY %s: API=%.1fh CSV=%.1fh diff=%.1fh",
+                                    matched_name, api_hours, emp['total_hours'], diff)
+                    else:
+                        matched_count += 1
+                        log.info("  MATCH %s: API=%.1fh CSV=%.1fh (within tolerance)",
+                                 matched_name, api_hours, emp['total_hours'])
+                else:
+                    # No API data for this employee — save CSV as source
+                    conn.execute(
+                        "INSERT OR REPLACE INTO employee_hours "
+                        "(branch_id, month, employee_name, total_hours, total_salary, source) "
+                        "VALUES (?, ?, ?, ?, ?, 'csv')",
+                        (branch_id, report_month, matched_name, emp['total_hours'], salary)
+                    )
+                    saved_count += 1
+                    log.info("  %s → saved from CSV (no API data), %.1fh",
+                             matched_name, emp['total_hours'])
+            else:
+                # No API data at all — save CSV as source of truth (old behavior)
+                conn.execute(
+                    "INSERT OR REPLACE INTO employee_hours "
+                    "(branch_id, month, employee_name, total_hours, total_salary, source) "
+                    "VALUES (?, ?, ?, ?, ?, 'csv')",
+                    (branch_id, report_month, matched_name, emp['total_hours'], salary)
+                )
+                saved_count += 1
+                log.info("  %s → %s (csv, %.1fh, ₪%.0f)",
+                         emp['name'], matched_name, emp['total_hours'], salary)
         else:
-            # Save to pending for manual review
+            # Low confidence — save to pending
             is_new = 1 if confidence == 'none' and emp_id is None else 0
             conn.execute(
                 "INSERT INTO employee_match_pending "
@@ -508,30 +564,29 @@ def _sync_attendance_csv(mail, branch: dict, branch_id: int, log) -> str | None:
             pending_count += 1
             log.warning("  %s → PENDING (%s, suggested: %s)", emp['name'], confidence, matched_name)
 
-    # Calculate weighted avg rate for branch
-    if total_hours_all > 0 and total_salary_all > 0:
-        avg_rate = round(total_salary_all / total_hours_all, 2)
-    else:
-        avg_rate = 0
-
-    # Update branch hours + avg rate
-    conn.execute(
-        "UPDATE branches SET hours_this_month=?, avg_hourly_rate=?, hours_updated_at=? WHERE id=?",
-        (total_hours_all, avg_rate, now_il.isoformat(), branch_id)
-    )
     conn.commit()
     conn.close()
 
-    salary_str = f", שכר ₪{total_salary_all:,.0f}" if total_salary_all > 0 else ""
-    pending_str = f", {pending_count} ממתינים לאישור" if pending_count > 0 else ""
-    result_msg = (f"📊 נוכחות {report_month}: {saved_count} עובדים"
-                  f", {total_hours_all:.1f} שעות{salary_str}{pending_str}")
+    # Notification
+    branch_label = branch.get('name', f'Branch {branch_id}')
+    if has_api_data:
+        result_msg = (f"End-of-month verification {report_month}: "
+                      f"{matched_count} employees matched, {discrepancy_count} discrepancies found")
+        if discrepancy_count > 0:
+            notify(f"CSV Verification — {branch_label}",
+                   f"{matched_count} matched, {discrepancy_count} discrepancies found for {report_month}. "
+                   f"Review on the employees page.")
+        else:
+            notify(f"CSV Verification — {branch_label}",
+                   f"All {matched_count} employees matched API data for {report_month}.")
+    else:
+        result_msg = (f"Attendance CSV {report_month}: {saved_count} employees saved"
+                      f", {total_hours_all:.1f} hours")
+        if pending_count > 0:
+            notify(f"Attendance — {branch_label}",
+                   f"{pending_count} employees from CSV could not be matched — manual review needed.")
+
     log.info(result_msg)
-
-    if pending_count > 0:
-        notify(f"⚠️ Attendance — {branch.get('name', f'Branch {branch_id}')}",
-               f"{pending_count} employees from CSV could not be matched — manual review needed.")
-
     return result_msg
 
 

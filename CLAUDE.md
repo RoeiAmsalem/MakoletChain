@@ -216,14 +216,18 @@ Function: _calculate_salary_cost(branch_id, current_month) in app.py
 Used by: /api/summary (home page), /employees page, /api/history
 BOTH PAGES ALWAYS SHOW THE SAME NUMBER.
 
-Priority:
-1. CSV salary data for current month -> SUM(total_salary) from employee_hours
-2. CSV hours but no salary -> hours x employee.hourly_rate weighted by last month distribution, saved back to employee_hours.total_salary
-3. No CSV -> hours_this_month x avg_hourly_rate
+Logic: Salary = SUM(employee_hours.total_hours × employees.hourly_rate) for the month.
+No estimation. API is the source of truth, CSV is verification.
 
-avg_hourly_rate auto-recalculates when:
-- Monthly CSV processed by Gmail agent
-- Any employee rate changed via UI (POST/PUT/DELETE /api/employees)
+Sources (employee_hours.source):
+- 'aviv_api' — daily from aviv_employees agent (source of truth)
+- 'csv' — end-of-month Gmail CSV (verification only when API data exists)
+
+CSV Verification:
+- When CSV arrives and API data exists: compares hours, flags discrepancies > 0.5h
+- Discrepancies stored in employee_hours_discrepancies table
+- Manager resolves via UI: accept API, accept CSV, or ignore
+- When no API data exists: CSV saved normally as fallback
 
 ---
 

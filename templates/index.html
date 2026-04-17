@@ -25,7 +25,7 @@
     <div class="kpi-card kpi-card--neutral" id="profit-tile">
         <div class="kpi-header">
             <span class="kpi-icon">💰</span>
-            <span class="kpi-label" id="profit-label">רווח משוער</span>
+            <span class="kpi-label" id="profit-label">רווח</span>
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
         <div id="profit-bar-wrap" style="display:none; width:100%; margin-top:6px;">
@@ -34,7 +34,7 @@
           </div>
           <div id="profit-month-sub" style="font-size:0.82rem; color:#e2e8f0; font-weight:600; text-align:center; margin-top:4px;"></div>
         </div>
-        <span class="kpi-badge estimated" id="profit-badge">משוער</span>
+        <span class="kpi-badge" id="profit-badge" style="display:none"></span>
     </div>
 
     <div class="kpi-card kpi-card--income" style="cursor:pointer" onclick="location.href='/sales'">
@@ -215,7 +215,10 @@ async function loadHistory() {
                     <td class="money fixed hide-mobile">${formatMoney(m.fixed)}</td>
                     <td class="money salary hide-mobile">${formatMoney(m.salary)}</td>
                     <td class="money ${cls}">${formatMoney(m.profit)}</td>
-                    <td><span class="kpi-badge estimated">משוער</span></td>
+                    <td>${m.salary_source === 'api' ? '<span class="kpi-badge" style="background:rgba(34,197,94,0.2);color:#86efac">API</span>'
+                        : m.salary_source === 'csv' ? '<span class="kpi-badge" style="background:rgba(99,102,241,0.2);color:#a5b4fc">CSV</span>'
+                        : m.salary_source === 'api+csv' ? '<span class="kpi-badge" style="background:rgba(34,197,94,0.25);color:#86efac">API ✓</span>'
+                        : '<span class="kpi-badge" style="background:rgba(100,116,139,0.2);color:#94a3b8">—</span>'}</td>
                 </tr>`;
             }).join('');
         }

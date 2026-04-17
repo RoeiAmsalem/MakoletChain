@@ -146,6 +146,20 @@ CREATE TABLE IF NOT EXISTS employee_match_pending (
   resolved INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS employee_hours_discrepancies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  branch_id INTEGER NOT NULL REFERENCES branches(id),
+  month TEXT NOT NULL,
+  employee_id INTEGER,
+  employee_name TEXT NOT NULL,
+  api_hours REAL,
+  csv_hours REAL,
+  difference REAL,
+  created_at TEXT DEFAULT (datetime('now')),
+  resolved INTEGER DEFAULT 0,
+  resolution TEXT
+);
+
 -- Insert branch 126 (empty data, credentials TBD)
 INSERT OR IGNORE INTO branches (id, name, city, aviv_user_id, gmail_label, franchise_supplier)
 VALUES (126, 'מכולת אינשטיין', 'תל אביב', 'S33834', 'איינשטיין', 'זיכיונות המכולת בע"מ');

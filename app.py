@@ -95,6 +95,20 @@ def _migrate_add_columns(conn):
         created_at TEXT DEFAULT (datetime('now')),
         UNIQUE(branch_id, alias_name)
     )''')
+    # Ensure employee_hours_discrepancies table exists
+    conn.execute('''CREATE TABLE IF NOT EXISTS employee_hours_discrepancies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch_id INTEGER NOT NULL REFERENCES branches(id),
+        month TEXT NOT NULL,
+        employee_id INTEGER,
+        employee_name TEXT NOT NULL,
+        api_hours REAL,
+        csv_hours REAL,
+        difference REAL,
+        created_at TEXT DEFAULT (datetime('now')),
+        resolved INTEGER DEFAULT 0,
+        resolution TEXT
+    )''')
     conn.commit()
 
 
@@ -438,129 +452,58 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     """Single source of truth for salary calculation.
     Used by both /employees page and /api/summary.
 
+    API hours are the source of truth. CSV is verification only.
+    Salary = SUM(employee_hours.total_hours × employees.hourly_rate) for the month.
+
     Returns {'amount', 'source', 'hours', 'label'}
     """
     db = get_db()
 
-    # Check if CSV exists for current month with salary data
-    csv_rows = db.execute('''
-        SELECT employee_name, total_hours, total_salary
-        FROM employee_hours
-        WHERE branch_id=? AND month=? AND source='csv'
+    # Query all employee_hours for the month, joined with employees for rate
+    rows = db.execute('''
+        SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
+               e.hourly_rate, e.id as emp_id
+        FROM employee_hours eh
+        LEFT JOIN employees e ON (
+            e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
+        )
+        WHERE eh.branch_id = ? AND eh.month = ?
     ''', (branch_id, current_month)).fetchall()
 
-    if csv_rows and sum(r['total_salary'] for r in csv_rows) > 0:
-        total = round(sum(r['total_salary'] for r in csv_rows), 2)
-        hours = round(sum(r['total_hours'] for r in csv_rows), 2)
-        return {
-            'amount': total,
-            'source': 'csv',
-            'hours': hours,
-            'label': f'מבוסס על {hours} שעות CSV'
-        }
+    if not rows:
+        return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
 
-    # CSV rows exist with hours but no salary — backfill from employee rates
-    employees = db.execute('''
-        SELECT name, hourly_rate FROM employees
-        WHERE branch_id=? AND active=1 AND hourly_rate > 0
-    ''', (branch_id,)).fetchall()
+    total_salary = 0
+    total_hours = 0
+    sources = set()
+    for r in rows:
+        hours = r['total_hours'] or 0
+        rate = r['hourly_rate'] or 0
+        # Use stored salary if available, otherwise compute from rate
+        salary = round(hours * rate, 2) if rate > 0 else (r['total_salary'] or 0)
+        total_salary += salary
+        total_hours += hours
+        sources.add(r['source'] or 'unknown')
 
-    if csv_rows and employees:
-        emp_rates = {e['name']: e['hourly_rate'] for e in employees}
-        total_salary = 0
-        updated = False
-        for row in csv_rows:
-            if row['total_hours'] > 0 and (row['total_salary'] or 0) == 0:
-                csv_clean = _clean_display_name(row['employee_name'], '')
-                csv_tokens = set(csv_clean.split())
-                rate = 0
-                for emp_name, emp_rate in emp_rates.items():
-                    emp_clean = _clean_display_name(emp_name, '')
-                    emp_tokens = set(emp_clean.split())
-                    # Match: token overlap ≥2, or single-word name matches first CSV word
-                    if len(emp_tokens & csv_tokens) >= 2:
-                        rate = emp_rate
-                        break
-                    if len(emp_tokens) == 1 and emp_tokens & csv_tokens:
-                        rate = emp_rate
-                        break
-                if rate > 0:
-                    calc_salary = round(row['total_hours'] * rate, 2)
-                    db.execute(
-                        'UPDATE employee_hours SET total_salary=? '
-                        'WHERE branch_id=? AND month=? AND employee_name=?',
-                        (calc_salary, branch_id, current_month, row['employee_name'])
-                    )
-                    total_salary += calc_salary
-                    updated = True
-            else:
-                total_salary += row['total_salary'] or 0
-        if updated:
-            db.commit()
-        if total_salary > 0:
-            hours = round(sum(r['total_hours'] for r in csv_rows), 2)
-            return {
-                'amount': round(total_salary, 2),
-                'source': 'csv',
-                'hours': hours,
-                'label': f'מבוסס על {hours} שעות CSV'
-            }
+    # Determine source label
+    has_api = 'aviv_api' in sources
+    has_csv = 'csv' in sources
+    # Check if CSV verified (discrepancies table)
+    csv_verified = False
+    if has_api and has_csv:
+        source = 'api+csv'
+    elif has_csv:
+        source = 'csv'
+    elif has_api:
+        source = 'api'
+    else:
+        source = 'unknown'
 
-    branch = db.execute(
-        'SELECT hours_this_month, avg_hourly_rate FROM branches WHERE id=?',
-        (branch_id,)
-    ).fetchone()
-
-    hours_this_month = branch['hours_this_month'] if branch else 0
-
-    if not employees or hours_this_month == 0:
-        return {'amount': 0, 'source': 'estimate', 'hours': 0, 'label': 'אין נתונים'}
-
-    # Try weighted rate from last month's CSV hours distribution
-    prev_month = (datetime.strptime(current_month, '%Y-%m').replace(day=1)
-                  - timedelta(days=1)).strftime('%Y-%m')
-
-    prev_rows = db.execute('''
-        SELECT eh.employee_name, eh.total_hours, e.hourly_rate
-        FROM employee_hours eh
-        JOIN employees e ON (
-            e.branch_id = eh.branch_id
-            AND e.active = 1
-        )
-        WHERE eh.branch_id=? AND eh.month=?
-    ''', (branch_id, prev_month)).fetchall()
-
-    if prev_rows:
-        matched = []
-        for row in prev_rows:
-            for emp in employees:
-                emp_clean = _clean_display_name(emp['name'], '')
-                emp_tokens = set(emp_clean.split())
-                row_clean = _clean_display_name(row['employee_name'], '')
-                row_tokens = set(row_clean.split())
-                if len(emp_tokens & row_tokens) >= 2 or (len(emp_tokens) == 1 and emp_tokens & row_tokens):
-                    matched.append((row['total_hours'], emp['hourly_rate']))
-                    break
-
-        if matched:
-            total_matched_hours = sum(h for h, r in matched)
-            weighted_rate = sum(h * r for h, r in matched) / total_matched_hours if total_matched_hours > 0 else 0
-            amount = round(hours_this_month * weighted_rate, 2)
-            return {
-                'amount': amount,
-                'source': 'estimate',
-                'hours': hours_this_month,
-                'label': f'משוער — {hours_this_month} שעות × ₪{weighted_rate:.2f}'
-            }
-
-    # Fallback: simple average of employee rates
-    avg_rate = sum(e['hourly_rate'] for e in employees) / len(employees)
-    amount = round(hours_this_month * avg_rate, 2)
     return {
-        'amount': amount,
-        'source': 'estimate',
-        'hours': hours_this_month,
-        'label': f'משוער — {hours_this_month} שעות × ₪{avg_rate:.2f}'
+        'amount': round(total_salary, 2),
+        'source': source,
+        'hours': round(total_hours, 2),
+        'label': f'{round(total_hours, 1)} שעות'
     }
 
 
@@ -773,7 +716,9 @@ def api_history():
         ).fetchone()[0]
         _ensure_monthly_expenses(branch_id, ms, db)
         fix = _get_fixed_total(branch_id, ms, inc, db)
-        sal = _calculate_salary_cost(branch_id, ms)['amount']
+        sal_data = _calculate_salary_cost(branch_id, ms)
+        sal = sal_data['amount']
+        sal_source = sal_data['source']
         profit = inc - gds - fix - sal
         result.append({
             'label': m['label'],
@@ -782,6 +727,7 @@ def api_history():
             'goods': gds,
             'fixed': fix,
             'salary': sal,
+            'salary_source': sal_source,
             'profit': profit,
         })
     return jsonify(result)
@@ -921,16 +867,18 @@ def api_employees_list():
     avg_hourly_rate = (branch_row['avg_hourly_rate'] or 0) if branch_row else 0
     hours_updated_at = (branch_row['hours_updated_at'] or '') if branch_row else ''
 
-    # Clean display names and match employees to CSV hours
+    # Clean display names and match employees to hours data
     for emp in employees:
         emp['name'] = _clean_display_name(emp['name'], branch_name)
         matched = _match_employee_hours(emp['name'], hours_map, branch_name)
         if matched:
             emp['hours'] = matched['total_hours']
             emp['salary'] = matched['total_salary']
+            emp['hours_source'] = matched.get('source', 'unknown')
         else:
             emp['hours'] = 0
             emp['salary'] = 0
+            emp['hours_source'] = 'none'
 
     # Salary — single source of truth
     salary_data = _calculate_salary_cost(branch_id, month)
@@ -963,7 +911,26 @@ def api_employees_list():
             ).fetchone()
             h_hours = h_row['hours']
             h_salary = h_row['salary']
-            h_source = 'csv' if h_row['cnt'] > 0 else 'משוער'
+            # Determine source from actual data
+            src_row = db.execute(
+                "SELECT DISTINCT source FROM employee_hours WHERE branch_id = ? AND month = ?",
+                (branch_id, m_str)
+            ).fetchall()
+            src_set = {r['source'] for r in src_row} if src_row else set()
+            disc_row = db.execute(
+                "SELECT COUNT(*) as cnt FROM employee_hours_discrepancies "
+                "WHERE branch_id = ? AND month = ? AND resolved = 0",
+                (branch_id, m_str)
+            ).fetchone()
+            has_unresolved = disc_row['cnt'] > 0 if disc_row else False
+            if 'aviv_api' in src_set and 'csv' in src_set:
+                h_source = 'api_neq_csv' if has_unresolved else 'api_verified'
+            elif 'aviv_api' in src_set:
+                h_source = 'api'
+            elif 'csv' in src_set:
+                h_source = 'csv'
+            else:
+                h_source = 'none' if h_row['cnt'] == 0 else 'unknown'
             h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
             history.append({
                 'month': m_str, 'hours': h_hours, 'salary': h_salary,
@@ -1335,6 +1302,63 @@ def api_pending_add_new(pending_id):
     db.commit()
 
     return jsonify({'ok': True, 'employee_id': new_emp_id})
+
+
+@app.route('/api/employee-hours-discrepancies')
+@login_required
+def api_discrepancies():
+    """Return unresolved discrepancies for a branch+month."""
+    branch_id = get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM employee_hours_discrepancies "
+        "WHERE branch_id = ? AND month = ? AND resolved = 0 "
+        "ORDER BY difference DESC",
+        (branch_id, month)
+    ).fetchall()
+    return jsonify({'discrepancies': [dict(r) for r in rows]})
+
+
+@app.route('/api/employee-hours-discrepancies/<int:disc_id>/resolve', methods=['POST'])
+@login_required
+def api_resolve_discrepancy(disc_id):
+    """Resolve a discrepancy: accept API hours, CSV hours, or ignore."""
+    db = get_db()
+    branch_id = get_branch_id()
+    row = db.execute(
+        "SELECT * FROM employee_hours_discrepancies WHERE id = ? AND branch_id = ?",
+        (disc_id, branch_id)
+    ).fetchone()
+    if not row or row['resolved']:
+        return jsonify({'error': 'not found'}), 404
+
+    data = request.get_json()
+    choice = data.get('choice', 'ignore')  # 'api' | 'csv' | 'ignore'
+
+    if choice in ('api', 'csv'):
+        hours = row['api_hours'] if choice == 'api' else row['csv_hours']
+        emp_name = row['employee_name']
+        # Get hourly rate
+        emp = db.execute(
+            'SELECT hourly_rate FROM employees WHERE id = ? AND branch_id = ?',
+            (row['employee_id'], branch_id)
+        ).fetchone()
+        rate = emp['hourly_rate'] if emp else 0
+        salary = round(hours * rate, 2)
+
+        db.execute(
+            "UPDATE employee_hours SET total_hours = ?, total_salary = ? "
+            "WHERE branch_id = ? AND month = ? AND employee_name = ?",
+            (hours, salary, branch_id, row['month'], emp_name)
+        )
+
+    db.execute(
+        "UPDATE employee_hours_discrepancies SET resolved = 1, resolution = ? WHERE id = ?",
+        (choice, disc_id)
+    )
+    db.commit()
+    return jsonify({'ok': True})
 
 
 def _get_fixed_total(branch_id: int, month: str, income: float, db) -> float:
