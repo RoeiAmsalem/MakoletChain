@@ -142,6 +142,51 @@
     </div>
 </div>
 
+<!-- IEC Onboarding Wizard Modal -->
+<div class="modal-overlay" id="iec-wizard-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--card,#1e293b);border:1px solid var(--card-border,#334155);border-radius:12px;width:90%;max-width:480px;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--card-border,#334155);">
+      <h3 style="font-size:1rem;font-weight:700;margin:0;">הגדרת חשבון חשמל</h3>
+      <button onclick="iecWizard.close()" style="background:none;border:none;color:#94a3b8;font-size:1.25rem;cursor:pointer;">✕</button>
+    </div>
+    <div style="padding:1rem 1.25rem;">
+      <div style="display:flex;justify-content:center;gap:8px;margin-bottom:1.25rem;" id="iec-steps">
+        <span class="iec-step active" data-step="1" style="font-size:1.2rem;color:#818cf8;">●</span>
+        <span class="iec-step" data-step="2" style="font-size:1.2rem;color:#475569;">○</span>
+        <span class="iec-step" data-step="3" style="font-size:1.2rem;color:#475569;">○</span>
+      </div>
+      <div id="iec-wizard-error" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:0.6rem 0.85rem;color:#fca5a5;font-size:0.85rem;margin-bottom:1rem;"></div>
+
+      <div id="iec-step-1">
+        <label style="display:block;font-size:0.88rem;font-weight:600;color:#94a3b8;margin-bottom:0.4rem;">תעודת זהות</label>
+        <input type="text" id="iec-id-number" maxlength="9" inputmode="numeric" autocomplete="off"
+               style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.6rem 0.85rem;color:white;font-size:16px;font-family:inherit;direction:ltr;text-align:center;letter-spacing:2px;">
+        <button id="iec-send-otp-btn" onclick="iecWizard.sendOtp()" style="width:100%;margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.65rem;color:#c7d2fe;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">שלח קוד אימות לאימייל</button>
+        <small style="display:block;text-align:center;color:#64748b;margin-top:0.5rem;font-size:0.78rem;">קוד יישלח לכתובת המייל הרשומה בחשבון החשמל</small>
+      </div>
+
+      <div id="iec-step-2" style="display:none;">
+        <p style="color:#94a3b8;font-size:0.88rem;margin:0 0 0.75rem 0;">קוד נשלח. הזן את ה-6 ספרות מהמייל.</p>
+        <input type="text" id="iec-otp-code" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+               style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.6rem 0.85rem;color:white;font-size:16px;font-family:inherit;direction:ltr;text-align:center;letter-spacing:4px;">
+        <button id="iec-verify-btn" onclick="iecWizard.verifyOtp()" style="width:100%;margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.65rem;color:#c7d2fe;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">אמת</button>
+        <p style="text-align:center;color:#64748b;font-size:0.82rem;margin-top:0.5rem;">הקוד תקף לעוד <span id="iec-otp-timer" style="color:#fbbf24;font-weight:600;">10:00</span></p>
+      </div>
+
+      <div id="iec-step-3" style="display:none;">
+        <p style="color:#94a3b8;font-size:0.88rem;margin:0 0 0.75rem 0;">בחר את חוזה החשמל של הסניף:</p>
+        <div id="iec-contracts-list" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+        <button id="iec-save-btn" onclick="iecWizard.save()" style="width:100%;margin-top:1rem;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.5);border-radius:8px;padding:0.65rem;color:#86efac;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">סיום</button>
+      </div>
+
+      <div id="iec-step-expired" style="display:none;text-align:center;padding:1rem 0;">
+        <p style="color:#fca5a5;font-size:0.95rem;font-weight:600;">פג תוקף הקוד</p>
+        <button onclick="iecWizard.reset()" style="margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.55rem 1.25rem;color:#c7d2fe;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:inherit;">התחל מחדש</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="edit-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:500; align-items:center; justify-content:center;" onclick="if(event.target===this) closeEditModal()">
   <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; padding:1.75rem; width:90%; max-width:480px;">
     <h3 style="font-size:1.1rem; font-weight:700; color:white; margin:0 0 1.25rem 0;">עריכת הוצאה</h3>
@@ -244,7 +289,7 @@ function renderKpi(s, exps) {
         elecTile = `<div class="kpi-card kpi-card--electricity">
             <div class="kpi-header"><span class="kpi-label">⚡ חשמל</span></div>
             <span class="kpi-value" style="color:#fbbf24;font-size:1.3rem">טרם הוגדר</span>
-            <span style="font-size:0.82rem;color:rgba(241,245,249,0.4)">צרו קשר למידע על שילוב חשבון החשמל</span>
+            <button onclick="iecWizard.open()" style="margin-top:0.5rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.45rem 1rem;color:#c7d2fe;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">הגדר חשמל</button>
         </div>`;
     }
     s.innerHTML = `<div class="kpi-card kpi-card--fixed"><div class="kpi-header"><span class="kpi-label">סה"כ הוצאות קבועות</span></div><span class="kpi-value fixed">${formatMoney(total)}</span><span style="font-size:0.9rem;color:rgba(241,245,249,0.5)">${count} רשומות</span></div>${elecTile}`;
@@ -398,5 +443,175 @@ async function saveEditModal() {
 }
 
 loadExpenses();
+
+// ── IEC Onboarding Wizard (for fixed-expenses page) ────────
+const iecWizard = (() => {
+    let sessionToken = null;
+    let timerInterval = null;
+    let overallTimeout = null;
+
+    function open() {
+        sessionToken = null;
+        showStep(1);
+        document.getElementById('iec-id-number').value = '';
+        document.getElementById('iec-otp-code').value = '';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        document.getElementById('iec-wizard-modal').style.display = 'flex';
+        document.getElementById('iec-id-number').focus();
+    }
+
+    function close() {
+        document.getElementById('iec-wizard-modal').style.display = 'none';
+        clearTimers();
+        sessionToken = null;
+    }
+
+    function reset() {
+        clearTimers();
+        sessionToken = null;
+        showStep(1);
+        document.getElementById('iec-id-number').value = '';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        document.getElementById('iec-id-number').focus();
+    }
+
+    function showStep(n) {
+        ['1','2','3','expired'].forEach(s => {
+            document.getElementById('iec-step-' + s).style.display = s == n ? 'block' : 'none';
+        });
+        document.querySelectorAll('.iec-step').forEach(el => {
+            const step = parseInt(el.dataset.step);
+            el.classList.toggle('active', step === n);
+            el.style.color = step < n ? '#22c55e' : (step === n ? '#818cf8' : '#475569');
+            el.textContent = step < n ? '●' : (step === n ? '●' : '○');
+        });
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('iec-wizard-error');
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+
+    function clearTimers() {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        if (overallTimeout) { clearTimeout(overallTimeout); overallTimeout = null; }
+    }
+
+    function startOtpTimer() {
+        let remaining = 600;
+        const timerEl = document.getElementById('iec-otp-timer');
+        timerInterval = setInterval(() => {
+            remaining--;
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+            if (remaining <= 0) {
+                clearInterval(timerInterval);
+                showStep('expired');
+            }
+        }, 1000);
+        overallTimeout = setTimeout(() => {
+            close();
+            // Show expired toast using mkAlert if available
+            if (typeof mkAlert === 'function') mkAlert({type: 'danger', title: 'פג זמן', message: 'פג זמן הגדרת החשבון. נסה שוב.'});
+        }, 720000);
+    }
+
+    async function sendOtp() {
+        const btn = document.getElementById('iec-send-otp-btn');
+        const idNum = document.getElementById('iec-id-number').value.trim();
+        if (!idNum) return;
+        btn.disabled = true;
+        btn.textContent = 'שולח...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID, id_number: idNum})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'שגיאה'); return; }
+            sessionToken = data.session_token;
+            showStep(2);
+            startOtpTimer();
+            document.getElementById('iec-otp-code').focus();
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'שלח קוד אימות לאימייל';
+        }
+    }
+
+    async function verifyOtp() {
+        const btn = document.getElementById('iec-verify-btn');
+        const otp = document.getElementById('iec-otp-code').value.trim();
+        if (!otp || otp.length < 4) return;
+        btn.disabled = true;
+        btn.textContent = 'מאמת...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/verify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID, session_token: sessionToken, otp: otp})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'אימות נכשל'); return; }
+            const list = document.getElementById('iec-contracts-list');
+            const contracts = data.contracts || [];
+            if (!contracts.length) { showError('לא נמצאו חוזי חשמל'); return; }
+            list.innerHTML = contracts.map((c, i) => `
+                <label style="display:block;background:rgba(255,255,255,0.04);border:1px solid #334155;border-radius:8px;padding:0.75rem;cursor:pointer;" onclick="this.parentElement.querySelectorAll('label').forEach(e=>e.style.borderColor='#334155');this.style.borderColor='#818cf8';">
+                    <input type="radio" name="iec-contract" value="${c.contract_id}" ${i===0?'checked':''} style="margin-left:8px;">
+                    <span style="font-weight:600;">${c.contract_id}</span>
+                    <span style="color:#94a3b8;font-size:0.85rem;display:block;margin-top:2px;">${c.address}</span>
+                </label>
+            `).join('');
+            showStep(3);
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'אמת';
+        }
+    }
+
+    async function save() {
+        const btn = document.getElementById('iec-save-btn');
+        const selected = document.querySelector('input[name="iec-contract"]:checked');
+        if (!selected) { showError('יש לבחור חוזה'); return; }
+        btn.disabled = true;
+        btn.textContent = 'שומר...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID, session_token: sessionToken, contract_id: selected.value})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'שגיאה בשמירה'); return; }
+            close();
+            if (typeof mkAlert === 'function') mkAlert({type: 'success', title: 'הצלחה', message: 'חשבון החשמל הוגדר בהצלחה'});
+            // Reload to show updated electricity data
+            setTimeout(() => loadExpenses(), 1000);
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'סיום';
+        }
+    }
+
+    // Close on Escape
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && document.getElementById('iec-wizard-modal').style.display === 'flex') close();
+    });
+
+    return { open, close, reset, sendOtp, verifyOtp, save };
+})();
 </script>
 {% endblock %}

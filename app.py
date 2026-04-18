@@ -4,8 +4,10 @@ import io
 import json
 import os
 import secrets
+import select
 import sqlite3
 import subprocess
+import threading
 import time
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
@@ -2622,6 +2624,212 @@ def api_internal_iec_onboard():
           data.get('iec_bp_number'), data.get('iec_contract_id'), branch_id))
     db.commit()
     return jsonify({'ok': True})
+
+
+# ── IEC Onboarding Wizard ────────────────────────────────────
+# Uses SSH to Israeli VPS running iec_wizard.py (JSON-over-stdin/stdout)
+# Each wizard session holds an SSH subprocess with the IecClient alive in memory.
+
+_iec_wizard_sessions = {}  # {token: {proc, created_at, branch_id}}
+_iec_wizard_lock = threading.Lock()
+
+
+def _cleanup_wizard_sessions():
+    """Kill expired wizard sessions (>12 min old)."""
+    now = time.time()
+    with _iec_wizard_lock:
+        expired = [k for k, v in _iec_wizard_sessions.items() if now - v['created_at'] > 720]
+        for k in expired:
+            try:
+                _iec_wizard_sessions[k]['proc'].kill()
+            except Exception:
+                pass
+            del _iec_wizard_sessions[k]
+
+
+def _wizard_send_recv(proc, cmd, timeout=60):
+    """Send JSON command to wizard subprocess and read JSON response."""
+    try:
+        proc.stdin.write(json.dumps(cmd) + '\n')
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        return {"ok": False, "error": "התהליך הסתיים. נסה שוב."}
+    ready, _, _ = select.select([proc.stdout], [], [], timeout)
+    if not ready:
+        return {"ok": False, "error": "תם הזמן. נסה שוב."}
+    line = proc.stdout.readline()
+    if not line:
+        return {"ok": False, "error": "התהליך הסתיים. נסה שוב."}
+    try:
+        return json.loads(line.strip())
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "תגובה לא תקינה מהשרת"}
+
+
+def _check_branch_permission(branch_id):
+    """Check if current user has permission for this branch."""
+    if session.get('user_role') == 'admin':
+        return True
+    return session.get('branch_id') == branch_id
+
+
+@app.route('/api/iec/onboard/start', methods=['POST'])
+@login_required
+def iec_onboard_start():
+    _cleanup_wizard_sessions()
+    data = request.get_json() or {}
+    branch_id = data.get('branch_id')
+    id_number = (data.get('id_number') or '').strip()
+
+    if not branch_id or not id_number:
+        return jsonify({"ok": False, "error": "חסרים פרטים"}), 400
+    branch_id = int(branch_id)
+
+    if not _check_branch_permission(branch_id):
+        return jsonify({"ok": False, "error": "אין הרשאה לסניף זה"}), 403
+
+    # Validate ID format (1-9 digits)
+    if not id_number.isdigit() or len(id_number) < 1 or len(id_number) > 9:
+        return jsonify({"ok": False, "error": "תעודת זהות לא תקינה"}), 400
+
+    # Start SSH wizard process on VPS
+    try:
+        proc = subprocess.Popen(
+            ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+             'makolet-iec',
+             '/opt/makolet-iec/venv/bin/python /opt/makolet-iec/iec_wizard.py'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1
+        )
+    except Exception:
+        return jsonify({"ok": False, "error": "שגיאה בחיבור לשרת"}), 500
+
+    # Send start command — id_number is NOT logged anywhere
+    result = _wizard_send_recv(proc, {"action": "start", "id_number": id_number}, timeout=60)
+
+    if not result.get("ok"):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        error_msg = result.get("error", "שגיאה לא ידועה")
+        # Sanitize — never expose the ID number in error responses
+        if id_number in error_msg:
+            error_msg = "חשבון חשמל לא נמצא עבור תעודת הזהות שהוזנה"
+        return jsonify({"ok": False, "error": error_msg}), 400
+
+    session_token = secrets.token_urlsafe(32)
+    with _iec_wizard_lock:
+        _iec_wizard_sessions[session_token] = {
+            'proc': proc,
+            'created_at': time.time(),
+            'branch_id': branch_id,
+        }
+
+    return jsonify({
+        "ok": True,
+        "session_token": session_token,
+        "factor": result.get("factor", "SMS"),
+        "expires_at": time.time() + 600,  # 10 min for OTP
+    })
+
+
+@app.route('/api/iec/onboard/verify', methods=['POST'])
+@login_required
+def iec_onboard_verify():
+    data = request.get_json() or {}
+    session_token = data.get('session_token', '')
+    otp = (data.get('otp') or '').strip()
+    branch_id = data.get('branch_id')
+
+    if not session_token or not otp or not branch_id:
+        return jsonify({"ok": False, "error": "חסרים פרטים"}), 400
+    branch_id = int(branch_id)
+
+    if not _check_branch_permission(branch_id):
+        return jsonify({"ok": False, "error": "אין הרשאה לסניף זה"}), 403
+
+    with _iec_wizard_lock:
+        sess = _iec_wizard_sessions.get(session_token)
+
+    if not sess:
+        return jsonify({"ok": False, "error": "פג תוקף ההגדרה. נסה שוב."}), 400
+
+    if time.time() - sess['created_at'] > 720:
+        with _iec_wizard_lock:
+            try:
+                sess['proc'].kill()
+            except Exception:
+                pass
+            _iec_wizard_sessions.pop(session_token, None)
+        return jsonify({"ok": False, "error": "פג תוקף ההגדרה. נסה שוב."}), 400
+
+    if sess['branch_id'] != branch_id:
+        return jsonify({"ok": False, "error": "session mismatch"}), 400
+
+    # OTP is NOT logged anywhere
+    result = _wizard_send_recv(sess['proc'], {"action": "verify", "otp": otp}, timeout=60)
+
+    if not result.get("ok"):
+        error_msg = result.get("error", "אימות נכשל")
+        if otp in error_msg:
+            error_msg = "קוד אימות שגוי"
+        return jsonify({"ok": False, "error": error_msg}), 400
+
+    return jsonify({
+        "ok": True,
+        "contracts": result.get("contracts", []),
+    })
+
+
+@app.route('/api/iec/onboard/save', methods=['POST'])
+@login_required
+def iec_onboard_save():
+    data = request.get_json() or {}
+    session_token = data.get('session_token', '')
+    branch_id = data.get('branch_id')
+    contract_id = (data.get('contract_id') or '').strip()
+
+    if not session_token or not contract_id or not branch_id:
+        return jsonify({"ok": False, "error": "חסרים פרטים"}), 400
+    branch_id = int(branch_id)
+
+    if not _check_branch_permission(branch_id):
+        return jsonify({"ok": False, "error": "אין הרשאה לסניף זה"}), 403
+
+    with _iec_wizard_lock:
+        sess = _iec_wizard_sessions.pop(session_token, None)
+
+    if not sess:
+        return jsonify({"ok": False, "error": "פג תוקף ההגדרה. נסה שוב."}), 400
+
+    if sess['branch_id'] != branch_id:
+        return jsonify({"ok": False, "error": "session mismatch"}), 400
+
+    result = _wizard_send_recv(sess['proc'], {"action": "save", "contract_id": contract_id}, timeout=30)
+
+    # Always clean up the subprocess
+    try:
+        sess['proc'].kill()
+    except Exception:
+        pass
+
+    if not result.get("ok"):
+        return jsonify({"ok": False, "error": result.get("error", "שגיאה בשמירה")}), 400
+
+    # Save to branches table
+    try:
+        db = get_db()
+        db.execute('''
+            UPDATE branches SET iec_user_id = ?, iec_token = ?, iec_bp_number = ?, iec_contract_id = ?
+            WHERE id = ?
+        ''', (result.get('iec_user_id'), result.get('iec_token'),
+              result.get('iec_bp_number'), contract_id, branch_id))
+        db.commit()
+    except Exception:
+        return jsonify({"ok": False, "error": "שגיאה בשמירת הנתונים"}), 500
+
+    return jsonify({"ok": True})
 
 
 @app.route('/health')
