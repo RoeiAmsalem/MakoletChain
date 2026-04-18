@@ -2005,6 +2005,35 @@ def api_ops_status():
             else:
                 agents_data[agent] = None
 
+        # IEC agent — uses iec_last_sync_at from branches + agent_runs for iec
+        iec_row = db.execute(
+            "SELECT iec_token, iec_last_sync_at FROM branches WHERE id = ?", (bid,)
+        ).fetchone()
+        has_iec = iec_row and iec_row['iec_token']
+        if has_iec:
+            iec_run = db.execute(
+                "SELECT status, message, started_at, duration_seconds, docs_count, amount "
+                "FROM agent_runs WHERE branch_id=? AND agent='iec' "
+                "ORDER BY started_at DESC LIMIT 1",
+                (bid,)
+            ).fetchone()
+            if iec_run:
+                d = dict(iec_run)
+                d['started_at'] = _to_il_datetime(d.get('started_at'))
+                agents_data['iec'] = d
+            else:
+                # No agent_runs yet but has token — show last sync time
+                agents_data['iec'] = {
+                    'status': 'success' if iec_row['iec_last_sync_at'] else 'skipped',
+                    'message': '',
+                    'started_at': _to_il_datetime(iec_row['iec_last_sync_at']) if iec_row['iec_last_sync_at'] else '',
+                    'duration_seconds': None,
+                    'docs_count': None,
+                    'amount': None,
+                }
+        else:
+            agents_data['iec'] = None
+
         # Determine overall status
         statuses = [a['status'] for a in agents_data.values() if a]
         if 'error' in statuses:
@@ -2034,6 +2063,7 @@ def api_ops_status():
             'avg_hourly_rate': rate_row['avg_hourly_rate'] if rate_row else 0,
             'hours_this_month': rate_row['hours_this_month'] if rate_row else 0,
             'employees_with_rates': emp_rate_count,
+            'has_iec_token': bool(has_iec),
         })
 
     # Recent agent runs
@@ -2093,7 +2123,7 @@ def ops_run_agent():
     branch_id = data.get('branch_id')
     agent = data.get('agent')
 
-    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees'):
+    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
         return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
 
     t0 = time.time()
@@ -2110,6 +2140,11 @@ def ops_run_agent():
             from agents.aviv_live import run_aviv_live
             result = run_aviv_live(int(branch_id))
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
+        elif agent == 'iec':
+            from agents.iec_agent import run_iec_sync
+            result = run_iec_sync(int(branch_id))
+            result['success'] = result.get('status') == 'success'
+            msg = result.get('message', 'done')
         else:  # aviv_employees
             from agents.aviv_employees import run_aviv_employees
             result = run_aviv_employees(int(branch_id))
@@ -2133,7 +2168,7 @@ def ops_run_agent():
 @_ceo_required
 def ops_logs(branch_id, agent):
     import re as _re
-    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees'):
+    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
         abort(400)
 
     # Get branch name for modal title
@@ -2312,6 +2347,162 @@ def api_admin_branch_update(branch_id):
     db.execute(sql, list(updates.values()) + [branch_id])
     db.commit()
     return jsonify({'ok': True})
+
+
+# ── IEC status & accuracy endpoints ─────────────────────────────────────
+
+@app.route('/api/iec-status')
+@_ceo_required
+def api_iec_status():
+    branch_id = request.args.get('branch_id', type=int)
+    if not branch_id:
+        return jsonify({'error': 'missing branch_id'}), 400
+    db = get_db()
+    row = db.execute(
+        "SELECT iec_token, iec_last_sync_at FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    if not row or not row['iec_token']:
+        return jsonify({'last_sync_at': None, 'last_sync_status': 'never', 'invoice_count': 0})
+    inv_count = db.execute(
+        "SELECT COUNT(*) as cnt FROM electricity_invoices WHERE branch_id = ?", (branch_id,)
+    ).fetchone()['cnt']
+    # Determine status from last agent run
+    last_run = db.execute(
+        "SELECT status FROM agent_runs WHERE branch_id=? AND agent='iec' ORDER BY started_at DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
+    if last_run:
+        status = 'ok' if last_run['status'] == 'success' else 'failed'
+    elif row['iec_last_sync_at']:
+        status = 'ok'
+    else:
+        status = 'never'
+    return jsonify({
+        'last_sync_at': row['iec_last_sync_at'],
+        'last_sync_status': status,
+        'invoice_count': inv_count,
+    })
+
+
+def _get_iec_accuracy_data(branch_id: int, db=None) -> list:
+    """Return 12 months of accuracy data starting from current month."""
+    if db is None:
+        db = get_db()
+    # Check if branch has IEC
+    has_iec = db.execute(
+        "SELECT iec_token, name FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    if not has_iec or not has_iec['iec_token']:
+        return []
+
+    branch_name = has_iec['name']
+    now = datetime.now(IL_TZ)
+    rows = []
+
+    for offset in range(12):
+        m = now.month + offset
+        y = now.year
+        while m > 12:
+            m -= 12
+            y += 1
+
+        # Get estimate
+        elec = get_electricity_for_month(branch_id, y, m, db)
+
+        # Determine real value — check if every day in month is covered by invoices
+        month_start = date(y, m, 1)
+        month_end = date(y, m, calendar.monthrange(y, m)[1])
+        total_days = (month_end - month_start).days + 1
+
+        # Get all invoices that intersect this month
+        inv_rows = db.execute(
+            "SELECT amount, raw_json FROM electricity_invoices WHERE branch_id = ?",
+            (branch_id,)
+        ).fetchall()
+
+        covered_days = set()
+        real_amount = 0.0
+        for inv in inv_rows:
+            try:
+                rj = json.loads(inv['raw_json'])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            from_d_str = rj.get('from_date', '')
+            to_d_str = rj.get('to_date', '')
+            if not from_d_str or not to_d_str:
+                continue
+            from_d = date.fromisoformat(from_d_str[:10])
+            to_d = date.fromisoformat(to_d_str[:10])
+            span = (to_d - from_d).days
+            if span <= 0 or span > 90:
+                continue
+            if to_d < month_start or from_d > month_end:
+                continue
+            # Mark covered days
+            overlap_start = max(from_d, month_start)
+            overlap_end = min(to_d, month_end)
+            for d_offset in range((overlap_end - overlap_start).days + 1):
+                covered_days.add(overlap_start + timedelta(days=d_offset))
+            real_amount += _prorate_invoice(from_d_str, to_d_str, inv['amount'], y, m)
+
+        full_coverage = len(covered_days) >= total_days
+        real_val = round(real_amount, 2) if full_coverage and real_amount > 0 else None
+
+        estimate_val = elec['amount'] if elec['source'] in ('estimate', 'real') else None
+        estimate_basis = elec.get('estimate_basis')
+
+        # If real data exists and source is 'real', the estimate is the real value itself
+        # For accuracy purposes we want the estimate that was used BEFORE real arrived
+        if elec['source'] == 'real' and full_coverage:
+            # The "real" is the actual amount; estimate would have been from prior year
+            estimate_val = elec['amount']  # In this case estimate = real (it was the real data)
+
+        delta = None
+        accuracy_pct = None
+        if real_val is not None and estimate_val is not None:
+            delta = round(real_val - estimate_val, 2)
+            if real_val > 0:
+                accuracy_pct = round(100 - abs(delta) / real_val * 100, 1)
+
+        if estimate_val is None and real_val is None:
+            status = 'no_estimate'
+        elif real_val is not None:
+            status = 'final'
+        else:
+            status = 'pending'
+
+        rows.append({
+            'branch_id': branch_id,
+            'branch_name': branch_name,
+            'year': y,
+            'month': m,
+            'month_label': f"{HEBREW_MONTHS[m]} {y}",
+            'estimate': estimate_val,
+            'estimate_basis': estimate_basis,
+            'real': real_val,
+            'delta': delta,
+            'accuracy_pct': accuracy_pct,
+            'status': status,
+        })
+
+    return rows
+
+
+@app.route('/api/iec-accuracy')
+@_ceo_required
+def api_iec_accuracy():
+    branch_id = request.args.get('branch_id', type=int)
+    db = get_db()
+    if branch_id:
+        return jsonify(_get_iec_accuracy_data(branch_id, db))
+    # All branches with IEC
+    branches = db.execute(
+        "SELECT id FROM branches WHERE active = 1 AND iec_token IS NOT NULL"
+    ).fetchall()
+    result = []
+    for b in branches:
+        result.extend(_get_iec_accuracy_data(b['id'], db))
+    return jsonify(result)
 
 
 # ── Internal sync endpoints (VPS → Hetzner, secret-protected) ──────────
