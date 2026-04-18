@@ -1641,6 +1641,26 @@ def api_fixed_expenses_delete(exp_id):
     return jsonify({'ok': True})
 
 
+@app.route('/api/electricity-latest')
+@login_required
+def api_electricity_latest():
+    """Return the most recent electricity invoice for the branch, or null."""
+    branch_id = get_branch_id()
+    db = get_db()
+    row = db.execute(
+        "SELECT period_label, amount, due_date FROM electricity_invoices "
+        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
+    if not row:
+        return jsonify(None)
+    return jsonify({
+        'period_label': row['period_label'],
+        'amount': row['amount'],
+        'due_date': row['due_date'],
+    })
+
+
 PDF_BASE = os.path.join(os.path.dirname(__file__), 'data', 'pdfs')
 
 

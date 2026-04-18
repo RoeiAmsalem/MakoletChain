@@ -41,6 +41,8 @@
     .type-badge--monthly { background:rgba(96,165,250,0.15); color:#93c5fd; }
     .type-badge--onetime { background:rgba(251,146,60,0.15); color:#fdba74; }
     .type-badge--percent { background:rgba(251,191,36,0.15); color:#fcd34d; }
+    .type-badge--auto { background:rgba(202,138,4,0.15); color:#fbbf24; }
+    #kpi-section { grid-template-columns: 1fr 1fr !important; }
     .actions-cell { display:flex; gap:0.5rem; align-items:center; white-space:nowrap; }
     .btn-icon { background:none; border:none; cursor:pointer; font-size:1.15rem; padding:0.4rem 0.5rem; border-radius:6px; color:#94a3b8; }
     .btn-icon:hover { background:rgba(255,255,255,0.06); }
@@ -188,7 +190,7 @@
 'use strict';
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
-let allExpenses = [], amountType = 'fixed', whenType = 'monthly', monthIncome = 0;
+let allExpenses = [], amountType = 'fixed', whenType = 'monthly', monthIncome = 0, latestElectricity = null;
 
 function setAmountType(t) {
     amountType = t;
@@ -210,19 +212,42 @@ function updatePreview() {
 async function loadExpenses() {
     const kpi = document.getElementById('kpi-section'), tbody = document.getElementById('expenses-tbody');
     try {
-        const sRes = await fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        const [sRes, res, elecRes] = await Promise.all([
+            fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`),
+            fetch(`/api/fixed-expenses?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`),
+            fetch('/api/electricity-latest')
+        ]);
         if (sRes.ok) { const s = await sRes.json(); monthIncome = s.income || 0; }
-        const res = await fetch(`/api/fixed-expenses?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         allExpenses = await res.json();
+        latestElectricity = elecRes.ok ? await elecRes.json() : null;
         renderKpi(kpi, allExpenses);
         renderTable(tbody, allExpenses);
     } catch(err) { console.error(err); kpi.innerHTML = '<p style="color:#ef4444">שגיאה.</p>'; }
 }
 
 function renderKpi(s, exps) {
-    const total = exps.reduce((a,e) => a + e.amount, 0);
-    s.innerHTML = `<div class="kpi-card kpi-card--fixed"><div class="kpi-header"><span class="kpi-label">סה"כ הוצאות קבועות</span></div><span class="kpi-value fixed">${formatMoney(total)}</span><span style="font-size:0.9rem;color:rgba(241,245,249,0.5)">${exps.length} רשומות</span></div>`;
+    const elecAmount = latestElectricity ? latestElectricity.amount : 0;
+    const total = exps.reduce((a,e) => a + e.amount, 0) + elecAmount;
+    const count = exps.length + (latestElectricity ? 1 : 0);
+    let elecTile;
+    if (latestElectricity) {
+        const dd = latestElectricity.due_date;
+        const dueFmt = dd ? dd.split('-').reverse().join('/') : '';
+        elecTile = `<div class="kpi-card kpi-card--electricity">
+            <div class="kpi-header"><span class="kpi-label">⚡ חשמל</span></div>
+            <span class="kpi-value" style="color:#fbbf24">${formatMoney(latestElectricity.amount)}</span>
+            <span style="font-size:0.82rem;color:rgba(241,245,249,0.5)">${latestElectricity.period_label || ''}</span>
+            <span style="font-size:0.82rem;color:rgba(241,245,249,0.4)">לתשלום: ${dueFmt}</span>
+        </div>`;
+    } else {
+        elecTile = `<div class="kpi-card kpi-card--electricity">
+            <div class="kpi-header"><span class="kpi-label">⚡ חשמל</span></div>
+            <span class="kpi-value" style="color:#fbbf24;font-size:1.3rem">טרם הוגדר</span>
+            <span style="font-size:0.82rem;color:rgba(241,245,249,0.4)">צרו קשר למידע על שילוב חשבון החשמל</span>
+        </div>`;
+    }
+    s.innerHTML = `<div class="kpi-card kpi-card--fixed"><div class="kpi-header"><span class="kpi-label">סה"כ הוצאות קבועות</span></div><span class="kpi-value fixed">${formatMoney(total)}</span><span style="font-size:0.9rem;color:rgba(241,245,249,0.5)">${count} רשומות</span></div>${elecTile}`;
 }
 
 function getTypeBadge(e) {
@@ -232,8 +257,8 @@ function getTypeBadge(e) {
 }
 
 function renderTable(tbody, exps) {
-    if (!exps.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#94a3b8">אין הוצאות. לחץ "+ הוסף הוצאה".</td></tr>'; updateTotals(exps); return; }
-    tbody.innerHTML = exps.map(e => `
+    if (!exps.length && !latestElectricity) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#94a3b8">אין הוצאות. לחץ "+ הוסף הוצאה".</td></tr>'; updateTotals(exps); return; }
+    let html = exps.map(e => `
     <tr id="row-${e.id}">
         <td style="font-weight:600">${e.name}</td>
         <td>${getTypeBadge(e)}</td>
@@ -245,11 +270,21 @@ function renderTable(tbody, exps) {
             <button onclick="deleteExpense(${e.id})" class="btn-delete-icon">🗑️</button>
         </div></td>
     </tr>`).join('');
+    if (latestElectricity) {
+        html += `<tr>
+            <td style="font-weight:600">⚡ חשמל</td>
+            <td><span class="type-badge type-badge--auto">אוטומטי</span></td>
+            <td class="money fixed" style="font-size:1rem"><span>${formatMoney(latestElectricity.amount)}</span></td>
+            <td></td>
+        </tr>`;
+    }
+    tbody.innerHTML = html;
     updateTotals(exps);
 }
 
 function updateTotals(exps) {
-    const total = exps.reduce((a,e) => a + e.amount, 0);
+    const elecAmount = latestElectricity ? latestElectricity.amount : 0;
+    const total = exps.reduce((a,e) => a + e.amount, 0) + elecAmount;
     document.getElementById('expenses-tfoot').innerHTML = `<tr><td colspan="2">סה"כ</td><td class="money" style="color:#c7d2fe">${formatMoney(total)}</td><td></td></tr>`;
     document.getElementById('header-total').textContent = `סה"כ: ${formatMoney(total)}`;
 }
