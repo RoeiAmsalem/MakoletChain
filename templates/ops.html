@@ -257,6 +257,32 @@
             <div class="loading"><div class="spinner"></div></div>
         </div>
     </div>
+
+    <!-- Electricity Accuracy Table -->
+    <div class="section-card" id="iec-accuracy-section" style="display:none;">
+        <h2>אמינות תחזיות החשמל</h2>
+        <p style="font-size:13px;color:#cbd5e1;margin:0 0 1rem 0;">
+            השוואה בין החשמל שהוערך לבין החשבונית האמיתית. חודשים עתידיים יישארו ריקים עד שתתקבלנה חשבוניות מלאות.
+        </p>
+        <div style="overflow-x:auto;">
+            <table class="data-table" id="iec-accuracy-table" style="width:100%;font-size:0.85rem;">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--card-border);">
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">סניף</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">חודש</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">תחזית</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">בסיס תחזית</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">בפועל</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">הפרש</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">אמינות %</th>
+                    </tr>
+                </thead>
+                <tbody id="iec-accuracy-tbody">
+                    <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1rem;">טוען...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 </div>
 
 <!-- Edit Branch Modal -->
@@ -313,7 +339,7 @@
 
 {% block scripts %}
 <script>
-const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', aviv_employees: 'עובדים' };
+const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', iec: 'IEC', aviv_employees: 'עובדים' };
 const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
 const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
 
@@ -351,8 +377,11 @@ function renderBranches(branches) {
         return;
     }
     grid.innerHTML = branches.map(b => {
-        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'aviv_employees'].map(agent => {
+        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_employees'].map(agent => {
             const a = b.agents[agent];
+            if (agent === 'iec' && !b.has_iec_token) {
+                return `<div class="agent-row"><span class="agent-name">IEC</span><span class="agent-msg" style="color:#64748b">לא מוגדר</span><span class="agent-badge skipped">–</span></div>`;
+            }
             if (!a) return `<div class="agent-row"><span class="agent-name">${AGENT_LABELS[agent]}</span><span class="agent-msg">לא רץ</span><span class="agent-badge skipped">–</span></div>`;
             const badge = a.status || 'unknown';
             const icon = STATUS_ICONS[badge] || '?';
@@ -385,6 +414,7 @@ function renderBranches(branches) {
                 <button class="btn-action" onclick="runAgent(${b.id},'gmail',this)">הרץ Gmail</button>
                 <button class="btn-action" onclick="runAgent(${b.id},'aviv_live',this)">הרץ Aviv</button>
                 <button class="btn-action" onclick="runAgent(${b.id},'aviv_employees',this)">הרץ עובדים</button>
+                ${b.has_iec_token ? `<button class="btn-action" onclick="runAgent(${b.id},'iec',this)">הרץ IEC</button>` : ''}
                 <button class="btn-action" onclick="openLogs(${b.id},'bilboy')">לוגים BB</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'gmail')">לוגים GM</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'aviv_live')">לוגים AV</button>
@@ -493,7 +523,61 @@ async function loadHealth() {
     }
 }
 
-function loadAll() { loadOpsData(); loadHealth(); }
+async function loadIecAccuracy() {
+    try {
+        const resp = await fetch('/api/iec-accuracy');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const rows = await resp.json();
+        const section = document.getElementById('iec-accuracy-section');
+        const tbody = document.getElementById('iec-accuracy-tbody');
+        if (!rows.length) {
+            section.style.display = 'none';
+            return;
+        }
+        section.style.display = 'block';
+        let lastBranch = null;
+        tbody.innerHTML = rows.map(r => {
+            const showBranch = r.branch_name !== lastBranch;
+            lastBranch = r.branch_name;
+            const branchCell = showBranch
+                ? `<td style="padding:0.5rem 0.75rem;font-weight:700;color:var(--text-primary);border-top:1px solid var(--card-border);">${r.branch_name}</td>`
+                : `<td style="padding:0.5rem 0.75rem;"></td>`;
+            const est = r.estimate != null ? '₪' + Math.round(r.estimate).toLocaleString() : '—';
+            const basis = r.estimate_basis || '—';
+            let realCell;
+            if (r.real != null) {
+                realCell = '₪' + Math.round(r.real).toLocaleString();
+            } else {
+                realCell = '<span style="font-size:0.75rem;background:rgba(251,191,36,0.15);color:#fbbf24;padding:2px 6px;border-radius:4px;">ממתין</span>';
+            }
+            let deltaCell = '—';
+            if (r.delta != null) {
+                const sign = r.delta > 0 ? '+' : '';
+                const color = r.delta <= 0 ? '#86efac' : '#fca5a5';
+                deltaCell = `<span style="color:${color}">${sign}₪${Math.round(r.delta).toLocaleString()}</span>`;
+            }
+            let accCell = '—';
+            if (r.accuracy_pct != null) {
+                const color = r.accuracy_pct >= 90 ? '#86efac' : r.accuracy_pct >= 70 ? '#fde68a' : '#fca5a5';
+                accCell = `<span style="color:${color};font-weight:600;">${r.accuracy_pct}%</span>`;
+            }
+            const rowBorder = showBranch ? 'border-top:1px solid var(--card-border);' : '';
+            return `<tr style="${rowBorder}">
+                ${branchCell}
+                <td style="padding:0.5rem 0.75rem;color:var(--text-secondary);">${r.month_label}</td>
+                <td style="padding:0.5rem 0.75rem;color:var(--text-primary);">${est}</td>
+                <td style="padding:0.5rem 0.75rem;color:var(--text-muted);font-size:0.8rem;">${basis}</td>
+                <td style="padding:0.5rem 0.75rem;">${realCell}</td>
+                <td style="padding:0.5rem 0.75rem;">${deltaCell}</td>
+                <td style="padding:0.5rem 0.75rem;">${accCell}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        console.error('IEC accuracy load failed:', e);
+    }
+}
+
+function loadAll() { loadOpsData(); loadHealth(); loadIecAccuracy(); }
 
 async function runAgent(branchId, agent, btn) {
     btn.disabled = true;

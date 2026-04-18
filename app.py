@@ -1,4 +1,7 @@
+import calendar
+import hmac
 import io
+import json
 import os
 import secrets
 import sqlite3
@@ -641,8 +644,9 @@ def api_summary():
     else:
         live_row = None
 
-    # Fixed expenses (% rows computed live from final income)
-    fixed = _get_fixed_total(branch_id, month, income, db)
+    # Fixed expenses (% rows computed live from final income) + electricity
+    fixed_data = _get_fixed_total(branch_id, month, income, db)
+    fixed = fixed_data['total']
 
     profit = income - goods - fixed - salary
 
@@ -665,10 +669,23 @@ def api_summary():
         except (KeyError, TypeError):
             pass
 
+    # Latest electricity invoice for the strip
+    latest_elec = db.execute(
+        "SELECT period_label, amount, due_date FROM electricity_invoices "
+        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
+    # IEC last sync time
+    iec_sync = db.execute(
+        "SELECT iec_last_sync_at FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+
     return jsonify({
         'income': income,
         'goods': goods,
         'fixed': fixed,
+        'fixed_only': fixed_data['fixed_only'],
+        'electricity': fixed_data['electricity'],
         'salary': salary,
         'salary_source': salary_data['source'],
         'salary_label': salary_data['label'],
@@ -682,6 +699,12 @@ def api_summary():
         'discount_total': discount_total,
         'running_total': running_total,
         'running_count': running_count,
+        'latest_electricity': {
+            'period_label': latest_elec['period_label'],
+            'amount': latest_elec['amount'],
+            'due_date': latest_elec['due_date'],
+        } if latest_elec else None,
+        'iec_last_sync_at': iec_sync['iec_last_sync_at'] if iec_sync and iec_sync['iec_last_sync_at'] else None,
     })
 
 
@@ -693,20 +716,11 @@ def api_history():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
     db = get_db()
-    earliest = db.execute('''
-        SELECT MIN(month) as m FROM (
-            SELECT strftime('%Y-%m', date) as month
-            FROM daily_sales WHERE branch_id=?
-            UNION
-            SELECT strftime('%Y-%m', doc_date) as month
-            FROM goods_documents WHERE branch_id=?
-        )
-    ''', (branch_id, branch_id)).fetchone()
-
-    if not earliest or not earliest['m']:
+    start = get_branch_start_month(branch_id, db)
+    if not start:
         return jsonify([])
 
-    start_y, start_m = map(int, earliest['m'].split('-'))
+    start_y, start_m = start
     end_y, end_m = map(int, month.split('-'))
     months = []
     y, m = start_y, start_m
@@ -731,17 +745,19 @@ def api_history():
             (branch_id, ms)
         ).fetchone()[0]
         _ensure_monthly_expenses(branch_id, ms, db)
-        fix = _get_fixed_total(branch_id, ms, inc, db)
+        fix_data = _get_fixed_total(branch_id, ms, inc, db)
         sal_data = _calculate_salary_cost(branch_id, ms)
         sal = sal_data['amount']
         sal_source = sal_data['source']
-        profit = inc - gds - fix - sal
+        profit = inc - gds - fix_data['total'] - sal
         result.append({
             'label': m['label'],
             'month': ms,
             'income': inc,
             'goods': gds,
-            'fixed': fix,
+            'fixed': fix_data['total'],
+            'fixed_only': fix_data['fixed_only'],
+            'electricity_source': fix_data['electricity']['source'],
             'salary': sal,
             'salary_source': sal_source,
             'profit': profit,
@@ -1480,19 +1496,166 @@ def api_resolve_discrepancy(disc_id):
     return jsonify({'ok': True})
 
 
-def _get_fixed_total(branch_id: int, month: str, income: float, db) -> float:
-    """Sum fixed expenses for a branch+month. % rows calculated live from income."""
+def _prorate_invoice(from_date_str: str, to_date_str: str, amount: float, year: int, month: int) -> float:
+    """Return the portion of an invoice amount that falls into (year, month)."""
+    # Parse ISO dates from raw_json (e.g. "2026-01-22T00:00:00+02:00")
+    from_d = date.fromisoformat(from_date_str[:10])
+    to_d = date.fromisoformat(to_date_str[:10])
+    total_days = (to_d - from_d).days
+    if total_days <= 0:
+        return 0.0
+    # Month boundaries
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    # Overlap
+    overlap_start = max(from_d, month_start)
+    overlap_end = min(to_d, month_end)
+    overlap_days = (overlap_end - overlap_start).days + 1
+    if overlap_days <= 0:
+        return 0.0
+    return round(amount * overlap_days / total_days, 2)
+
+
+def _get_real_electricity(branch_id: int, year: int, month: int, db) -> float:
+    """Sum prorated electricity from invoices (<=90 days) that intersect (year, month). Returns 0 if none."""
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    rows = db.execute(
+        "SELECT amount, raw_json FROM electricity_invoices WHERE branch_id = ?",
+        (branch_id,)
+    ).fetchall()
+    total = 0.0
+    for r in rows:
+        try:
+            rj = json.loads(r['raw_json'])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        from_d_str = rj.get('from_date', '')
+        to_d_str = rj.get('to_date', '')
+        if not from_d_str or not to_d_str:
+            continue
+        from_d = date.fromisoformat(from_d_str[:10])
+        to_d = date.fromisoformat(to_d_str[:10])
+        span = (to_d - from_d).days
+        if span <= 0 or span > 90:
+            continue
+        # Check intersection with target month
+        if to_d < month_start or from_d > month_end:
+            continue
+        total += _prorate_invoice(from_d_str, to_d_str, r['amount'], year, month)
+    return round(total, 2)
+
+
+def get_electricity_for_month(branch_id: int, year: int, month: int, db=None) -> dict:
+    """
+    Returns electricity contribution for a branch in a given month.
+    Returns: {amount: float, source: 'real'|'estimate'|'none', estimate_basis: str|None}
+    """
+    if db is None:
+        db = get_db()
+    # Check if branch has IEC integration
+    has_iec = db.execute(
+        "SELECT iec_token FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    if not has_iec or not has_iec['iec_token']:
+        return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+    # Check if any invoices exist at all
+    any_invoice = db.execute(
+        "SELECT 1 FROM electricity_invoices WHERE branch_id = ? LIMIT 1", (branch_id,)
+    ).fetchone()
+    if not any_invoice:
+        return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+    # Try REAL
+    real_amount = _get_real_electricity(branch_id, year, month, db)
+    if real_amount > 0:
+        return {'amount': real_amount, 'source': 'real', 'estimate_basis': None}
+    # ESTIMATE: try same month last year
+    prev_year_amount = _get_real_electricity(branch_id, year - 1, month, db)
+    if prev_year_amount > 0:
+        return {'amount': prev_year_amount, 'source': 'estimate', 'estimate_basis': f'{month:02d}/{year - 1}'}
+    # Search closest month within ±12 months that has real data
+    best_amount = 0.0
+    best_distance = 999
+    best_basis = None
+    for offset in range(1, 13):
+        for direction in (-1, 1):
+            search_m = month + offset * direction
+            search_y = year
+            while search_m < 1:
+                search_m += 12
+                search_y -= 1
+            while search_m > 12:
+                search_m -= 12
+                search_y += 1
+            amt = _get_real_electricity(branch_id, search_y, search_m, db)
+            if amt > 0 and offset < best_distance:
+                best_amount = amt
+                best_distance = offset
+                best_basis = f'{search_m:02d}/{search_y}'
+                break  # found for this offset, no need to check other direction at same distance
+        if best_distance <= offset:
+            break  # found something at this distance, no need to search further
+    if best_amount > 0:
+        return {'amount': best_amount, 'source': 'estimate', 'estimate_basis': best_basis}
+    return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+
+
+def get_branch_start_month(branch_id: int, db=None) -> tuple:
+    """Return (year, month) of first month visible in the UI, or None.
+
+    Checks branches.ui_start_month override first. If not set, falls back
+    to auto-detection from operational data (daily_sales, goods_documents,
+    fixed_expenses, employee_hours). Does NOT consider electricity_invoices
+    because those are pulled retroactively from IEC.
+    """
+    if db is None:
+        db = get_db()
+    # 1. Check per-branch UI override
+    override = db.execute(
+        'SELECT ui_start_month FROM branches WHERE id=?', (branch_id,)
+    ).fetchone()
+    if override and override['ui_start_month']:
+        y, m = map(int, override['ui_start_month'].split('-'))
+        return (y, m)
+    # 2. Auto-detect from operational data
+    earliest = db.execute('''
+        SELECT MIN(month) as m FROM (
+            SELECT strftime('%Y-%m', date) as month FROM daily_sales WHERE branch_id=?
+            UNION
+            SELECT strftime('%Y-%m', doc_date) as month FROM goods_documents WHERE branch_id=?
+            UNION
+            SELECT month FROM fixed_expenses WHERE branch_id=?
+            UNION
+            SELECT month FROM employee_hours WHERE branch_id=?
+        )
+    ''', (branch_id, branch_id, branch_id, branch_id)).fetchone()
+    if not earliest or not earliest['m']:
+        return None
+    y, m = map(int, earliest['m'].split('-'))
+    return (y, m)
+
+
+def _get_fixed_total(branch_id: int, month: str, income: float, db) -> dict:
+    """Sum fixed expenses for a branch+month. % rows calculated live from income.
+    Returns dict: {fixed_only, electricity: {amount, source, estimate_basis}, total}"""
     rows = db.execute(
         'SELECT amount, pct_value FROM fixed_expenses WHERE branch_id=? AND month=?',
         (branch_id, month)
     ).fetchall()
-    total = 0
+    fixed_sum = 0
     for r in rows:
         if r['pct_value'] and r['pct_value'] > 0:
-            total += income * r['pct_value'] / 100
+            fixed_sum += income * r['pct_value'] / 100
         else:
-            total += r['amount']
-    return round(total, 2)
+            fixed_sum += r['amount']
+    fixed_sum = round(fixed_sum, 2)
+    y, m = map(int, month.split('-'))
+    elec = get_electricity_for_month(branch_id, y, m, db)
+    return {
+        'fixed_only': fixed_sum,
+        'electricity': elec,
+        'total': round(fixed_sum + elec['amount'], 2),
+    }
 
 
 def _ensure_monthly_expenses(branch_id: int, month: str, db):
@@ -1637,6 +1800,26 @@ def api_fixed_expenses_delete(exp_id):
     db.execute("DELETE FROM fixed_expenses WHERE id = ?", (exp_id,))
     db.commit()
     return jsonify({'ok': True})
+
+
+@app.route('/api/electricity-latest')
+@login_required
+def api_electricity_latest():
+    """Return the most recent electricity invoice for the branch, or null."""
+    branch_id = get_branch_id()
+    db = get_db()
+    row = db.execute(
+        "SELECT period_label, amount, due_date FROM electricity_invoices "
+        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
+    if not row:
+        return jsonify(None)
+    return jsonify({
+        'period_label': row['period_label'],
+        'amount': row['amount'],
+        'due_date': row['due_date'],
+    })
 
 
 PDF_BASE = os.path.join(os.path.dirname(__file__), 'data', 'pdfs')
@@ -1822,6 +2005,35 @@ def api_ops_status():
             else:
                 agents_data[agent] = None
 
+        # IEC agent — uses iec_last_sync_at from branches + agent_runs for iec
+        iec_row = db.execute(
+            "SELECT iec_token, iec_last_sync_at FROM branches WHERE id = ?", (bid,)
+        ).fetchone()
+        has_iec = iec_row and iec_row['iec_token']
+        if has_iec:
+            iec_run = db.execute(
+                "SELECT status, message, started_at, duration_seconds, docs_count, amount "
+                "FROM agent_runs WHERE branch_id=? AND agent='iec' "
+                "ORDER BY started_at DESC LIMIT 1",
+                (bid,)
+            ).fetchone()
+            if iec_run:
+                d = dict(iec_run)
+                d['started_at'] = _to_il_datetime(d.get('started_at'))
+                agents_data['iec'] = d
+            else:
+                # No agent_runs yet but has token — show last sync time
+                agents_data['iec'] = {
+                    'status': 'success' if iec_row['iec_last_sync_at'] else 'skipped',
+                    'message': '',
+                    'started_at': _to_il_datetime(iec_row['iec_last_sync_at']) if iec_row['iec_last_sync_at'] else '',
+                    'duration_seconds': None,
+                    'docs_count': None,
+                    'amount': None,
+                }
+        else:
+            agents_data['iec'] = None
+
         # Determine overall status
         statuses = [a['status'] for a in agents_data.values() if a]
         if 'error' in statuses:
@@ -1851,6 +2063,7 @@ def api_ops_status():
             'avg_hourly_rate': rate_row['avg_hourly_rate'] if rate_row else 0,
             'hours_this_month': rate_row['hours_this_month'] if rate_row else 0,
             'employees_with_rates': emp_rate_count,
+            'has_iec_token': bool(has_iec),
         })
 
     # Recent agent runs
@@ -1910,7 +2123,7 @@ def ops_run_agent():
     branch_id = data.get('branch_id')
     agent = data.get('agent')
 
-    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees'):
+    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
         return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
 
     t0 = time.time()
@@ -1927,6 +2140,23 @@ def ops_run_agent():
             from agents.aviv_live import run_aviv_live
             result = run_aviv_live(int(branch_id))
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
+        elif agent == 'iec':
+            # IEC API is geo-blocked outside Israel — must run on Israeli VPS via SSH
+            bid = int(branch_id)
+            ssh_cmd = [
+                'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                'makolet-iec',
+                f'/opt/makolet-iec/venv/bin/python /opt/makolet-iec/iec_sync.py --branch-id {bid}'
+            ]
+            proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+            if proc.returncode == 0:
+                result = {'success': True}
+                # Extract message from stdout (last INFO line)
+                lines = [l for l in proc.stdout.strip().split('\n') if l.strip()]
+                msg = lines[-1] if lines else 'IEC sync completed'
+            else:
+                result = {'success': False}
+                msg = proc.stderr.strip() or proc.stdout.strip() or 'SSH to VPS failed'
         else:  # aviv_employees
             from agents.aviv_employees import run_aviv_employees
             result = run_aviv_employees(int(branch_id))
@@ -1950,7 +2180,7 @@ def ops_run_agent():
 @_ceo_required
 def ops_logs(branch_id, agent):
     import re as _re
-    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees'):
+    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
         abort(400)
 
     # Get branch name for modal title
@@ -2127,6 +2357,269 @@ def api_admin_branch_update(branch_id):
         return jsonify({'ok': True})
     sql = 'UPDATE branches SET ' + ', '.join(f + '=?' for f in updates) + ' WHERE id=?'
     db.execute(sql, list(updates.values()) + [branch_id])
+    db.commit()
+    return jsonify({'ok': True})
+
+
+# ── IEC status & accuracy endpoints ─────────────────────────────────────
+
+@app.route('/api/iec-status')
+@_ceo_required
+def api_iec_status():
+    branch_id = request.args.get('branch_id', type=int)
+    if not branch_id:
+        return jsonify({'error': 'missing branch_id'}), 400
+    db = get_db()
+    row = db.execute(
+        "SELECT iec_token, iec_last_sync_at FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    if not row or not row['iec_token']:
+        return jsonify({'last_sync_at': None, 'last_sync_status': 'never', 'invoice_count': 0})
+    inv_count = db.execute(
+        "SELECT COUNT(*) as cnt FROM electricity_invoices WHERE branch_id = ?", (branch_id,)
+    ).fetchone()['cnt']
+    # Determine status from last agent run
+    last_run = db.execute(
+        "SELECT status FROM agent_runs WHERE branch_id=? AND agent='iec' ORDER BY started_at DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
+    if last_run:
+        status = 'ok' if last_run['status'] == 'success' else 'failed'
+    elif row['iec_last_sync_at']:
+        status = 'ok'
+    else:
+        status = 'never'
+    return jsonify({
+        'last_sync_at': row['iec_last_sync_at'],
+        'last_sync_status': status,
+        'invoice_count': inv_count,
+    })
+
+
+def _get_iec_accuracy_data(branch_id: int, db=None) -> list:
+    """Return 12 months of accuracy data starting from current month."""
+    if db is None:
+        db = get_db()
+    # Check if branch has IEC
+    has_iec = db.execute(
+        "SELECT iec_token, name FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    if not has_iec or not has_iec['iec_token']:
+        return []
+
+    branch_name = has_iec['name']
+    now = datetime.now(IL_TZ)
+    rows = []
+
+    for offset in range(12):
+        m = now.month + offset
+        y = now.year
+        while m > 12:
+            m -= 12
+            y += 1
+
+        # Get estimate
+        elec = get_electricity_for_month(branch_id, y, m, db)
+
+        # Determine real value — check if every day in month is covered by invoices
+        month_start = date(y, m, 1)
+        month_end = date(y, m, calendar.monthrange(y, m)[1])
+        total_days = (month_end - month_start).days + 1
+
+        # Get all invoices that intersect this month
+        inv_rows = db.execute(
+            "SELECT amount, raw_json FROM electricity_invoices WHERE branch_id = ?",
+            (branch_id,)
+        ).fetchall()
+
+        covered_days = set()
+        real_amount = 0.0
+        for inv in inv_rows:
+            try:
+                rj = json.loads(inv['raw_json'])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            from_d_str = rj.get('from_date', '')
+            to_d_str = rj.get('to_date', '')
+            if not from_d_str or not to_d_str:
+                continue
+            from_d = date.fromisoformat(from_d_str[:10])
+            to_d = date.fromisoformat(to_d_str[:10])
+            span = (to_d - from_d).days
+            if span <= 0 or span > 90:
+                continue
+            if to_d < month_start or from_d > month_end:
+                continue
+            # Mark covered days
+            overlap_start = max(from_d, month_start)
+            overlap_end = min(to_d, month_end)
+            for d_offset in range((overlap_end - overlap_start).days + 1):
+                covered_days.add(overlap_start + timedelta(days=d_offset))
+            real_amount += _prorate_invoice(from_d_str, to_d_str, inv['amount'], y, m)
+
+        full_coverage = len(covered_days) >= total_days
+        real_val = round(real_amount, 2) if full_coverage and real_amount > 0 else None
+
+        estimate_val = elec['amount'] if elec['source'] in ('estimate', 'real') else None
+        estimate_basis = elec.get('estimate_basis')
+
+        # If real data exists and source is 'real', the estimate is the real value itself
+        # For accuracy purposes we want the estimate that was used BEFORE real arrived
+        if elec['source'] == 'real' and full_coverage:
+            # The "real" is the actual amount; estimate would have been from prior year
+            estimate_val = elec['amount']  # In this case estimate = real (it was the real data)
+
+        delta = None
+        accuracy_pct = None
+        if real_val is not None and estimate_val is not None:
+            delta = round(real_val - estimate_val, 2)
+            if real_val > 0:
+                accuracy_pct = round(100 - abs(delta) / real_val * 100, 1)
+
+        if estimate_val is None and real_val is None:
+            status = 'no_estimate'
+        elif real_val is not None:
+            status = 'final'
+        else:
+            status = 'pending'
+
+        rows.append({
+            'branch_id': branch_id,
+            'branch_name': branch_name,
+            'year': y,
+            'month': m,
+            'month_label': f"{HEBREW_MONTHS[m]} {y}",
+            'estimate': estimate_val,
+            'estimate_basis': estimate_basis,
+            'real': real_val,
+            'delta': delta,
+            'accuracy_pct': accuracy_pct,
+            'status': status,
+        })
+
+    return rows
+
+
+@app.route('/api/iec-accuracy')
+@_ceo_required
+def api_iec_accuracy():
+    branch_id = request.args.get('branch_id', type=int)
+    db = get_db()
+    if branch_id:
+        return jsonify(_get_iec_accuracy_data(branch_id, db))
+    # All branches with IEC
+    branches = db.execute(
+        "SELECT id FROM branches WHERE active = 1 AND iec_token IS NOT NULL"
+    ).fetchall()
+    result = []
+    for b in branches:
+        result.extend(_get_iec_accuracy_data(b['id'], db))
+    return jsonify(result)
+
+
+# ── Internal sync endpoints (VPS → Hetzner, secret-protected) ──────────
+
+def _check_iec_sync_secret():
+    expected = os.getenv('IEC_SYNC_SECRET')
+    if not expected:
+        abort(503, 'IEC sync not configured')
+    provided = request.headers.get('X-Sync-Secret', '')
+    if not hmac.compare_digest(expected, provided):
+        abort(401, 'Invalid sync secret')
+
+
+@app.route('/api/internal/iec-branches')
+def api_internal_iec_branches():
+    _check_iec_sync_secret()
+    db = get_db()
+    rows = db.execute('''
+        SELECT id AS branch_id, iec_user_id, iec_token, iec_bp_number, iec_contract_id
+        FROM branches
+        WHERE active = 1 AND iec_token IS NOT NULL
+    ''').fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/internal/iec-sync', methods=['POST'])
+def api_internal_iec_sync():
+    _check_iec_sync_secret()
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no JSON body'}), 400
+
+    branch_id = data.get('branch_id')
+    db = get_db()
+    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    if not branch:
+        return jsonify({'error': f'branch {branch_id} not found'}), 404
+
+    invoices = data.get('invoices', [])
+    upserted = 0
+    for inv in invoices:
+        db.execute('''
+            INSERT INTO electricity_invoices
+                (branch_id, invoice_number, period_label, amount, due_date, is_paid, source, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, 'iec_api', ?)
+            ON CONFLICT (branch_id, invoice_number) DO UPDATE SET
+                amount = excluded.amount,
+                due_date = excluded.due_date,
+                is_paid = excluded.is_paid,
+                period_label = excluded.period_label,
+                raw_json = excluded.raw_json
+        ''', (branch_id, inv.get('invoice_number'), inv.get('period_label'),
+              inv.get('amount', 0), inv.get('due_date'), 1 if inv.get('is_paid') else 0,
+              json.dumps(inv.get('raw_json'), default=str, ensure_ascii=False) if inv.get('raw_json') else None))
+        upserted += 1
+
+    rotated_token = data.get('rotated_token')
+    if rotated_token:
+        db.execute('UPDATE branches SET iec_token = ? WHERE id = ?', (rotated_token, branch_id))
+
+    synced_at = data.get('synced_at', datetime.utcnow().isoformat())
+    db.execute('UPDATE branches SET iec_last_sync_at = ? WHERE id = ?', (synced_at, branch_id))
+    db.commit()
+
+    return jsonify({'ok': True, 'upserted': upserted, 'rotated_token': bool(rotated_token)})
+
+
+@app.route('/api/internal/iec-sync-error', methods=['POST'])
+def api_internal_iec_sync_error():
+    _check_iec_sync_secret()
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no JSON body'}), 400
+
+    branch_id = data.get('branch_id')
+    error_msg = data.get('error', 'unknown error')
+    occurred_at = data.get('occurred_at', datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+
+    db = get_db()
+    db.execute('''
+        INSERT INTO agent_runs (branch_id, agent, started_at, finished_at, status, message)
+        VALUES (?, 'iec_sync', ?, ?, 'error', ?)
+    ''', (branch_id, occurred_at, occurred_at, error_msg))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/internal/iec-onboard', methods=['POST'])
+def api_internal_iec_onboard():
+    _check_iec_sync_secret()
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no JSON body'}), 400
+
+    branch_id = data.get('branch_id')
+    db = get_db()
+    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    if not branch:
+        return jsonify({'error': f'branch {branch_id} not found'}), 404
+
+    db.execute('''
+        UPDATE branches SET iec_user_id = ?, iec_token = ?, iec_bp_number = ?, iec_contract_id = ?
+        WHERE id = ?
+    ''', (data.get('iec_user_id'), data.get('iec_token'),
+          data.get('iec_bp_number'), data.get('iec_contract_id'), branch_id))
     db.commit()
     return jsonify({'ok': True})
 

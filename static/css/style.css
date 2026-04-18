@@ -284,6 +284,11 @@ body {
     border-color: rgba(15, 118, 110, 0.35);
 }
 
+.kpi-card--electricity {
+    background: linear-gradient(135deg, #92400e, #854d0e);
+    border-color: rgba(202, 138, 4, 0.35);
+}
+
 .kpi-header {
     display: flex;
     align-items: center;
