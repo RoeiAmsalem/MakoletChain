@@ -1713,6 +1713,45 @@ def api_fixed_expenses_delete(exp_id):
     return jsonify({'ok': True})
 
 
+@app.route('/api/fixed-expenses-summary')
+@login_required
+def api_fixed_expenses_summary():
+    """Return fixed expenses summary with prorated monthly electricity.
+    Same math as _get_fixed_total used by /api/summary (home page).
+    Returns: {fixed_only, electricity: {amount, source, estimate_basis}, total, month_label}
+    """
+    branch_id = get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    _ensure_monthly_expenses(branch_id, month, db)
+
+    # Income calc — same logic as api_fixed_expenses_list
+    income = db.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
+        "WHERE branch_id=? AND strftime('%Y-%m',date)=?",
+        (branch_id, month)
+    ).fetchone()[0]
+    current_month = _now_il().strftime('%Y-%m')
+    if month == current_month:
+        today = _now_il().strftime('%Y-%m-%d')
+        has_z = db.execute(
+            "SELECT 1 FROM daily_sales WHERE branch_id=? AND date=?",
+            (branch_id, today)
+        ).fetchone()
+        if not has_z:
+            live = db.execute(
+                "SELECT amount FROM live_sales WHERE branch_id=? AND date=?",
+                (branch_id, today)
+            ).fetchone()
+            if live and live['amount']:
+                income += live['amount']
+
+    data = _get_fixed_total(branch_id, month, income, db)
+    y, m = map(int, month.split('-'))
+    data['month_label'] = f'{HEBREW_MONTHS[m]} {y}'
+    return jsonify(data)
+
+
 @app.route('/api/electricity-latest')
 @login_required
 def api_electricity_latest():
