@@ -1601,13 +1601,23 @@ def get_electricity_for_month(branch_id: int, year: int, month: int, db=None) ->
 
 
 def get_branch_start_month(branch_id: int, db=None) -> tuple:
-    """Return (year, month) of first month with operational data, or None.
+    """Return (year, month) of first month visible in the UI, or None.
 
-    Does NOT consider electricity_invoices because those are pulled
-    retroactively from IEC and predate system onboarding.
+    Checks branches.ui_start_month override first. If not set, falls back
+    to auto-detection from operational data (daily_sales, goods_documents,
+    fixed_expenses, employee_hours). Does NOT consider electricity_invoices
+    because those are pulled retroactively from IEC.
     """
     if db is None:
         db = get_db()
+    # 1. Check per-branch UI override
+    override = db.execute(
+        'SELECT ui_start_month FROM branches WHERE id=?', (branch_id,)
+    ).fetchone()
+    if override and override['ui_start_month']:
+        y, m = map(int, override['ui_start_month'].split('-'))
+        return (y, m)
+    # 2. Auto-detect from operational data
     earliest = db.execute('''
         SELECT MIN(month) as m FROM (
             SELECT strftime('%Y-%m', date) as month FROM daily_sales WHERE branch_id=?
