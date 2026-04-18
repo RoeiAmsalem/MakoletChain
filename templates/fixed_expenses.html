@@ -595,9 +595,31 @@ const iecWizard = (() => {
             const data = await resp.json();
             if (!data.ok) { showError(data.error || 'שגיאה בשמירה'); return; }
             close();
-            if (typeof mkAlert === 'function') mkAlert({type: 'success', title: 'הצלחה', message: 'חשבון החשמל הוגדר בהצלחה'});
-            // Reload to show updated electricity data
-            setTimeout(() => loadExpenses(), 1000);
+            if (typeof mkAlert === 'function') mkAlert({type: 'success', title: 'הצלחה', message: 'חשבון החשמל הוגדר בהצלחה. טוען נתונים...'});
+            // Trigger first IEC sync in background
+            fetch('/api/iec/sync', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID})
+            }).catch(() => {});
+            // Poll for invoice data (max 30s)
+            let polls = 0;
+            const pollTimer = setInterval(async () => {
+                polls++;
+                if (polls > 15) {
+                    clearInterval(pollTimer);
+                    if (typeof mkAlert === 'function') mkAlert({type: 'info', title: 'הנתונים יופיעו בקרוב', message: 'ההגדרה נשמרה. הנתונים יופיעו תוך דקות ספורות.'});
+                    return;
+                }
+                try {
+                    const r = await fetch('/api/electricity-latest');
+                    const d = await r.json();
+                    if (d && d.amount != null) {
+                        clearInterval(pollTimer);
+                        loadExpenses();
+                    }
+                } catch (_) {}
+            }, 2000);
         } catch (e) {
             showError('שגיאה בחיבור לשרת');
         } finally {

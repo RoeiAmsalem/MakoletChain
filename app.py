@@ -2832,6 +2832,35 @@ def iec_onboard_save():
     return jsonify({"ok": True})
 
 
+@app.route('/api/iec/sync', methods=['POST'])
+@login_required
+def api_iec_sync():
+    """Trigger IEC invoice sync for a branch. Managers can sync their own branch."""
+    data = request.get_json() or {}
+    branch_id = data.get('branch_id')
+    if not branch_id:
+        return jsonify({"ok": False, "error": "missing branch_id"}), 400
+    branch_id = int(branch_id)
+
+    if not _check_branch_permission(branch_id):
+        return jsonify({"ok": False, "error": "אין הרשאה"}), 403
+
+    try:
+        ssh_cmd = [
+            'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+            'makolet-iec',
+            f'/opt/makolet-iec/venv/bin/python /opt/makolet-iec/iec_sync.py --branch-id {branch_id}'
+        ]
+        proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+        if proc.returncode == 0:
+            return jsonify({"ok": True})
+        else:
+            msg = proc.stderr.strip() or proc.stdout.strip() or 'sync failed'
+            return jsonify({"ok": False, "error": msg}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'project': 'MakoletChain'})

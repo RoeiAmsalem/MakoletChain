@@ -987,11 +987,11 @@ const iecWizard = (() => {
             // Refresh ops data to show updated IEC status
             loadOpsData();
             // Trigger first IEC sync in the background
-            fetch('/ops/run-agent', {
+            fetch('/api/iec/sync', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({branch_id: branchId, agent: 'iec'})
-            }).then(() => setTimeout(loadOpsData, 10000));
+                body: JSON.stringify({branch_id: branchId})
+            }).catch(() => {}).then(() => setTimeout(loadOpsData, 10000));
         } catch (e) {
             showError('שגיאה בחיבור לשרת');
         } finally {
