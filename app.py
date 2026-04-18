@@ -2141,10 +2141,22 @@ def ops_run_agent():
             result = run_aviv_live(int(branch_id))
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
         elif agent == 'iec':
-            from agents.iec_agent import run_iec_sync
-            result = run_iec_sync(int(branch_id))
-            result['success'] = result.get('status') == 'success'
-            msg = result.get('message', 'done')
+            # IEC API is geo-blocked outside Israel — must run on Israeli VPS via SSH
+            bid = int(branch_id)
+            ssh_cmd = [
+                'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                'makolet-iec',
+                f'/opt/makolet-iec/venv/bin/python /opt/makolet-iec/iec_sync.py --branch-id {bid}'
+            ]
+            proc = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+            if proc.returncode == 0:
+                result = {'success': True}
+                # Extract message from stdout (last INFO line)
+                lines = [l for l in proc.stdout.strip().split('\n') if l.strip()]
+                msg = lines[-1] if lines else 'IEC sync completed'
+            else:
+                result = {'success': False}
+                msg = proc.stderr.strip() or proc.stdout.strip() or 'SSH to VPS failed'
         else:  # aviv_employees
             from agents.aviv_employees import run_aviv_employees
             result = run_aviv_employees(int(branch_id))
