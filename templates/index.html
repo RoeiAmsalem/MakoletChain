@@ -102,24 +102,22 @@
     </div>
 </section>
 
-<!-- Electricity strip -->
-<div id="elec-strip" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem; margin-bottom:8px;">
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-        <div>
-            <div style="font-size:0.88rem; font-weight:600; color:#fbbf24;">⚡ חשבונית אחרונה</div>
-            <div id="elec-strip-detail" style="font-size:0.82rem; color:#94a3b8; margin-top:3px;"></div>
+<!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
+<div id="elec-hourly-cluster" style="display:flex; flex-direction:column; gap:6px;">
+    <div id="elec-strip" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div>
+                <div style="font-size:0.88rem; font-weight:600; color:#fbbf24;">⚡ חשבונית אחרונה</div>
+                <div id="elec-strip-detail" style="font-size:0.82rem; color:#94a3b8; margin-top:3px;"></div>
+            </div>
+            <div id="elec-strip-sync" style="font-size:0.75rem; color:#64748b;"></div>
         </div>
-        <div id="elec-strip-sync" style="font-size:0.75rem; color:#64748b;"></div>
     </div>
-</div>
-
-<!-- Estimate disclaimer -->
-<div id="estimate-disclaimer" style="display:none; font-size:0.78rem; color:#94a3b8; margin:0 0 8px 0; padding:0 0.25rem;">
-    ~ בטבלה החודשית = חשמל משוער על בסיס נתוני שנה קודמת
-</div>
-
-<!-- Sales by Hour (first chart) -->
-<div class="card chart-card" id="hourly-section" style="display:none; padding:1.25rem 1.25rem 1rem 1.25rem;">
+    <div id="estimate-disclaimer" style="display:none; font-size:0.875rem; font-weight:500; color:#94a3b8; margin:0; padding:0 0.25rem;">
+        ~ בטבלה החודשית = חשמל משוער על בסיס נתוני שנה קודמת
+    </div>
+    <!-- Sales by Hour -->
+    <div class="card chart-card" id="hourly-section" style="display:none; padding:1.25rem 1.25rem 1rem 1.25rem;">
   <div style="margin-bottom:1.25rem;">
     <h2 class="section-title" style="margin:0 0 0.25rem 0;">מכירות לפי שעות היום</h2>
     <div style="font-size:0.85rem; color:#94a3b8;">מבוסס על נתוני החודש הנוכחי</div>
@@ -148,6 +146,7 @@
     <canvas id="hourly-chart"></canvas>
   </div>
 </div>
+</div><!-- /elec-hourly-cluster -->
 
 <!-- Bar Chart: last 6 months -->
 <section class="card chart-card">
@@ -228,6 +227,7 @@ async function loadSummary() {
             document.getElementById('elec-strip-detail').textContent =
                 (le.period_label || '') + ' · ' + formatMoney(le.amount) + (dueFmt ? ' �� תשלום עד ' + dueFmt : '');
             strip.style.display = 'block';
+
             const syncEl = document.getElementById('elec-strip-sync');
             if (d.iec_last_sync_at) {
                 const sd = new Date(d.iec_last_sync_at);
@@ -237,6 +237,7 @@ async function loadSummary() {
             document.getElementById('elec-strip-detail').textContent = 'חשמל — טרם הוגדר עבור סניף זה';
             document.getElementById('elec-strip-sync').textContent = '';
             strip.style.display = 'block';
+
         }
 
         // Show live income subtitle
