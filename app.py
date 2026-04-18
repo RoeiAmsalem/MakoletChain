@@ -1601,7 +1601,11 @@ def get_electricity_for_month(branch_id: int, year: int, month: int, db=None) ->
 
 
 def get_branch_start_month(branch_id: int, db=None) -> tuple:
-    """Return (year, month) of first month with any real data, or None."""
+    """Return (year, month) of first month with operational data, or None.
+
+    Does NOT consider electricity_invoices because those are pulled
+    retroactively from IEC and predate system onboarding.
+    """
     if db is None:
         db = get_db()
     earliest = db.execute('''
@@ -1612,8 +1616,7 @@ def get_branch_start_month(branch_id: int, db=None) -> tuple:
             UNION
             SELECT month FROM fixed_expenses WHERE branch_id=?
             UNION
-            SELECT strftime('%Y-%m', json_extract(raw_json, '$.from_date')) as month
-            FROM electricity_invoices WHERE branch_id=?
+            SELECT month FROM employee_hours WHERE branch_id=?
         )
     ''', (branch_id, branch_id, branch_id, branch_id)).fetchone()
     if not earliest or not earliest['m']:

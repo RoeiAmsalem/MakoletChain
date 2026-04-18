@@ -55,11 +55,11 @@ def test_deterministic():
 
 
 def test_branch_start_month():
-    """Branch 126 should have a start month in 2024 or earlier."""
+    """Branch 126 was onboarded to MakoletDashboard in 2025, not earlier."""
     db = get_test_db()
     start = get_branch_start_month(126, db)
     assert start is not None, "Expected start month, got None"
-    assert start[0] <= 2025, f"Expected year <= 2025, got {start[0]}"
+    assert start[0] >= 2025, f"Expected year >= 2025 (onboarded in 2025), got {start[0]}"
     print(f"  PASS: branch 126 start month = {start[1]:02d}/{start[0]}")
 
 
