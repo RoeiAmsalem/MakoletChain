@@ -1,4 +1,6 @@
+import hmac
 import io
+import json
 import os
 import secrets
 import sqlite3
@@ -2127,6 +2129,113 @@ def api_admin_branch_update(branch_id):
         return jsonify({'ok': True})
     sql = 'UPDATE branches SET ' + ', '.join(f + '=?' for f in updates) + ' WHERE id=?'
     db.execute(sql, list(updates.values()) + [branch_id])
+    db.commit()
+    return jsonify({'ok': True})
+
+
+# ── Internal sync endpoints (VPS → Hetzner, secret-protected) ──────────
+
+def _check_iec_sync_secret():
+    expected = os.getenv('IEC_SYNC_SECRET')
+    if not expected:
+        abort(503, 'IEC sync not configured')
+    provided = request.headers.get('X-Sync-Secret', '')
+    if not hmac.compare_digest(expected, provided):
+        abort(401, 'Invalid sync secret')
+
+
+@app.route('/api/internal/iec-branches')
+def api_internal_iec_branches():
+    _check_iec_sync_secret()
+    db = get_db()
+    rows = db.execute('''
+        SELECT id AS branch_id, iec_user_id, iec_token, iec_bp_number, iec_contract_id
+        FROM branches
+        WHERE active = 1 AND iec_token IS NOT NULL
+    ''').fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/internal/iec-sync', methods=['POST'])
+def api_internal_iec_sync():
+    _check_iec_sync_secret()
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no JSON body'}), 400
+
+    branch_id = data.get('branch_id')
+    db = get_db()
+    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    if not branch:
+        return jsonify({'error': f'branch {branch_id} not found'}), 404
+
+    invoices = data.get('invoices', [])
+    upserted = 0
+    for inv in invoices:
+        db.execute('''
+            INSERT INTO electricity_invoices
+                (branch_id, invoice_number, period_label, amount, due_date, is_paid, source, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, 'iec_api', ?)
+            ON CONFLICT (branch_id, invoice_number) DO UPDATE SET
+                amount = excluded.amount,
+                due_date = excluded.due_date,
+                is_paid = excluded.is_paid,
+                period_label = excluded.period_label,
+                raw_json = excluded.raw_json
+        ''', (branch_id, inv.get('invoice_number'), inv.get('period_label'),
+              inv.get('amount', 0), inv.get('due_date'), 1 if inv.get('is_paid') else 0,
+              json.dumps(inv.get('raw_json'), default=str, ensure_ascii=False) if inv.get('raw_json') else None))
+        upserted += 1
+
+    rotated_token = data.get('rotated_token')
+    if rotated_token:
+        db.execute('UPDATE branches SET iec_token = ? WHERE id = ?', (rotated_token, branch_id))
+
+    synced_at = data.get('synced_at', datetime.utcnow().isoformat())
+    db.execute('UPDATE branches SET iec_last_sync_at = ? WHERE id = ?', (synced_at, branch_id))
+    db.commit()
+
+    return jsonify({'ok': True, 'upserted': upserted, 'rotated_token': bool(rotated_token)})
+
+
+@app.route('/api/internal/iec-sync-error', methods=['POST'])
+def api_internal_iec_sync_error():
+    _check_iec_sync_secret()
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no JSON body'}), 400
+
+    branch_id = data.get('branch_id')
+    error_msg = data.get('error', 'unknown error')
+    occurred_at = data.get('occurred_at', datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+
+    db = get_db()
+    db.execute('''
+        INSERT INTO agent_runs (branch_id, agent, started_at, finished_at, status, message)
+        VALUES (?, 'iec_sync', ?, ?, 'error', ?)
+    ''', (branch_id, occurred_at, occurred_at, error_msg))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/internal/iec-onboard', methods=['POST'])
+def api_internal_iec_onboard():
+    _check_iec_sync_secret()
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no JSON body'}), 400
+
+    branch_id = data.get('branch_id')
+    db = get_db()
+    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    if not branch:
+        return jsonify({'error': f'branch {branch_id} not found'}), 404
+
+    db.execute('''
+        UPDATE branches SET iec_user_id = ?, iec_token = ?, iec_bp_number = ?, iec_contract_id = ?
+        WHERE id = ?
+    ''', (data.get('iec_user_id'), data.get('iec_token'),
+          data.get('iec_bp_number'), data.get('iec_contract_id'), branch_id))
     db.commit()
     return jsonify({'ok': True})
 
