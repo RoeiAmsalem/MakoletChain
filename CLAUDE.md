@@ -28,6 +28,7 @@ Prompts use: Read CLAUDE.md first. and TASK N separators.
 - SSH alias: ssh makolet-chain
 - Path: /opt/makolet-chain
 - Services: makolet-chain (Flask) + makolet-chain-scheduler (APScheduler)
+- Gunicorn: `-w 1 --threads 4` (single worker + threads) — required because IEC wizard holds session state in process memory (`_iec_wizard_sessions`). Do NOT increase `-w` without moving sessions to redis/sqlite first.
 
 ### Deploy Command
 
