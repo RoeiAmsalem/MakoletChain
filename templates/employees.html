@@ -237,37 +237,8 @@
   <div id="unknown-list" style="display:flex; flex-direction:column; gap:0.75rem;"></div>
 </div>
 
-<!-- Discrepancies Banner -->
-<div id="discrepancies-banner" style="display:none; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.25rem;">
-  <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem;">
-    <span style="font-size:1.25rem;">&#9888;&#65039;</span>
-    <div>
-      <div style="font-weight:700; color:#fbbf24;">
-        <span id="disc-count">0</span> אי-התאמות בין API ל-CSV
-      </div>
-      <div style="font-size:0.85rem; color:#fde68a;">
-        מומלץ לבדוק ולאשר את השעות הנכונות
-      </div>
-    </div>
-  </div>
-  <div id="disc-list"></div>
-</div>
-
-<!-- CSV-Only Employees Banner -->
-<div id="csv-only-banner" style="display:none; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.3); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.25rem;">
-  <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem;">
-    <span style="font-size:1.25rem;">&#128203;</span>
-    <div>
-      <div style="font-weight:700; color:#a5b4fc;">
-        <span id="csv-only-count">0</span> עובדים ב-CSV לא נמצאו ב-API
-      </div>
-      <div style="font-size:0.85rem; color:#c7d2fe;">
-        עובדים אלו מופיעים ב-CSV אך לא באביב API לחודש הזה. לאשר?
-      </div>
-    </div>
-  </div>
-  <div id="csv-only-list"></div>
-</div>
+<!-- Discrepancies Banner — DISABLED 2026-04-18: CSV path retired in favor of API-only -->
+<!-- CSV-Only Employees Banner — DISABLED 2026-04-18: CSV path retired in favor of API-only -->
 
 <!-- Employee Cards Grid -->
 <section class="emp-grid" id="emp-grid">
@@ -722,7 +693,6 @@ function renderCards(employees, csvProcessed) {
             <div class="emp-card-stats">
                 <div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'טרם הועלה דוח שעות'}
                 ${hasHours && emp.hours_source === 'aviv_api' ? ' <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">API</span>' : ''}
-                ${hasHours && emp.hours_source === 'csv' ? ' <span class="status-badge badge-approved" style="font-size:0.65rem;padding:0.1rem 0.35rem">CSV</span>' : ''}
                 </div>
                 <div class="emp-card-rate">${emp.hourly_rate > 0 ? '₪' + emp.hourly_rate.toFixed(0) + '/שעה' : '<span style="color:#f59e0b">לא הוגדר תעריף</span>'}</div>
                 ${hasHours && salary !== '—' ? `<div>שכר: ${salary}</div>` : ''}
@@ -759,15 +729,9 @@ async function loadEmployees() {
 
         document.getElementById('kpi-salary').textContent = formatMoney(d.salary_cost || 0);
         const badgeEl = document.getElementById('kpi-salary-badge');
-        if (d.salary_source === 'api+csv') {
-            badgeEl.innerHTML = '<span class="status-badge badge-verified">API + CSV מאושר</span>'
-                + `<div style="margin-top:0.2rem">${(d.salary_hours || 0).toFixed(1)} שעות</div>`;
-        } else if (d.salary_source === 'api') {
+        if (d.salary_source === 'api' || d.salary_source === 'api+csv') {
             badgeEl.innerHTML = '<span class="status-badge badge-api">API</span>'
                 + `<div style="margin-top:0.2rem">${(d.salary_hours || 0).toFixed(1)} שעות עד כה</div>`;
-        } else if (d.salary_source === 'csv') {
-            badgeEl.innerHTML = '<span class="status-badge badge-approved">CSV</span>'
-                + `<div style="margin-top:0.2rem">${(d.salary_hours || 0).toFixed(1)} שעות</div>`;
         } else if (d.salary_cost > 0) {
             badgeEl.innerHTML = `<div style="margin-top:0.2rem">${(d.salary_hours || 0).toFixed(1)} שעות</div>`;
         } else {
@@ -793,14 +757,10 @@ async function loadEmployees() {
                 const [y, m] = h.month.split('-');
                 const label = `${parseInt(m)}/${y}`;
                 let srcBadge;
-                if (h.source === 'api_verified') {
-                    srcBadge = '<span class="status-badge badge-verified" style="font-size:0.75rem">API ✓ CSV</span>';
-                } else if (h.source === 'api_neq_csv') {
-                    srcBadge = '<span class="status-badge badge-discrepancy" style="font-size:0.75rem">API ≠ CSV</span>';
-                } else if (h.source === 'api') {
+                if (h.source === 'api_verified' || h.source === 'api' || h.source === 'api_neq_csv' || h.source === 'api+csv') {
                     srcBadge = '<span class="status-badge badge-api" style="font-size:0.75rem">API</span>';
                 } else if (h.source === 'csv') {
-                    srcBadge = '<span class="status-badge badge-approved" style="font-size:0.75rem">CSV</span>';
+                    srcBadge = '<span class="status-badge badge-api" style="font-size:0.75rem">CSV (היסטורי)</span>';
                 } else {
                     srcBadge = '<span class="status-badge badge-none" style="font-size:0.75rem">—</span>';
                 }
@@ -897,37 +857,10 @@ async function loadPendingMatches() {
         const allPending = d.pending || [];
         const allEmps = d.employees || [];
 
-        // Separate unknown (new), csv-only, and low-confidence matches
+        // Separate unknown (new) and low-confidence matches
+        // DISABLED 2026-04-18: CSV-only filtering removed — API is sole source of truth
         const unknowns = allPending.filter(p => p.is_new_employee && !p.is_csv_only);
-        const csvOnly = allPending.filter(p => p.is_csv_only);
         const pending = allPending.filter(p => !p.is_new_employee && !p.is_csv_only);
-
-        // Blue banner for CSV-only employees
-        const csvBanner = document.getElementById('csv-only-banner');
-        if (csvOnly.length) {
-            csvBanner.style.display = '';
-            document.getElementById('csv-only-count').textContent = csvOnly.length;
-            document.getElementById('csv-only-list').innerHTML = csvOnly.map(p => {
-                return `<div id="pending-${p.id}" style="background:rgba(99,102,241,0.05); border:1px solid rgba(99,102,241,0.2); border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.5rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
-                  <div>
-                    <div style="font-weight:600; color:white;">${p.csv_name}</div>
-                    <div style="font-size:0.8rem; color:#94a3b8;">${p.hours.toFixed(1)} שעות · CSV בלבד (לא ב-API)</div>
-                  </div>
-                  <div style="display:flex; gap:0.5rem;">
-                    <button onclick="approvePending(${p.id})"
-                            style="padding:0.5rem 1rem; background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.4); border-radius:6px; color:#86efac; font-weight:600; cursor:pointer; font-family:inherit; font-size:0.85rem;">
-                      אשר שעות
-                    </button>
-                    <button onclick="rejectPending(${p.id})"
-                            style="padding:0.5rem 0.75rem; background:transparent; border:1px solid #475569; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; font-size:0.85rem;">
-                      התעלם
-                    </button>
-                  </div>
-                </div>`;
-            }).join('');
-        } else {
-            csvBanner.style.display = 'none';
-        }
 
         // RED banner for unknowns
         const banner = document.getElementById('unknown-banner');
@@ -1088,47 +1021,7 @@ async function saveNewFromPending() {
     } catch (err) { showToast(err.message || 'שגיאת רשת', 'error'); }
 }
 
-async function loadDiscrepancies() {
-    try {
-        const res = await fetch(`/api/employee-hours-discrepancies?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
-        if (!res.ok) return;
-        const d = await res.json();
-        const discs = d.discrepancies || [];
-        const banner = document.getElementById('discrepancies-banner');
-        if (!discs.length) { banner.style.display = 'none'; return; }
-        banner.style.display = '';
-        document.getElementById('disc-count').textContent = discs.length;
-        document.getElementById('disc-list').innerHTML = discs.map(dc => `
-            <div id="disc-${dc.id}" style="background:rgba(245,158,11,0.05); border:1px solid rgba(245,158,11,0.2); border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.5rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
-              <div>
-                <div style="font-weight:600; color:white;">${dc.employee_name}</div>
-                <div style="font-size:0.8rem; color:#94a3b8;">
-                  API: ${dc.api_hours.toFixed(1)}h | CSV: ${dc.csv_hours.toFixed(1)}h | הפרש: ${dc.difference.toFixed(1)}h
-                </div>
-              </div>
-              <div style="display:flex; gap:0.4rem;">
-                <button onclick="resolveDisc(${dc.id}, 'api')" class="btn-approve" style="font-size:0.78rem;">אשר API</button>
-                <button onclick="resolveDisc(${dc.id}, 'csv')" class="btn-approve" style="font-size:0.78rem; background:rgba(99,102,241,0.2); border-color:rgba(99,102,241,0.3); color:#a5b4fc;">אשר CSV</button>
-                <button onclick="resolveDisc(${dc.id}, 'ignore')" class="btn-reject" style="font-size:0.78rem;">התעלם</button>
-              </div>
-            </div>
-        `).join('');
-    } catch (err) { console.error('Failed to load discrepancies:', err); }
-}
-
-async function resolveDisc(id, choice) {
-    try {
-        const res = await fetch(`/api/employee-hours-discrepancies/${id}/resolve`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ choice })
-        });
-        if (!res.ok) throw new Error('שגיאה');
-        showToast(choice === 'ignore' ? 'אי-התאמה סומנה כנבדקה' : 'שעות עודכנו', 'success');
-        document.getElementById(`disc-${id}`).remove();
-        loadEmployees();
-    } catch (err) { showToast(err.message, 'error'); }
-}
+// DISABLED 2026-04-18: loadDiscrepancies() and resolveDisc() removed — CSV path retired in favor of API-only
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeNewModal(); } });
 
@@ -1146,7 +1039,7 @@ document.addEventListener('click', e => {
 
 loadEmployees();
 loadPendingMatches();
-loadDiscrepancies();
+// DISABLED 2026-04-18: loadDiscrepancies() removed — CSV path retired
 renderLaborChart();
 </script>
 {% endblock %}

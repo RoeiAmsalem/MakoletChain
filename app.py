@@ -467,30 +467,18 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     Returns {'amount', 'source', 'hours', 'label'}
     """
     db = get_db()
-    is_current = current_month == _now_il().strftime('%Y-%m')
 
-    # Current month: only API rows. Past months: all rows.
+    # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
     # Only include hours for ACTIVE employees (inactive employees excluded from salary).
-    if is_current:
-        rows = db.execute('''
-            SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
-                   e.hourly_rate, e.id as emp_id
-            FROM employee_hours eh
-            JOIN employees e ON (
-                e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
-            )
-            WHERE eh.branch_id = ? AND eh.month = ? AND eh.source = 'aviv_api'
-        ''', (branch_id, current_month)).fetchall()
-    else:
-        rows = db.execute('''
-            SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
-                   e.hourly_rate, e.id as emp_id
-            FROM employee_hours eh
-            JOIN employees e ON (
-                e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
-            )
-            WHERE eh.branch_id = ? AND eh.month = ?
-        ''', (branch_id, current_month)).fetchall()
+    rows = db.execute('''
+        SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
+               e.hourly_rate, e.id as emp_id
+        FROM employee_hours eh
+        JOIN employees e ON (
+            e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
+        )
+        WHERE eh.branch_id = ? AND eh.month = ? AND eh.source = 'aviv_api'
+    ''', (branch_id, current_month)).fetchall()
 
     if not rows:
         return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
@@ -887,20 +875,12 @@ def api_employees_list():
     employees = [dict(r) for r in emp_rows]
 
     # Hours for this month from employee_hours
-    # Current month: only API-sourced rows. Past months: all sources.
-    is_current_month = (month == _now_il().strftime('%Y-%m'))
-    if is_current_month:
-        hours_rows = db.execute(
-            "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
-            "WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
-            (branch_id, month)
-        ).fetchall()
-    else:
-        hours_rows = db.execute(
-            "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
-            "WHERE branch_id = ? AND month = ?",
-            (branch_id, month)
-        ).fetchall()
+    # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
+    hours_rows = db.execute(
+        "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
+        "WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
+        (branch_id, month)
+    ).fetchall()
     hours_map = {r['employee_name']: dict(r) for r in hours_rows}
     csv_processed = len(hours_map) > 0
 
@@ -951,41 +931,15 @@ def api_employees_list():
         y, m2 = start_y, start_m
         while (y, m2) <= (end_y, end_m):
             m_str = f'{y:04d}-{m2:02d}'
-            is_cur = (m_str == _now_il().strftime('%Y-%m'))
-            if is_cur:
-                h_row = db.execute(
-                    "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-                    "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
-                    (branch_id, m_str)
-                ).fetchone()
-            else:
-                h_row = db.execute(
-                    "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-                    "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ?",
-                    (branch_id, m_str)
-                ).fetchone()
-            h_hours = h_row['hours']
-            h_salary = h_row['salary']
-            # Determine source from actual data
-            src_row = db.execute(
-                "SELECT DISTINCT source FROM employee_hours WHERE branch_id = ? AND month = ?",
-                (branch_id, m_str)
-            ).fetchall()
-            src_set = {r['source'] for r in src_row} if src_row else set()
-            disc_row = db.execute(
-                "SELECT COUNT(*) as cnt FROM employee_hours_discrepancies "
-                "WHERE branch_id = ? AND month = ? AND resolved = 0",
+            # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
+            h_row = db.execute(
+                "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
+                "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
                 (branch_id, m_str)
             ).fetchone()
-            has_unresolved = disc_row['cnt'] > 0 if disc_row else False
-            if 'aviv_api' in src_set and 'csv' in src_set:
-                h_source = 'api_neq_csv' if has_unresolved else 'api_verified'
-            elif 'aviv_api' in src_set:
-                h_source = 'api'
-            elif 'csv' in src_set:
-                h_source = 'csv'
-            else:
-                h_source = 'none' if h_row['cnt'] == 0 else 'unknown'
+            h_hours = h_row['hours']
+            h_salary = h_row['salary']
+            h_source = 'api' if h_row['cnt'] > 0 else 'none'
             h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
             history.append({
                 'month': m_str, 'hours': h_hours, 'salary': h_salary,
@@ -1439,61 +1393,16 @@ def api_labor_cost_ratio():
     return jsonify(result)
 
 
-@app.route('/api/employee-hours-discrepancies')
-@login_required
-def api_discrepancies():
-    """Return unresolved discrepancies for a branch+month."""
-    branch_id = get_branch_id()
-    month = request.args.get('month', _now_il().strftime('%Y-%m'))
-    db = get_db()
-    rows = db.execute(
-        "SELECT * FROM employee_hours_discrepancies "
-        "WHERE branch_id = ? AND month = ? AND resolved = 0 "
-        "ORDER BY difference DESC",
-        (branch_id, month)
-    ).fetchall()
-    return jsonify({'discrepancies': [dict(r) for r in rows]})
-
-
-@app.route('/api/employee-hours-discrepancies/<int:disc_id>/resolve', methods=['POST'])
-@login_required
-def api_resolve_discrepancy(disc_id):
-    """Resolve a discrepancy: accept API hours, CSV hours, or ignore."""
-    db = get_db()
-    branch_id = get_branch_id()
-    row = db.execute(
-        "SELECT * FROM employee_hours_discrepancies WHERE id = ? AND branch_id = ?",
-        (disc_id, branch_id)
-    ).fetchone()
-    if not row or row['resolved']:
-        return jsonify({'error': 'not found'}), 404
-
-    data = request.get_json()
-    choice = data.get('choice', 'ignore')  # 'api' | 'csv' | 'ignore'
-
-    if choice in ('api', 'csv'):
-        hours = row['api_hours'] if choice == 'api' else row['csv_hours']
-        emp_name = row['employee_name']
-        # Get hourly rate
-        emp = db.execute(
-            'SELECT hourly_rate FROM employees WHERE id = ? AND branch_id = ?',
-            (row['employee_id'], branch_id)
-        ).fetchone()
-        rate = emp['hourly_rate'] if emp else 0
-        salary = round(hours * rate, 2)
-
-        db.execute(
-            "UPDATE employee_hours SET total_hours = ?, total_salary = ? "
-            "WHERE branch_id = ? AND month = ? AND employee_name = ?",
-            (hours, salary, branch_id, row['month'], emp_name)
-        )
-
-    db.execute(
-        "UPDATE employee_hours_discrepancies SET resolved = 1, resolution = ? WHERE id = ?",
-        (choice, disc_id)
-    )
-    db.commit()
-    return jsonify({'ok': True})
+# DISABLED 2026-04-18: Discrepancy routes retired — CSV path dropped in favor of API-only.
+# Routes kept as comments for reference. Agent file and DB table also kept.
+#
+# @app.route('/api/employee-hours-discrepancies')
+# @login_required
+# def api_discrepancies(): ...
+#
+# @app.route('/api/employee-hours-discrepancies/<int:disc_id>/resolve', methods=['POST'])
+# @login_required
+# def api_resolve_discrepancy(disc_id): ...
 
 
 def _prorate_invoice(from_date_str: str, to_date_str: str, amount: float, year: int, month: int) -> float:

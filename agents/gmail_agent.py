@@ -885,11 +885,12 @@ def run_gmail_sync(branch_id: int) -> dict:
         conn.close()
 
         # ── Attendance CSV parsing ──────────────────────────────
+        # DISABLED 2026-04-18: CSV path retired in favor of API-only. Agent file kept for reference.
         attendance_msg = None
-        try:
-            attendance_msg = _sync_attendance_csv(mail, branch, branch_id, log)
-        except Exception as e:
-            log.error("Attendance CSV sync failed: %s", e, exc_info=True)
+        # try:
+        #     attendance_msg = _sync_attendance_csv(mail, branch, branch_id, log)
+        # except Exception as e:
+        #     log.error("Attendance CSV sync failed: %s", e, exc_info=True)
 
         mail.logout()
 
