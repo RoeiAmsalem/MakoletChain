@@ -240,13 +240,27 @@ scheduler.add_job(
 
 
 def run_iec_sync():
-    """06:00 — daily IEC electricity invoice sync."""
-    from agents.iec_agent import run_iec_all
-    log.info("Running IEC sync for all branches")
+    """06:00 — daily IEC electricity invoice sync via SSH to Israeli VPS.
+
+    IEC API is geo-blocked outside Israel. The sync script runs on the
+    Kamatera VPS (185.253.75.56) and POSTs results back via /api/internal/iec-sync.
+    """
+    import subprocess
+    log.info("Running IEC sync via SSH to VPS")
     try:
-        results = run_iec_all()
-        for bid, result in results.items():
-            log.info("Branch %d IEC: %s", bid, result.get('message', ''))
+        proc = subprocess.run(
+            ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+             'makolet-iec',
+             '/opt/makolet-iec/venv/bin/python /opt/makolet-iec/iec_sync.py'],
+            capture_output=True, text=True, timeout=300
+        )
+        if proc.returncode == 0:
+            log.info("IEC sync completed: %s", proc.stdout.strip().split('\n')[-1])
+        else:
+            log.error("IEC sync failed (exit %d): %s", proc.returncode,
+                       proc.stderr.strip() or proc.stdout.strip())
+    except subprocess.TimeoutExpired:
+        log.error("IEC sync timed out after 300s")
     except Exception as e:
         log.error("IEC sync failed: %s", e)
 
