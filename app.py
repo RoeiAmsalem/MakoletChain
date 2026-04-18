@@ -1,3 +1,4 @@
+import calendar
 import hmac
 import io
 import json
@@ -643,8 +644,9 @@ def api_summary():
     else:
         live_row = None
 
-    # Fixed expenses (% rows computed live from final income)
-    fixed = _get_fixed_total(branch_id, month, income, db)
+    # Fixed expenses (% rows computed live from final income) + electricity
+    fixed_data = _get_fixed_total(branch_id, month, income, db)
+    fixed = fixed_data['total']
 
     profit = income - goods - fixed - salary
 
@@ -667,10 +669,23 @@ def api_summary():
         except (KeyError, TypeError):
             pass
 
+    # Latest electricity invoice for the strip
+    latest_elec = db.execute(
+        "SELECT period_label, amount, due_date FROM electricity_invoices "
+        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
+    # IEC last sync time
+    iec_sync = db.execute(
+        "SELECT iec_last_sync_at FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+
     return jsonify({
         'income': income,
         'goods': goods,
         'fixed': fixed,
+        'fixed_only': fixed_data['fixed_only'],
+        'electricity': fixed_data['electricity'],
         'salary': salary,
         'salary_source': salary_data['source'],
         'salary_label': salary_data['label'],
@@ -684,6 +699,12 @@ def api_summary():
         'discount_total': discount_total,
         'running_total': running_total,
         'running_count': running_count,
+        'latest_electricity': {
+            'period_label': latest_elec['period_label'],
+            'amount': latest_elec['amount'],
+            'due_date': latest_elec['due_date'],
+        } if latest_elec else None,
+        'iec_last_sync_at': iec_sync['iec_last_sync_at'] if iec_sync and iec_sync['iec_last_sync_at'] else None,
     })
 
 
@@ -695,20 +716,11 @@ def api_history():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
     db = get_db()
-    earliest = db.execute('''
-        SELECT MIN(month) as m FROM (
-            SELECT strftime('%Y-%m', date) as month
-            FROM daily_sales WHERE branch_id=?
-            UNION
-            SELECT strftime('%Y-%m', doc_date) as month
-            FROM goods_documents WHERE branch_id=?
-        )
-    ''', (branch_id, branch_id)).fetchone()
-
-    if not earliest or not earliest['m']:
+    start = get_branch_start_month(branch_id, db)
+    if not start:
         return jsonify([])
 
-    start_y, start_m = map(int, earliest['m'].split('-'))
+    start_y, start_m = start
     end_y, end_m = map(int, month.split('-'))
     months = []
     y, m = start_y, start_m
@@ -733,17 +745,19 @@ def api_history():
             (branch_id, ms)
         ).fetchone()[0]
         _ensure_monthly_expenses(branch_id, ms, db)
-        fix = _get_fixed_total(branch_id, ms, inc, db)
+        fix_data = _get_fixed_total(branch_id, ms, inc, db)
         sal_data = _calculate_salary_cost(branch_id, ms)
         sal = sal_data['amount']
         sal_source = sal_data['source']
-        profit = inc - gds - fix - sal
+        profit = inc - gds - fix_data['total'] - sal
         result.append({
             'label': m['label'],
             'month': ms,
             'income': inc,
             'goods': gds,
-            'fixed': fix,
+            'fixed': fix_data['total'],
+            'fixed_only': fix_data['fixed_only'],
+            'electricity_source': fix_data['electricity']['source'],
             'salary': sal,
             'salary_source': sal_source,
             'profit': profit,
@@ -1482,19 +1496,153 @@ def api_resolve_discrepancy(disc_id):
     return jsonify({'ok': True})
 
 
-def _get_fixed_total(branch_id: int, month: str, income: float, db) -> float:
-    """Sum fixed expenses for a branch+month. % rows calculated live from income."""
+def _prorate_invoice(from_date_str: str, to_date_str: str, amount: float, year: int, month: int) -> float:
+    """Return the portion of an invoice amount that falls into (year, month)."""
+    # Parse ISO dates from raw_json (e.g. "2026-01-22T00:00:00+02:00")
+    from_d = date.fromisoformat(from_date_str[:10])
+    to_d = date.fromisoformat(to_date_str[:10])
+    total_days = (to_d - from_d).days
+    if total_days <= 0:
+        return 0.0
+    # Month boundaries
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    # Overlap
+    overlap_start = max(from_d, month_start)
+    overlap_end = min(to_d, month_end)
+    overlap_days = (overlap_end - overlap_start).days + 1
+    if overlap_days <= 0:
+        return 0.0
+    return round(amount * overlap_days / total_days, 2)
+
+
+def _get_real_electricity(branch_id: int, year: int, month: int, db) -> float:
+    """Sum prorated electricity from invoices (<=90 days) that intersect (year, month). Returns 0 if none."""
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    rows = db.execute(
+        "SELECT amount, raw_json FROM electricity_invoices WHERE branch_id = ?",
+        (branch_id,)
+    ).fetchall()
+    total = 0.0
+    for r in rows:
+        try:
+            rj = json.loads(r['raw_json'])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        from_d_str = rj.get('from_date', '')
+        to_d_str = rj.get('to_date', '')
+        if not from_d_str or not to_d_str:
+            continue
+        from_d = date.fromisoformat(from_d_str[:10])
+        to_d = date.fromisoformat(to_d_str[:10])
+        span = (to_d - from_d).days
+        if span <= 0 or span > 90:
+            continue
+        # Check intersection with target month
+        if to_d < month_start or from_d > month_end:
+            continue
+        total += _prorate_invoice(from_d_str, to_d_str, r['amount'], year, month)
+    return round(total, 2)
+
+
+def get_electricity_for_month(branch_id: int, year: int, month: int, db=None) -> dict:
+    """
+    Returns electricity contribution for a branch in a given month.
+    Returns: {amount: float, source: 'real'|'estimate'|'none', estimate_basis: str|None}
+    """
+    if db is None:
+        db = get_db()
+    # Check if branch has IEC integration
+    has_iec = db.execute(
+        "SELECT iec_token FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    if not has_iec or not has_iec['iec_token']:
+        return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+    # Check if any invoices exist at all
+    any_invoice = db.execute(
+        "SELECT 1 FROM electricity_invoices WHERE branch_id = ? LIMIT 1", (branch_id,)
+    ).fetchone()
+    if not any_invoice:
+        return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+    # Try REAL
+    real_amount = _get_real_electricity(branch_id, year, month, db)
+    if real_amount > 0:
+        return {'amount': real_amount, 'source': 'real', 'estimate_basis': None}
+    # ESTIMATE: try same month last year
+    prev_year_amount = _get_real_electricity(branch_id, year - 1, month, db)
+    if prev_year_amount > 0:
+        return {'amount': prev_year_amount, 'source': 'estimate', 'estimate_basis': f'{month:02d}/{year - 1}'}
+    # Search closest month within ±12 months that has real data
+    best_amount = 0.0
+    best_distance = 999
+    best_basis = None
+    for offset in range(1, 13):
+        for direction in (-1, 1):
+            search_m = month + offset * direction
+            search_y = year
+            while search_m < 1:
+                search_m += 12
+                search_y -= 1
+            while search_m > 12:
+                search_m -= 12
+                search_y += 1
+            amt = _get_real_electricity(branch_id, search_y, search_m, db)
+            if amt > 0 and offset < best_distance:
+                best_amount = amt
+                best_distance = offset
+                best_basis = f'{search_m:02d}/{search_y}'
+                break  # found for this offset, no need to check other direction at same distance
+        if best_distance <= offset:
+            break  # found something at this distance, no need to search further
+    if best_amount > 0:
+        return {'amount': best_amount, 'source': 'estimate', 'estimate_basis': best_basis}
+    return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+
+
+def get_branch_start_month(branch_id: int, db=None) -> tuple:
+    """Return (year, month) of first month with any real data, or None."""
+    if db is None:
+        db = get_db()
+    earliest = db.execute('''
+        SELECT MIN(month) as m FROM (
+            SELECT strftime('%Y-%m', date) as month FROM daily_sales WHERE branch_id=?
+            UNION
+            SELECT strftime('%Y-%m', doc_date) as month FROM goods_documents WHERE branch_id=?
+            UNION
+            SELECT month FROM fixed_expenses WHERE branch_id=?
+            UNION
+            SELECT strftime('%Y-%m', json_extract(raw_json, '$.from_date')) as month
+            FROM electricity_invoices WHERE branch_id=?
+        )
+    ''', (branch_id, branch_id, branch_id, branch_id)).fetchone()
+    if not earliest or not earliest['m']:
+        return None
+    y, m = map(int, earliest['m'].split('-'))
+    return (y, m)
+
+
+def _get_fixed_total(branch_id: int, month: str, income: float, db) -> dict:
+    """Sum fixed expenses for a branch+month. % rows calculated live from income.
+    Returns dict: {fixed_only, electricity: {amount, source, estimate_basis}, total}"""
     rows = db.execute(
         'SELECT amount, pct_value FROM fixed_expenses WHERE branch_id=? AND month=?',
         (branch_id, month)
     ).fetchall()
-    total = 0
+    fixed_sum = 0
     for r in rows:
         if r['pct_value'] and r['pct_value'] > 0:
-            total += income * r['pct_value'] / 100
+            fixed_sum += income * r['pct_value'] / 100
         else:
-            total += r['amount']
-    return round(total, 2)
+            fixed_sum += r['amount']
+    fixed_sum = round(fixed_sum, 2)
+    y, m = map(int, month.split('-'))
+    elec = get_electricity_for_month(branch_id, y, m, db)
+    return {
+        'fixed_only': fixed_sum,
+        'electricity': elec,
+        'total': round(fixed_sum + elec['amount'], 2),
+    }
 
 
 def _ensure_monthly_expenses(branch_id: int, month: str, db):

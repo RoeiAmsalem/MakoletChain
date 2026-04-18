@@ -31,6 +31,9 @@
 
         /* Monthly table — scrollable */
         .data-table { min-width: 500px; }
+
+        /* Electricity strip stacks vertically */
+        #elec-strip > div { flex-direction: column !important; align-items: flex-start !important; }
     }
 </style>
 {% endblock %}
@@ -87,6 +90,7 @@
             <span class="kpi-label">הוצאות קבועות</span>
         </div>
         <span class="kpi-value fixed" id="fixed-value">₪ 0.00</span>
+        <div id="fixed-elec-sub" style="font-size:0.78rem; color:rgba(241,245,249,0.55); margin-top:3px;"></div>
     </div>
 
     <div class="kpi-card kpi-card--salary" style="cursor:pointer" onclick="location.href='/employees'">
@@ -97,6 +101,22 @@
         <span class="kpi-value salary" id="salary-value">₪ 0.00</span>
     </div>
 </section>
+
+<!-- Electricity strip -->
+<div id="elec-strip" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem; margin-bottom:1rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div>
+            <div style="font-size:0.88rem; font-weight:600; color:#fbbf24;">⚡ חשבונית אחרונה</div>
+            <div id="elec-strip-detail" style="font-size:0.82rem; color:#94a3b8; margin-top:3px;"></div>
+        </div>
+        <div id="elec-strip-sync" style="font-size:0.75rem; color:#64748b;"></div>
+    </div>
+</div>
+
+<!-- Estimate disclaimer -->
+<div id="estimate-disclaimer" style="display:none; font-size:0.78rem; color:#94a3b8; margin:-0.5rem 0 1rem 0; padding:0 0.25rem;">
+    ~ בטבלה החודשית = חשמל משוער על בסיס נתוני שנה קודמת
+</div>
 
 <!-- Sales by Hour (first chart) -->
 <div class="card chart-card" id="hourly-section" style="display:none; padding:1.25rem 1.25rem 1rem 1.25rem;">
@@ -189,6 +209,36 @@ async function loadSummary() {
         document.getElementById('fixed-value').textContent = formatMoney(fixed);
         document.getElementById('salary-value').textContent = formatMoney(salary);
 
+        // Electricity subtitle on orange tile
+        const elecSub = document.getElementById('fixed-elec-sub');
+        const elec = d.electricity;
+        if (elec && elec.source !== 'none' && elec.amount > 0) {
+            const prefix = elec.source === 'estimate' ? 'כולל ~' : 'כולל ';
+            const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : ' חשמל';
+            elecSub.textContent = prefix + formatMoney(elec.amount) + suffix;
+        } else {
+            elecSub.textContent = '';
+        }
+
+        // Electricity strip
+        const strip = document.getElementById('elec-strip');
+        const le = d.latest_electricity;
+        if (le) {
+            const dueFmt = le.due_date ? le.due_date.split('-').reverse().join('/') : '';
+            document.getElementById('elec-strip-detail').textContent =
+                (le.period_label || '') + ' · ' + formatMoney(le.amount) + (dueFmt ? ' �� תשלום עד ' + dueFmt : '');
+            strip.style.display = 'block';
+            const syncEl = document.getElementById('elec-strip-sync');
+            if (d.iec_last_sync_at) {
+                const sd = new Date(d.iec_last_sync_at);
+                syncEl.textContent = 'עודכן: ' + sd.toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit'}) + ' ' + sd.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
+            } else { syncEl.textContent = ''; }
+        } else if (elec && elec.source === 'none') {
+            document.getElementById('elec-strip-detail').textContent = 'חשמל — טרם הוגדר עבור סניף זה';
+            document.getElementById('elec-strip-sync').textContent = '';
+            strip.style.display = 'block';
+        }
+
         // Show live income subtitle
         const liveSub = document.getElementById('income-live-sub');
         if (liveSub && d.live_amount_today && !d.has_z) {
@@ -233,14 +283,18 @@ async function loadHistory() {
         const months = await res.json();
         if (months.length) {
             buildProfitBarChart('profit-chart', months.map(m => m.label), months.map(m => m.profit));
+            let hasEstimate = false;
             const tbody = document.getElementById('history-tbody');
             tbody.innerHTML = months.map(m => {
                 const cls = m.profit >= 0 ? 'profit' : 'loss';
+                const isEstimate = m.electricity_source === 'estimate';
+                if (isEstimate) hasEstimate = true;
+                const fixedDisplay = formatMoney(m.fixed) + (isEstimate ? ' <span style="color:#fbbf24;font-weight:700" title="חשמל משוער">~</span>' : '');
                 return `<tr>
                     <td>${m.label}</td>
                     <td class="money profit">${formatMoney(m.income)}</td>
                     <td class="money loss">${formatMoney(m.goods)}</td>
-                    <td class="money fixed hide-mobile">${formatMoney(m.fixed)}</td>
+                    <td class="money fixed hide-mobile">${fixedDisplay}</td>
                     <td class="money salary hide-mobile">${formatMoney(m.salary)}</td>
                     <td class="money ${cls}">${formatMoney(m.profit)}</td>
                     <td>${m.salary_source === 'api' ? '<span class="kpi-badge" style="background:rgba(34,197,94,0.2);color:#86efac">API</span>'
@@ -249,6 +303,7 @@ async function loadHistory() {
                         : '<span class="kpi-badge" style="background:rgba(100,116,139,0.2);color:#94a3b8">—</span>'}</td>
                 </tr>`;
             }).join('');
+            document.getElementById('estimate-disclaimer').style.display = hasEstimate ? 'block' : 'none';
         }
     } catch (err) {
         console.error('history:', err);
