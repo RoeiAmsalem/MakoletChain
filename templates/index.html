@@ -214,6 +214,37 @@
 </div>
 </div><!-- /elec-hourly-cluster -->
 
+<!-- Amazon Deliveries Card (branch 126 only) -->
+{% if branch_id == 126 %}
+<div id="amazon-card" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div>
+            <div style="font-size:0.88rem; font-weight:600; color:#a78bfa;">📦 משלוחי אמזון</div>
+            <div id="amazon-big" style="font-size:1.5rem; font-weight:700; color:#f1f5f9; margin-top:4px;">₪0</div>
+            <div id="amazon-sub" style="font-size:0.82rem; color:#94a3b8; margin-top:2px;">0 משלוחים החודש</div>
+        </div>
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            <span id="amazon-month" style="font-size:0.75rem; color:#64748b;"></span>
+            <button id="amazon-expand-btn" onclick="toggleAmazonDetails()" style="font-size:0.78rem; color:#a78bfa; background:rgba(167,139,250,0.1); border:1px solid rgba(167,139,250,0.3); border-radius:8px; padding:4px 12px; cursor:pointer;">פרטים</button>
+        </div>
+    </div>
+    <div id="amazon-details" style="display:none; margin-top:0.75rem; border-top:1px solid rgba(148,163,184,0.15); padding-top:0.75rem;">
+        <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                <thead>
+                    <tr style="border-bottom:1px solid rgba(148,163,184,0.2);">
+                        <th style="padding:0.4rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">תאריך</th>
+                        <th style="padding:0.4rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">עסקאות</th>
+                        <th style="padding:0.4rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">סכום</th>
+                    </tr>
+                </thead>
+                <tbody id="amazon-details-tbody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Bar Chart: last 6 months -->
 <section class="card chart-card">
     <h2 class="section-title">השוואת רווח – 6 חודשים אחרונים</h2>
@@ -579,9 +610,50 @@ async function loadHourlyChart() {
   }
 }
 
+{% if branch_id == 126 %}
+let amazonDetailsLoaded = false;
+function toggleAmazonDetails() {
+    const panel = document.getElementById('amazon-details');
+    const visible = panel.style.display !== 'none';
+    panel.style.display = visible ? 'none' : 'block';
+    document.getElementById('amazon-expand-btn').textContent = visible ? 'פרטים' : 'סגור';
+}
+
+async function loadAmazonDeliveries() {
+    try {
+        const res = await fetch(`/api/amazon-deliveries?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        const card = document.getElementById('amazon-card');
+        card.style.display = 'block';
+        document.getElementById('amazon-big').textContent = '₪' + Math.round(d.total_amount).toLocaleString();
+        document.getElementById('amazon-sub').textContent = d.total_count + ' משלוחים החודש';
+        document.getElementById('amazon-month').textContent = d.month_label;
+        // Populate details table
+        const tbody = document.getElementById('amazon-details-tbody');
+        if (d.deliveries.length) {
+            tbody.innerHTML = d.deliveries.map(del => {
+                const dt = new Date(del.date);
+                const dateStr = dt.toLocaleDateString('he-IL', {day:'numeric', month:'numeric'});
+                return `<tr style="border-bottom:1px solid rgba(148,163,184,0.08);">
+                    <td style="padding:0.4rem 0.75rem; color:#e2e8f0;">${dateStr}</td>
+                    <td style="padding:0.4rem 0.75rem; color:#94a3b8;">${del.count}</td>
+                    <td style="padding:0.4rem 0.75rem; color:#f1f5f9; font-weight:600;">₪${Math.round(del.amount).toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; color:#64748b; padding:1rem;">אין משלוחים החודש</td></tr>';
+        }
+    } catch (e) {
+        console.error('amazon deliveries:', e);
+    }
+}
+{% endif %}
+
 loadSummary();
 loadHistory();
 loadHourlyChart();
+{% if branch_id == 126 %}loadAmazonDeliveries();{% endif %}
 if (typeof loadLiveSales === 'function') loadLiveSales();
 </script>
 {% endblock %}

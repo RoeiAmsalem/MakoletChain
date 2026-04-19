@@ -857,6 +857,62 @@ def api_sales_by_hour():
     return jsonify({'hourly': hourly, 'buckets': buckets, 'stats': stats})
 
 
+# ── Amazon Deliveries (branch 126 only) ─────────────────────
+AMAZON_BRANCH_ID = 126
+AMAZON_MIN_AMOUNT = 400
+AMAZON_MAX_HOUR = 6  # hours 0-6 (before 07:00)
+
+
+@app.route('/api/amazon-deliveries')
+@login_required
+def api_amazon_deliveries():
+    """Return early-morning large transactions for branch 126 (Amazon deliveries)."""
+    branch_id = get_branch_id()
+    if branch_id != AMAZON_BRANCH_ID:
+        return jsonify({'deliveries': [], 'total_amount': 0, 'total_count': 0, 'month_label': ''})
+
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    # Don't return data for future months
+    current_month = _now_il().strftime('%Y-%m')
+    if month > current_month:
+        return jsonify({'deliveries': [], 'total_amount': 0, 'total_count': 0, 'month_label': month})
+
+    db = get_db()
+    rows = db.execute(
+        '''SELECT date, SUM(amount) as day_total, SUM(transactions) as day_count
+           FROM hourly_sales
+           WHERE branch_id = ? AND strftime('%Y-%m', date) = ? AND hour <= ?
+           GROUP BY date
+           HAVING day_total >= ?
+           ORDER BY date DESC''',
+        (AMAZON_BRANCH_ID, month, AMAZON_MAX_HOUR, AMAZON_MIN_AMOUNT)
+    ).fetchall()
+
+    deliveries = []
+    total_amount = 0
+    total_count = 0
+    for r in rows:
+        amt = round(float(r['day_total']), 2)
+        cnt = int(r['day_count'])
+        deliveries.append({
+            'date': r['date'],
+            'amount': amt,
+            'count': cnt,
+        })
+        total_amount += amt
+        total_count += cnt
+
+    year, mon = map(int, month.split('-'))
+    month_label = f'{HEBREW_MONTHS[mon]} {year}'
+
+    return jsonify({
+        'deliveries': deliveries,
+        'total_amount': round(total_amount, 2),
+        'total_count': total_count,
+        'month_label': month_label,
+    })
+
+
 @app.route('/api/employees', methods=['GET'])
 @login_required
 def api_employees_list():
