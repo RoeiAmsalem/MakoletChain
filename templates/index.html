@@ -194,6 +194,23 @@
   <div class="hourly-canvas-wrap" style="position:relative; height:180px;">
     <canvas id="hourly-chart"></canvas>
   </div>
+
+  <!-- Sorted hourly breakdown table -->
+  <div id="hourly-table-wrap" style="margin-top:1.25rem; display:none;">
+    <div style="overflow-x:auto;">
+      <table id="hourly-breakdown-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+        <thead>
+          <tr style="border-bottom:1px solid rgba(148,163,184,0.2);">
+            <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">דירוג</th>
+            <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">שעות</th>
+            <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">מכירות</th>
+            <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">עסקאות</th>
+          </tr>
+        </thead>
+        <tbody id="hourly-breakdown-tbody"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 </div><!-- /elec-hourly-cluster -->
 
@@ -536,6 +553,27 @@ async function loadHourlyChart() {
         }
       }
     });
+
+    // Populate sorted breakdown table
+    const sorted = [...buckets].sort((a, b) => b.total - a.total);
+    const tbody = document.getElementById('hourly-breakdown-tbody');
+    tbody.innerHTML = '';
+    sorted.forEach((b, i) => {
+      const rank = i + 1;
+      const isEmpty = b.total === 0;
+      const isTop = rank === 1 && !isEmpty;
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid rgba(148,163,184,0.08);' +
+        (isTop ? 'border-right:3px solid #f59e0b;' : '') +
+        (isEmpty ? 'opacity:0.4;' : '');
+      tr.innerHTML =
+        `<td style="padding:0.4rem 0.75rem; color:${isTop ? '#f59e0b' : '#cbd5e1'}; font-weight:${isTop ? '700' : '400'};">${isTop ? '🏆 ' : ''}${rank}</td>` +
+        `<td style="padding:0.4rem 0.75rem; color:#e2e8f0; direction:ltr; text-align:right;">${b.label.replace(/\u200e/g, '')}</td>` +
+        `<td style="padding:0.4rem 0.75rem; color:#f1f5f9; font-weight:600;">₪${Math.round(b.total).toLocaleString()}</td>` +
+        `<td style="padding:0.4rem 0.75rem; color:#94a3b8;">${b.count}</td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('hourly-table-wrap').style.display = 'block';
   } catch(e) {
     console.error('hourly chart failed:', e);
   }
