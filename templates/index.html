@@ -5,6 +5,45 @@
     /* Prevent horizontal scroll */
     html, body { overflow-x: hidden; max-width: 100vw; }
 
+    /* Electricity strip state styling */
+    .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
+    .electricity-strip[data-source="estimate"] { border-inline-start: 3px solid #D97706; }
+    .electricity-strip[data-source="none"]     { border-inline-start: 3px solid #DC2626; background: rgba(220, 38, 38, 0.05); }
+
+    .elec-estimate-badge {
+        display: inline-block; font-size: 0.72rem; padding: 1px 7px; border-radius: 999px;
+        background: rgba(217, 119, 6, 0.15); color: #D97706; border: 1px solid rgba(217, 119, 6, 0.35);
+        margin-inline-start: 6px; vertical-align: middle; font-weight: 600;
+    }
+
+    /* Profit quality badge */
+    .profit-quality-badge {
+        display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+        margin-top: 6px; cursor: help; position: relative;
+    }
+    .profit-quality-badge--estimate {
+        background: rgba(217, 119, 6, 0.15); color: #D97706; border: 1px solid rgba(217, 119, 6, 0.35);
+    }
+    .profit-quality-badge--missing {
+        background: rgba(220, 38, 38, 0.15); color: #DC2626; border: 1px solid rgba(220, 38, 38, 0.35);
+    }
+    .profit-quality-badge[data-tooltip]:hover::after {
+        content: attr(data-tooltip);
+        position: absolute; bottom: calc(100% + 6px); right: 0;
+        background: rgba(15, 23, 42, 0.95); color: #e2e8f0;
+        padding: 8px 12px; border-radius: 8px; font-size: 12px;
+        width: max-content; max-width: 240px; white-space: normal;
+        line-height: 1.5; z-index: 50; pointer-events: none;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+
+    .elec-setup-btn {
+        background: rgba(220, 38, 38, 0.12); border: 1px solid rgba(220, 38, 38, 0.4);
+        border-radius: 8px; padding: 0.4rem 1rem; color: #fca5a5;
+        font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .elec-setup-btn:hover { background: rgba(220, 38, 38, 0.2); }
+
     @media (max-width: 768px) {
         .mobile-view-toggle { display: flex !important; }
 
@@ -34,6 +73,13 @@
 
         /* Electricity strip stacks vertically */
         #elec-strip > div { flex-direction: column !important; align-items: flex-start !important; }
+
+        /* Badge wraps on mobile */
+        .profit-quality-badge { font-size: 10px; padding: 2px 6px; }
+        .profit-quality-badge[data-tooltip]:hover::after { right: auto; left: 0; max-width: 200px; }
+
+        /* Setup button stacks below text */
+        .elec-setup-btn { margin-top: 0.5rem; }
     }
 </style>
 {% endblock %}
@@ -65,6 +111,7 @@
           <div id="profit-month-sub" style="font-size:0.82rem; color:#e2e8f0; font-weight:600; text-align:center; margin-top:4px;"></div>
         </div>
         <span class="kpi-badge" id="profit-badge" style="display:none"></span>
+        <span id="profit-quality-badge" style="display:none"></span>
     </div>
 
     <div class="kpi-card kpi-card--income" style="cursor:pointer" onclick="location.href='/sales'">
@@ -104,13 +151,15 @@
 
 <!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
 <div id="elec-hourly-cluster" style="display:flex; flex-direction:column; gap:6px;">
-    <div id="elec-strip" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem;">
+    <div id="elec-strip" class="electricity-strip" data-source="real" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
-            <div>
-                <div style="font-size:0.88rem; font-weight:600; color:#fbbf24;">⚡ חשבונית אחרונה</div>
+            <div id="elec-strip-content">
+                <div id="elec-strip-headline" style="font-size:0.88rem; font-weight:600; color:#fbbf24;">⚡ חשבונית אחרונה</div>
                 <div id="elec-strip-detail" style="font-size:0.82rem; color:#94a3b8; margin-top:3px;"></div>
             </div>
-            <div id="elec-strip-sync" style="font-size:0.75rem; color:#64748b;"></div>
+            <div id="elec-strip-right">
+                <span id="elec-strip-sync" style="font-size:0.75rem; color:#64748b;"></span>
+            </div>
         </div>
     </div>
     <div id="estimate-disclaimer" style="display:none; font-size:0.875rem; font-weight:500; color:#cbd5e1; margin:0; padding:0 0.25rem;">
@@ -219,25 +268,62 @@ async function loadSummary() {
             elecSub.textContent = '';
         }
 
-        // Electricity strip
+        // Electricity strip — state-driven rendering
         const strip = document.getElementById('elec-strip');
         const le = d.latest_electricity;
-        if (le) {
-            const dueFmt = le.due_date ? le.due_date.split('-').reverse().join('/') : '';
-            document.getElementById('elec-strip-detail').textContent =
-                (le.period_label || '') + ' · ' + formatMoney(le.amount) + (dueFmt ? ' �� תשלום עד ' + dueFmt : '');
-            strip.style.display = 'block';
+        const elecSource = elec ? elec.source : 'none';
+        strip.setAttribute('data-source', elecSource);
+        const headline = document.getElementById('elec-strip-headline');
+        const detail = document.getElementById('elec-strip-detail');
+        const stripRight = document.getElementById('elec-strip-right');
 
-            const syncEl = document.getElementById('elec-strip-sync');
+        if (elecSource === 'real' && le) {
+            // STATE REAL
+            headline.innerHTML = '⚡ חשבונית אחרונה';
+            const dueFmt = le.due_date ? le.due_date.split('-').reverse().join('/') : '';
+            detail.textContent = (le.period_label || '') + ' · ' + formatMoney(le.amount) + (dueFmt ? ' · תשלום עד ' + dueFmt : '');
+            let syncText = '';
             if (d.iec_last_sync_at) {
                 const sd = new Date(d.iec_last_sync_at);
-                syncEl.textContent = 'עודכן: ' + sd.toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit'}) + ' ' + sd.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
-            } else { syncEl.textContent = ''; }
-        } else if (elec && elec.source === 'none') {
-            document.getElementById('elec-strip-detail').textContent = 'חשמל — טרם הוגדר עבור סניף זה';
-            document.getElementById('elec-strip-sync').textContent = '';
+                syncText = 'עודכן: ' + sd.toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit'}) + ' ' + sd.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
+            }
+            stripRight.innerHTML = '<span style="font-size:0.75rem;color:#64748b">' + syncText + '</span>';
             strip.style.display = 'block';
+        } else if (elecSource === 'estimate') {
+            // STATE ESTIMATE
+            headline.innerHTML = '⚡ חשמל חודשי: ~' + formatMoney(elec.amount) + ' <span class="elec-estimate-badge">משוער</span>';
+            let detailText = 'על בסיס ' + (elec.estimate_basis || '');
+            if (le) {
+                const dueFmt = le.due_date ? le.due_date.split('-').reverse().join('/') : '';
+                detailText += ' · חשבונית אחרונה: ' + formatMoney(le.amount) + (dueFmt ? ' · עד ' + dueFmt : '');
+            }
+            detail.textContent = detailText;
+            stripRight.innerHTML = '<span style="font-size:0.75rem;color:#D97706">יעודכן כשחשבונית חדשה תגיע</span>';
+            strip.style.display = 'block';
+        } else if (elecSource === 'none') {
+            // STATE NONE
+            headline.textContent = '⚡ חשמל לא מוגדר';
+            headline.style.color = '#fca5a5';
+            detail.textContent = 'הרווח המוצג לא כולל עלות חשמל';
+            stripRight.innerHTML = "<button class=\"elec-setup-btn\" onclick=\"if(typeof iecWizard!=='undefined')iecWizard.open();else location.href='/fixed-expenses'\">הגדר חשמל</button>";
+            strip.style.display = 'block';
+        }
 
+        // Profit quality badge
+        const pqBadge = document.getElementById('profit-quality-badge');
+        if (elecSource === 'estimate') {
+            const tip = 'החודש מבוסס על הערכת חשמל על בסיס ' + (elec.estimate_basis || '') + '. ייעודכן אוטומטית כשהחשבונית תגיע.';
+            pqBadge.className = 'profit-quality-badge profit-quality-badge--estimate';
+            pqBadge.textContent = 'כולל חשמל משוער';
+            pqBadge.setAttribute('data-tooltip', tip);
+            pqBadge.style.display = 'inline-block';
+        } else if (elecSource === 'none') {
+            pqBadge.className = 'profit-quality-badge profit-quality-badge--missing';
+            pqBadge.textContent = 'חלקי — ללא חשמל';
+            pqBadge.setAttribute('data-tooltip', 'חשבון החשמל עדיין לא מוגדר. הרווח אינו כולל עלות חשמל.');
+            pqBadge.style.display = 'inline-block';
+        } else {
+            pqBadge.style.display = 'none';
         }
 
         // Show live income subtitle
