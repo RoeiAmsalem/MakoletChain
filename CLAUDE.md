@@ -183,9 +183,9 @@ currentEmployeeCount, payments[], firstDealOpen, tmUpdate, z, zCreate
 - Scrapes: daily revenue + transactions
 - Zero detection: amount=0 after non-zero -> save provisional Z, brrr alert
 - Store hours Israel time:
-Sun-Thu: 06:30-23:30
+Sun-Thu: 06:30-23:00
 Fri: 06:30-19:00
-Sat: 16:30-23:30
+Sat: 16:30-23:00
 - Outside hours: SILENT SKIP — no DB write, no agent_runs entry
 - Also scrapes TWO employee hours fields:
 'שעות עובדים מתחילת החודש' -> monthly total (authoritative)

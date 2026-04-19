@@ -90,7 +90,7 @@ class TestBucketDefinitions:
         _login(client)
         resp = client.get('/api/sales-by-hour?month=2026-04')
         data = json.loads(resp.data)
-        assert data['buckets'][-1]['end'] == '23:30'
+        assert data['buckets'][-1]['end'] == '23:00'
 
     def test_hour_6_not_in_any_bucket(self, client):
         _login(client)
@@ -98,20 +98,20 @@ class TestBucketDefinitions:
         resp = client.get('/api/sales-by-hour?month=2026-04')
         data = json.loads(resp.data)
         bucket_total = sum(b['total'] for b in data['buckets'])
-        # Hour 6 has 5000 — should NOT be in bucket total
-        hourly_7_to_23 = sum(data['hourly'][h]['total'] for h in range(7, 24))
-        assert abs(bucket_total - hourly_7_to_23) < 0.01
+        # Hours 0-6 and 23 excluded from buckets (store closes at 23:00)
+        hourly_7_to_22 = sum(data['hourly'][h]['total'] for h in range(7, 23))
+        assert abs(bucket_total - hourly_7_to_22) < 0.01
         # Verify hour 6 is excluded
         assert data['hourly'][6]['total'] == 5000
         assert bucket_total < sum(h['total'] for h in data['hourly'])
 
-    def test_bucket_totals_equal_hourly_7_to_23(self, client):
+    def test_bucket_totals_equal_hourly_7_to_22(self, client):
         _login(client)
         _seed_hourly_data(client)
         resp = client.get('/api/sales-by-hour?month=2026-04')
         data = json.loads(resp.data)
         bucket_total = sum(b['total'] for b in data['buckets'])
-        hourly_sum = sum(data['hourly'][h]['total'] for h in range(7, 24))
+        hourly_sum = sum(data['hourly'][h]['total'] for h in range(7, 23))
         assert abs(bucket_total - hourly_sum) < 0.01
 
 
