@@ -18,14 +18,14 @@
 
     /* Profit quality badge */
     .profit-quality-badge {
-        display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
-        margin-top: 6px; cursor: help; position: relative;
+        display: inline-block; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+        margin-top: 6px; cursor: help; position: relative; border: none;
     }
     .profit-quality-badge--estimate {
-        background: rgba(217, 119, 6, 0.15); color: #D97706; border: 1px solid rgba(217, 119, 6, 0.35);
+        background: #D97706; color: #FFFFFF;
     }
     .profit-quality-badge--missing {
-        background: rgba(220, 38, 38, 0.15); color: #DC2626; border: 1px solid rgba(220, 38, 38, 0.35);
+        background: #DC2626; color: #FFFFFF;
     }
     .profit-quality-badge[data-tooltip]:hover::after {
         content: attr(data-tooltip);
@@ -75,7 +75,7 @@
         #elec-strip > div { flex-direction: column !important; align-items: flex-start !important; }
 
         /* Badge wraps on mobile */
-        .profit-quality-badge { font-size: 10px; padding: 2px 6px; }
+        .profit-quality-badge { font-size: 11px; padding: 3px 8px; }
         .profit-quality-badge[data-tooltip]:hover::after { right: auto; left: 0; max-width: 200px; }
 
         /* Setup button stacks below text */
