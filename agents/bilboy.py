@@ -37,6 +37,15 @@ API_BASE = "https://app.billboy.co.il:5050/api"
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 ALLOWED_DOC_TYPES = {2, 3, 4, 5}
 
+# BilBoy document lifecycle statuses:
+#   3 = active invoice
+#   5 = accepted/processed
+#   7 = replacement invoice (visible in BilBoy UI — keep)
+#   9 = superseded original (hidden in BilBoy UI — drop)
+# Unknown statuses are dropped and alerted via brrr so we notice new lifecycle states.
+KNOWN_STATUSES = {3, 5, 7, 9}
+EXCLUDED_STATUSES = {9}
+
 
 def _get_db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -173,6 +182,36 @@ def run_bilboy(branch_id: int) -> dict:
         log.info("API returned %d raw documents total (%d batches)",
                  len(docs), (len(keep_ids) + BATCH_SIZE - 1) // max(BATCH_SIZE, 1))
 
+        # ── Status filter: drop superseded (status=9) and unknown statuses ──
+        raw_sum = sum(float(d.get('totalWithVat') or 0) for d in docs)
+        excluded_sum = 0
+        unknown_sum = 0
+        skip_superseded = 0
+        skip_unknown = 0
+        status_filtered = []
+        for doc in docs:
+            status = doc.get('status')
+            if status in EXCLUDED_STATUSES:
+                skip_superseded += 1
+                excluded_sum += float(doc.get('totalWithVat') or 0)
+                continue
+            if status is not None and status not in KNOWN_STATUSES:
+                skip_unknown += 1
+                unknown_sum += float(doc.get('totalWithVat') or 0)
+                ref = doc.get('refNumber') or doc.get('number') or '?'
+                log.warning("Unknown BilBoy status %s for doc ref=%s", status, ref)
+                notify(f"⚠️ BilBoy — {branch.get('name', f'Branch {branch_id}')}",
+                       f"Unknown BilBoy status {status} for doc {ref} on branch {branch_id} — please review.")
+                continue
+            status_filtered.append(doc)
+
+        if skip_superseded > 0:
+            log.info("Dropped %d superseded (status=9) docs totaling ₪%.2f", skip_superseded, excluded_sum)
+        if skip_unknown > 0:
+            log.warning("Dropped %d unknown-status docs totaling ₪%.2f", skip_unknown, unknown_sum)
+
+        docs = status_filtered
+
         # Process documents
         records = []
         skip_franchise = 0
@@ -216,8 +255,8 @@ def run_bilboy(branch_id: int) -> dict:
             deduped.append(r)
         records = deduped
 
-        log.info("After filtering: %d records (skipped: %d franchise, %d zero, %d wrong type)",
-                 len(records), skip_franchise, skip_zeros, skip_type)
+        log.info("After filtering: %d records (skipped: %d franchise, %d zero, %d wrong type, %d superseded, %d unknown status)",
+                 len(records), skip_franchise, skip_zeros, skip_type, skip_superseded, skip_unknown)
 
         # Full month delete + reinsert
         conn = _get_db()
@@ -236,8 +275,10 @@ def run_bilboy(branch_id: int) -> dict:
         conn.commit()
 
         total_amount = sum(r['amount'] for r in records)
+        accepted_sum = total_amount
 
-        # Post-sync reconciliation: compare DB total vs API total
+        # ── Post-sync reconciliation ──────────────────────────────
+        # Part A: DB vs accepted (catches insert bugs)
         db_total_row = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) as total FROM goods_documents "
             "WHERE branch_id = ? AND doc_date LIKE ?",
@@ -246,21 +287,30 @@ def run_bilboy(branch_id: int) -> dict:
         db_total = db_total_row['total']
         conn.close()
 
-        diff = abs(db_total - total_amount)
+        diff = abs(db_total - accepted_sum)
         status = 'success'
         message = f"{len(records)} docs, ₪{total_amount:,.0f}"
-        if diff > 500:
+
+        # Reconciliation breakdown log
+        month_str = today.strftime('%Y-%m')
+        recon_ok = '✅' if diff <= 10 else '❌'
+        log.info("Reconciliation: branch=%d month=%s raw=₪%.2f accepted=₪%.2f excluded_status9=₪%.2f unknown=₪%.2f %s",
+                 branch_id, month_str, raw_sum, accepted_sum, excluded_sum, unknown_sum, recon_ok)
+
+        if diff > 10:
             status = 'warning'
-            message = f"{len(records)} docs, ₪{total_amount:,.0f} — פער ₪{diff:,.0f}"
-            log.warning("RECONCILIATION MISMATCH: DB=%.2f API=%.2f diff=%.2f",
-                        db_total, total_amount, diff)
-            notify(f"⚠️ BilBoy — {branch.get('name', f'Branch {branch_id}')}",
-                   f"Reconciliation gap of ₪{diff:,.0f} — DB total doesn't match API total.")
-        elif diff > 10:
-            log.warning("RECONCILIATION MISMATCH: DB=%.2f API=%.2f diff=%.2f",
-                        db_total, total_amount, diff)
+            message = f"{len(records)} docs, ₪{total_amount:,.0f} — insert gap ₪{diff:,.0f}"
+            log.warning("RECONCILIATION FAIL: DB=%.2f vs accepted=%.2f diff=%.2f — data lost during insert",
+                        db_total, accepted_sum, diff)
+            notify(f"❌ BilBoy — {branch.get('name', f'Branch {branch_id}')}",
+                   f"Reconciliation failed: DB ₪{db_total:,.0f} vs accepted ₪{accepted_sum:,.0f} — gap ₪{diff:,.0f}.")
         else:
-            log.info("Reconciliation OK: DB=%.2f API=%.2f", db_total, total_amount)
+            log.info("Reconciliation OK: DB=%.2f accepted=%.2f ✅", db_total, accepted_sum)
+
+        # Part B: Health check — flag high superseded ratio
+        if raw_sum > 0 and excluded_sum > raw_sum * 0.2:
+            log.warning("High superseded ratio: %.0f%% of raw total is status=9 (₪%.2f / ₪%.2f)",
+                        (excluded_sum / raw_sum) * 100, excluded_sum, raw_sum)
 
         duration = time.time() - t0
         conn_fin = _get_db()
@@ -311,6 +361,21 @@ def run_bilboy(branch_id: int) -> dict:
 
 
 if __name__ == '__main__':
-    import sys
-    bid = int(sys.argv[1]) if len(sys.argv) > 1 else 126
+    import argparse
+    parser = argparse.ArgumentParser(description='BilBoy goods sync')
+    parser.add_argument('branch_id', nargs='?', type=int, default=126, help='Branch ID')
+    parser.add_argument('--branch-id', type=int, dest='branch_id_flag', help='Branch ID (flag form)')
+    parser.add_argument('--year', type=int, help='Override year')
+    parser.add_argument('--month', type=int, help='Override month')
+    args = parser.parse_args()
+    bid = args.branch_id_flag or args.branch_id
+    if args.year and args.month:
+        _orig_today = date.today
+        class _DateOverride(date):
+            @classmethod
+            def today(cls):
+                from calendar import monthrange
+                day = min(_orig_today().day, monthrange(args.year, args.month)[1])
+                return date(args.year, args.month, day)
+        globals()['date'] = _DateOverride
     print(run_bilboy(bid))
