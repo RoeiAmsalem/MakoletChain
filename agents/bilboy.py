@@ -38,9 +38,9 @@ DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db'
 ALLOWED_DOC_TYPES = {2, 3, 4, 5}
 
 # BilBoy document lifecycle statuses.
-# 3=normal, 5=return/credit, 9=finalized. 7=superseded (replaced by newer doc, hidden in BilBoy UI).
+# 3=normal, 9=finalized. 7=superseded (replaced by newer doc, hidden in BilBoy UI).
 # Unknown statuses are dropped and alerted via brrr so we notice new lifecycle states.
-ACCEPTED_STATUSES = {3, 5, 9}
+ACCEPTED_STATUSES = {3, 9}
 
 
 def _get_db():
@@ -209,9 +209,33 @@ def run_bilboy(branch_id: int) -> dict:
         if skip_status > 0:
             log.warning("Dropped %d unknown-status docs totaling ₪%.2f", skip_status, unknown_sum)
 
-        # NOTE: bookKeepingId is a supplier/account ID, NOT an invoice ID.
-        # Multiple valid docs share the same bookKeepingId. Dedup by ref_number only.
-        docs = status_filtered
+        # ── BookKeepingId dedup: if two accepted docs share same bookKeepingId,
+        #    keep the one with higher status (9 beats 3) ──
+        bk_map = {}
+        for doc in status_filtered:
+            bk_id = doc.get('bookKeepingId')
+            if bk_id is not None:
+                existing = bk_map.get(bk_id)
+                if existing is not None:
+                    old_status = existing.get('status') or 0
+                    new_status = doc.get('status') or 0
+                    if new_status >= old_status:
+                        old_ref = existing.get('refNumber') or existing.get('number') or '?'
+                        new_ref = doc.get('refNumber') or doc.get('number') or '?'
+                        log.info("Deduped bookKeepingId=%s: kept status=%s ref=%s, dropped status=%s ref=%s",
+                                 bk_id, new_status, new_ref, old_status, old_ref)
+                        bk_map[bk_id] = doc
+                    else:
+                        new_ref = doc.get('refNumber') or doc.get('number') or '?'
+                        kept_ref = existing.get('refNumber') or existing.get('number') or '?'
+                        log.info("Deduped bookKeepingId=%s: kept status=%s ref=%s, dropped status=%s ref=%s",
+                                 bk_id, existing.get('status'), kept_ref, doc.get('status'), new_ref)
+                else:
+                    bk_map[bk_id] = doc
+            else:
+                # No bookKeepingId — pass through (will be caught by ref_number dedup)
+                bk_map[id(doc)] = doc  # unique key
+        docs = list(bk_map.values())
 
         # Process documents
         records = []
