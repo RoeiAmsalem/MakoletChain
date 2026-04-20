@@ -913,6 +913,20 @@ def api_amazon_deliveries():
     })
 
 
+@app.route('/api/hourly-health')
+@login_required
+def api_hourly_health():
+    """Data-health monitor for hourly_sales pipeline. CEO only."""
+    if session.get('user_role') != 'admin':
+        return jsonify({'error': 'unauthorized'}), 403
+    from agents.hourly_sales_monitor import run_all_checks
+    branch_id = int(request.args.get('branch_id', 126))
+    date = request.args.get('date', _now_il().strftime('%Y-%m-%d'))
+    db = get_db()
+    result = run_all_checks(branch_id, date, db)
+    return jsonify(result)
+
+
 @app.route('/api/employees', methods=['GET'])
 @login_required
 def api_employees_list():

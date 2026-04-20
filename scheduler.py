@@ -153,6 +153,25 @@ def scheduled_nightly():
     nightly_sync()
 
 
+def run_hourly_alerts():
+    """Every 30 min during store hours — check hourly_sales health + brrr alerts."""
+    from agents.hourly_sales_alerts import run_hourly_alerts as _run
+    log.info("Running hourly sales health alerts")
+    try:
+        _run()
+    except Exception as e:
+        log.error("Hourly sales alerts failed: %s", e)
+
+
+# Every 30 min between 07:00-23:00 — hourly sales data health
+scheduler.add_job(
+    func=run_hourly_alerts,
+    trigger=CronTrigger(hour='7-22', minute='0,30', timezone=IL_TZ),
+    id='hourly_sales_alerts',
+    name='Hourly sales health alerts',
+)
+
+
 def run_hours_midday():
     """16:00 — midday estimate (baseline + current shift)."""
     from agents.aviv_live import scrape_hours_midday
