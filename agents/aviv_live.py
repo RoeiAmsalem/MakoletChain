@@ -200,9 +200,6 @@ def _scrape_api(branch: dict, log: logging.Logger) -> dict:
         raise Exception("Status response empty")
     row = rows[0]
 
-    import json as _json
-    log.info("[DIAGNOSTIC] Full Aviv status row for branch %s: %s", branch.get('id', '?'), _json.dumps(row, ensure_ascii=False))
-
     amount = float(row.get('dealTotal') or 0)
     transactions = int(row.get('dealCount') or 0)
     last_updated = _fmt_last_updated(row.get('tmUpdate') or '')
