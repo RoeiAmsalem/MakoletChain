@@ -15,7 +15,7 @@
             <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
             <span class="store-name">{{ branch_name }}</span>
         </a>
-        {% if session.get('user_role') == 'admin' %}
+        {% if session.get('user_role') == 'admin' or (session.get('user_branches') and session['user_branches']|length > 1) %}
         <select id="branch-select" onchange="switchBranch(this.value)" style="background:rgba(255,255,255,0.07);color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:20px;padding:4px 12px;font-size:0.8rem;cursor:pointer;outline:none;flex-shrink:0;">
         </select>
         {% endif %}
