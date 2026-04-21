@@ -7,6 +7,14 @@ from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
 
+
+def _ok_from_status(status: str) -> bool:
+    """ok is True iff the check passed or cannot be evaluated yet.
+    Green = passed. Pending = cannot yet evaluate (not a failure).
+    Amber / Red = attention needed.
+    """
+    return status in ('green', 'pending')
+
 IL_TZ = ZoneInfo('Asia/Jerusalem')
 
 # ── Tunable thresholds ──────────────────────────────────────
@@ -38,8 +46,9 @@ def check_heartbeat(branch_id: int, conn: sqlite3.Connection) -> dict:
     now = datetime.now(IL_TZ)
 
     if not _is_store_hours(now):
+        status = 'green'
         return {
-            'ok': True, 'status': 'green',
+            'ok': _ok_from_status(status), 'status': status,
             'last_write_at': None,
             'message': 'מחוץ לשעות פעילות'
         }
@@ -52,8 +61,9 @@ def check_heartbeat(branch_id: int, conn: sqlite3.Connection) -> dict:
     ).fetchone()
 
     if not row or not row['last_ts']:
+        status = 'red'
         return {
-            'ok': False, 'status': 'red',
+            'ok': _ok_from_status(status), 'status': status,
             'last_write_at': None,
             'message': 'אין נתונים היום'
         }
@@ -72,23 +82,21 @@ def check_heartbeat(branch_id: int, conn: sqlite3.Connection) -> dict:
     age_min = (now - last_write).total_seconds() / 60
 
     if age_min <= HEARTBEAT_MAX_AGE_MIN:
-        return {
-            'ok': True, 'status': 'green',
-            'last_write_at': last_write.isoformat(),
-            'message': f'עדכון אחרון לפני {int(age_min)} דקות'
-        }
+        status = 'green'
     elif age_min <= HEARTBEAT_MAX_AGE_MIN * 2:
-        return {
-            'ok': True, 'status': 'amber',
-            'last_write_at': last_write.isoformat(),
-            'message': f'עדכון אחרון לפני {int(age_min)} דקות'
-        }
+        status = 'amber'
     else:
-        return {
-            'ok': False, 'status': 'red',
-            'last_write_at': last_write.isoformat(),
-            'message': f'עדכון אחרון לפני {int(age_min)} דקות — ייתכן תקלה'
-        }
+        status = 'red'
+
+    message = f'עדכון אחרון לפני {int(age_min)} דקות'
+    if status == 'red':
+        message += ' — ייתכן תקלה'
+
+    return {
+        'ok': _ok_from_status(status), 'status': status,
+        'last_write_at': last_write.isoformat(),
+        'message': message
+    }
 
 
 def check_hour_coverage(branch_id: int, date: str, conn: sqlite3.Connection) -> dict:
@@ -115,23 +123,19 @@ def check_hour_coverage(branch_id: int, date: str, conn: sqlite3.Connection) -> 
         # Day still in progress — don't flag
         expected = now.hour - 6  # rough expected coverage
         status = 'green'
-        ok = True
         message = f'{covered} שעות עד כה (היום עוד לא נגמר)'
     elif covered >= COVERAGE_GREEN:
         status = 'green'
-        ok = True
         message = f'{covered}/{COVERAGE_GREEN} שעות — כיסוי מלא'
     elif covered >= COVERAGE_AMBER:
         status = 'amber'
-        ok = True
         message = f'{covered}/{COVERAGE_GREEN} שעות — חסרות: {", ".join(str(h) for h in missing[:4])}'
     else:
         status = 'red'
-        ok = False
         message = f'{covered}/{COVERAGE_GREEN} שעות — כיסוי חלקי'
 
     return {
-        'ok': ok, 'status': status,
+        'ok': _ok_from_status(status), 'status': status,
         'covered': covered, 'total': COVERAGE_GREEN,
         'missing_hours': missing,
         'message': message
@@ -153,7 +157,7 @@ def check_daily_reconciliation(branch_id: int, date: str, conn: sqlite3.Connecti
 
     if not daily_row:
         return {
-            'ok': True, 'status': 'pending',
+            'ok': _ok_from_status('pending'), 'status': 'pending',
             'hourly_total': round(hourly_total, 2),
             'daily_total': None,
             'delta_pct': None,
@@ -163,7 +167,7 @@ def check_daily_reconciliation(branch_id: int, date: str, conn: sqlite3.Connecti
     daily_total = float(daily_row['amount'] or 0)
     if daily_total == 0:
         return {
-            'ok': True, 'status': 'pending',
+            'ok': _ok_from_status('pending'), 'status': 'pending',
             'hourly_total': round(hourly_total, 2),
             'daily_total': 0,
             'delta_pct': None,
@@ -174,16 +178,13 @@ def check_daily_reconciliation(branch_id: int, date: str, conn: sqlite3.Connecti
 
     if delta_pct < RECONCILIATION_AMBER_PCT:
         status = 'green'
-        ok = True
     elif delta_pct < RECONCILIATION_RED_PCT:
         status = 'amber'
-        ok = True
     else:
         status = 'red'
-        ok = False
 
     return {
-        'ok': ok, 'status': status,
+        'ok': _ok_from_status(status), 'status': status,
         'hourly_total': round(hourly_total, 2),
         'daily_total': round(daily_total, 2),
         'delta_pct': round(delta_pct, 1),
@@ -209,7 +210,7 @@ def check_suspicious_spikes(branch_id: int, date: str, conn: sqlite3.Connection)
 def check_amazon_activity(branch_id: int, conn: sqlite3.Connection) -> dict:
     """Track Amazon delivery activity for branch 126."""
     if branch_id != AMAZON_BRANCH_ID:
-        return {'ok': True, 'status': 'green', 'message': 'לא רלוונטי לסניף זה', 'skipped': True}
+        return {'ok': _ok_from_status('green'), 'status': 'green', 'message': 'לא רלוונטי לסניף זה', 'skipped': True}
 
     now = datetime.now(IL_TZ)
     row = conn.execute(
@@ -224,7 +225,7 @@ def check_amazon_activity(branch_id: int, conn: sqlite3.Connection) -> dict:
 
     if not row:
         return {
-            'ok': True, 'status': 'amber',
+            'ok': _ok_from_status('amber'), 'status': 'amber',
             'last_delivery_date': None,
             'last_delivery_amount': None,
             'days_since': None,
@@ -241,7 +242,7 @@ def check_amazon_activity(branch_id: int, conn: sqlite3.Connection) -> dict:
         status = 'amber'
 
     return {
-        'ok': True, 'status': status,
+        'ok': _ok_from_status(status), 'status': status,
         'last_delivery_date': row['date'],
         'last_delivery_amount': amount,
         'days_since': days_since,
@@ -262,6 +263,12 @@ def run_all_checks(branch_id: int, date: str, conn: sqlite3.Connection) -> dict:
 
     if branch_id == AMAZON_BRANCH_ID:
         checks['amazon_activity'] = check_amazon_activity(branch_id, conn)
+
+    # Sanity: each check's ok flag should match its status
+    for name, val in checks.items():
+        if isinstance(val, dict) and 'status' in val and 'ok' in val:
+            assert val['ok'] == _ok_from_status(val['status']), \
+                f"Inconsistent ok/status in check {name}: ok={val['ok']} status={val['status']}"
 
     # Overall status = worst of individual statuses
     priority = {'red': 3, 'amber': 2, 'pending': 1, 'green': 0}

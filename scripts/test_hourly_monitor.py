@@ -209,6 +209,7 @@ def test_amazon_green_recent():
     from agents.hourly_sales_monitor import check_amazon_activity
     result = check_amazon_activity(126, conn)
     assert result['status'] == 'green', f"Expected green, got {result['status']}"
+    assert result['ok'] is True, f"Expected ok=True for green, got {result['ok']}"
     assert result['days_since'] == 0
     conn.close()
     print("  PASS: amazon activity green with delivery today")
@@ -216,7 +217,7 @@ def test_amazon_green_recent():
 
 
 def test_amazon_amber_stale():
-    """Amazon activity amber when > 3 days since last delivery."""
+    """Amazon activity amber + ok=False when > 3 days since last delivery."""
     _, conn = make_db()
     old_date = (datetime.now(IL_TZ) - timedelta(days=5)).strftime('%Y-%m-%d')
     conn.execute("INSERT INTO hourly_sales VALUES (126, ?, 6, 8000, 3)", (old_date,))
@@ -225,9 +226,10 @@ def test_amazon_amber_stale():
     from agents.hourly_sales_monitor import check_amazon_activity
     result = check_amazon_activity(126, conn)
     assert result['status'] == 'amber', f"Expected amber, got {result['status']}"
+    assert result['ok'] is False, f"Expected ok=False for amber, got {result['ok']}"
     assert result['days_since'] >= 4
     conn.close()
-    print("  PASS: amazon activity amber when > 3 days")
+    print("  PASS: amazon activity amber + ok=False when > 3 days")
     return True
 
 
@@ -266,6 +268,100 @@ def test_brrr_not_telegram():
     return True
 
 
+def test_ok_matches_status_rule():
+    """ok == (status in ['green', 'pending']) for every check."""
+    from agents.hourly_sales_monitor import _ok_from_status
+    assert _ok_from_status('green') is True
+    assert _ok_from_status('pending') is True
+    assert _ok_from_status('amber') is False
+    assert _ok_from_status('red') is False
+    print("  PASS: _ok_from_status matches rule for all statuses")
+    return True
+
+
+def test_amazon_green_ok_true():
+    """Amazon ok=True when status=green (recent delivery)."""
+    _, conn = make_db()
+    today = datetime.now(IL_TZ).strftime('%Y-%m-%d')
+    conn.execute("INSERT INTO hourly_sales VALUES (126, ?, 6, 8000, 3)", (today,))
+    conn.commit()
+
+    from agents.hourly_sales_monitor import check_amazon_activity
+    result = check_amazon_activity(126, conn)
+    assert result['status'] == 'green'
+    assert result['ok'] is True, f"Expected ok=True for green, got {result['ok']}"
+    conn.close()
+    print("  PASS: amazon ok=True when green")
+    return True
+
+
+def test_coverage_today_in_progress_ok_true():
+    """Coverage today in-progress: status=green, ok=True."""
+    _, conn = make_db()
+    today = datetime.now(IL_TZ).strftime('%Y-%m-%d')
+    for h in range(7, 12):
+        conn.execute("INSERT INTO hourly_sales VALUES (126, ?, ?, 500, 3)", (today, h))
+    conn.commit()
+
+    from agents.hourly_sales_monitor import check_hour_coverage
+
+    # Mock to midday (before 23:30)
+    mock_now = datetime.now(IL_TZ).replace(hour=14, minute=0)
+    with patch('agents.hourly_sales_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value = mock_now
+        mock_dt.strptime = datetime.strptime
+        result = check_hour_coverage(126, today, conn)
+
+    assert result['status'] == 'green', f"Expected green, got {result['status']}"
+    assert result['ok'] is True, f"Expected ok=True for in-progress, got {result['ok']}"
+    conn.close()
+    print("  PASS: coverage today in-progress ok=True")
+    return True
+
+
+def test_coverage_past_red_ok_false():
+    """Coverage past date 10/16: status=red, ok=False."""
+    _, conn = make_db()
+    yesterday = (datetime.now(IL_TZ) - timedelta(days=1)).strftime('%Y-%m-%d')
+    for h in range(7, 17):  # Only 10 hours
+        conn.execute("INSERT INTO hourly_sales VALUES (126, ?, ?, 500, 3)", (yesterday, h))
+    conn.commit()
+
+    from agents.hourly_sales_monitor import check_hour_coverage
+
+    # Mock to after 23:30
+    mock_now = datetime.now(IL_TZ).replace(hour=23, minute=45)
+    with patch('agents.hourly_sales_monitor.datetime') as mock_dt:
+        mock_dt.now.return_value = mock_now
+        mock_dt.strptime = datetime.strptime
+        result = check_hour_coverage(126, yesterday, conn)
+
+    assert result['status'] == 'red', f"Expected red, got {result['status']}"
+    assert result['ok'] is False, f"Expected ok=False for red, got {result['ok']}"
+    assert result['covered'] == 10
+    conn.close()
+    print("  PASS: coverage past date 10/16 ok=False")
+    return True
+
+
+def test_run_all_assertion_passes():
+    """run_all_checks sanity assertion does not fire under normal conditions."""
+    _, conn = make_db()
+    today = datetime.now(IL_TZ).strftime('%Y-%m-%d')
+    for h in range(7, 23):
+        conn.execute("INSERT INTO hourly_sales VALUES (126, ?, ?, 500, 3)", (today, h))
+    conn.execute("INSERT INTO daily_sales (branch_id, date, amount) VALUES (126, ?, 8000)", (today,))
+    conn.commit()
+
+    from agents.hourly_sales_monitor import run_all_checks
+    # Should not raise AssertionError
+    result = run_all_checks(126, today, conn)
+    assert 'overall_status' in result
+    conn.close()
+    print("  PASS: run_all_checks assertion passes")
+    return True
+
+
 def run_all():
     tests = [
         test_heartbeat_green_recent,
@@ -279,6 +375,11 @@ def run_all():
         test_amazon_green_recent,
         test_amazon_amber_stale,
         test_brrr_not_telegram,
+        test_ok_matches_status_rule,
+        test_amazon_green_ok_true,
+        test_coverage_today_in_progress_ok_true,
+        test_coverage_past_red_ok_false,
+        test_run_all_assertion_passes,
     ]
     passed = failed = 0
     for t in tests:
