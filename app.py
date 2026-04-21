@@ -345,11 +345,18 @@ def _month_nav(selected):
 
 def get_branch_id():
     """Get branch_id from session only — never from request args/form."""
-    role = session.get('user_role')
-    if role == 'admin':
-        return session.get('branch_id', 126)
-    elif role == 'manager':
-        return session.get('branch_id')
+    bid = session.get('branch_id')
+    if bid:
+        return bid
+    # Fallback: first assigned branch
+    user_branches = session.get('user_branches', [])
+    if user_branches:
+        return user_branches[0]
+    # Admin with no user_branches rows: fall back to first branch in DB
+    if session.get('user_role') == 'admin':
+        db = get_db()
+        row = db.execute('SELECT id FROM branches ORDER BY id LIMIT 1').fetchone()
+        return row['id'] if row else None
     return None
 
 
@@ -573,7 +580,18 @@ def _recalculate_avg_rate(branch_id: int, conn):
 @login_required
 def api_branches():
     db = get_db()
-    rows = db.execute('SELECT id, name, city, active FROM branches').fetchall()
+    role = session.get('user_role')
+    if role == 'admin':
+        rows = db.execute('SELECT id, name, city, active FROM branches ORDER BY id').fetchall()
+    else:
+        user_branches = session.get('user_branches', [])
+        if not user_branches:
+            return jsonify([])
+        placeholders = ','.join('?' * len(user_branches))
+        rows = db.execute(
+            f'SELECT id, name, city, active FROM branches WHERE id IN ({placeholders}) ORDER BY id',
+            user_branches
+        ).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
