@@ -208,11 +208,11 @@ def login():
         message = request.args.get('message', '')
         return render_template('login.html', error=None, message=message)
 
-    email = request.form.get('email', '').strip()
+    email = request.form.get('email', '').strip().lower()
     password = request.form.get('password', '')
 
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE email = ? AND active = 1", (email,)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE LOWER(email) = ? AND active = 1", (email,)).fetchone()
 
     if user and check_password_hash(user['password_hash'], password):
         if request.form.get('remember'):
@@ -252,7 +252,7 @@ def forgot_password():
 
     email = request.form.get('email', '').strip().lower()
     db = get_db()
-    user = db.execute('SELECT id FROM users WHERE email=? AND active=1', (email,)).fetchone()
+    user = db.execute('SELECT id FROM users WHERE LOWER(email)=? AND active=1', (email,)).fetchone()
     if user:
         token = secrets.token_urlsafe(32)
         expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
@@ -2285,7 +2285,7 @@ def api_admin_branch_create():
          data.get('franchise_supplier', 'זיכיונות המכולת בע"מ'),
          data.get('iec_contract', '')))
     db.commit()
-    manager_email = data.get('manager_email', '').strip()
+    manager_email = data.get('manager_email', '').strip().lower()
     manager_name = data.get('manager_name', '').strip()
     if manager_email and manager_name:
         temp_password = secrets.token_urlsafe(8)
@@ -2294,7 +2294,7 @@ def api_admin_branch_create():
             "INSERT OR IGNORE INTO users (name, email, password_hash, role) VALUES (?,?,?,'manager')",
             (manager_name, manager_email, pw_hash))
         db.commit()
-        user_row = db.execute('SELECT id FROM users WHERE email=?', (manager_email,)).fetchone()
+        user_row = db.execute('SELECT id FROM users WHERE LOWER(email)=?', (manager_email,)).fetchone()
         if user_row:
             db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
                        (user_row['id'], new_id))
@@ -2327,6 +2327,90 @@ def api_admin_branch_update(branch_id):
     db.execute(sql, list(updates.values()) + [branch_id])
     db.commit()
     return jsonify({'ok': True})
+
+
+# ── Admin Users & Branch Assignments ────────────────────────────────────
+
+@app.route('/admin/users')
+@_ceo_required
+def admin_users():
+    return render_template('admin_users.html', **_page_context('admin'))
+
+
+@app.route('/api/admin/users')
+@_ceo_required
+def api_admin_users():
+    db = get_db()
+    users = db.execute('SELECT id, email, name, role, active FROM users ORDER BY id').fetchall()
+    result = []
+    for u in users:
+        branches = db.execute(
+            '''SELECT b.id, b.name, b.city FROM user_branches ub
+               JOIN branches b ON b.id = ub.branch_id
+               WHERE ub.user_id = ? ORDER BY b.id''', (u['id'],)
+        ).fetchall()
+        result.append({
+            'id': u['id'], 'email': u['email'], 'name': u['name'],
+            'role': u['role'], 'active': u['active'],
+            'branches': [{'id': b['id'], 'name': b['name'], 'city': b['city']} for b in branches]
+        })
+    return jsonify(result)
+
+
+@app.route('/api/admin/users/<int:user_id>/branches', methods=['POST'])
+@_ceo_required
+def api_admin_user_add_branch(user_id):
+    db = get_db()
+    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not user:
+        return jsonify({'error': 'user not found'}), 404
+    if user['role'] == 'admin':
+        return jsonify({'error': 'cannot assign branches to admin users'}), 403
+    data = request.get_json()
+    branch_id = data.get('branch_id')
+    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    if not branch:
+        return jsonify({'error': 'branch not found'}), 404
+    existing = db.execute(
+        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
+        (user_id, branch_id)).fetchone()
+    if existing:
+        return jsonify({'error': 'branch already assigned'}), 409
+    db.execute('INSERT INTO user_branches (user_id, branch_id) VALUES (?, ?)',
+               (user_id, branch_id))
+    db.commit()
+    return jsonify({'ok': True, 'user_id': user_id, 'branch_id': branch_id}), 201
+
+
+@app.route('/api/admin/users/<int:user_id>/branches/<int:branch_id>', methods=['DELETE'])
+@_ceo_required
+def api_admin_user_remove_branch(user_id, branch_id):
+    db = get_db()
+    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not user:
+        return jsonify({'error': 'user not found'}), 404
+    existing = db.execute(
+        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
+        (user_id, branch_id)).fetchone()
+    if not existing:
+        return '', 204
+    count = db.execute(
+        'SELECT COUNT(*) as cnt FROM user_branches WHERE user_id = ?',
+        (user_id,)).fetchone()['cnt']
+    if count <= 1 and user['role'] == 'manager':
+        return jsonify({'error': 'cannot leave manager without any branches — delete or deactivate the user instead'}), 422
+    db.execute('DELETE FROM user_branches WHERE user_id = ? AND branch_id = ?',
+               (user_id, branch_id))
+    db.commit()
+    return '', 204
+
+
+@app.route('/api/admin/branches-list')
+@_ceo_required
+def api_admin_branches_list():
+    db = get_db()
+    rows = db.execute('SELECT id, name, city FROM branches WHERE active = 1 ORDER BY id').fetchall()
+    return jsonify([{'id': r['id'], 'name': r['name'], 'city': r['city']} for r in rows])
 
 
 # ── IEC status & accuracy endpoints ─────────────────────────────────────

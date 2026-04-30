@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}ניהול משתמשים — MakoletChain{% endblock %}
+{% block head %}
+<style>
+    .admin-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
+    .admin-header { margin-bottom:1.5rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+    .admin-header h1 { font-size:1.5rem; font-weight:700; margin:0; }
+    .admin-nav { display:flex; gap:0.5rem; margin-right:auto; }
+    .admin-nav a { font-size:0.82rem; padding:0.35rem 0.8rem; border-radius:6px; color:var(--text-secondary); text-decoration:none; border:1px solid var(--card-border); transition:all 0.15s; }
+    .admin-nav a:hover { background:rgba(255,255,255,0.06); color:white; }
+    .admin-nav a.active { background:var(--accent); color:white; border-color:var(--accent); }
+    .user-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1rem 1.25rem; margin-bottom:0.75rem; box-shadow:var(--shadow); }
+    .user-card-header { display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; }
+    .user-name { font-size:1rem; font-weight:700; color:var(--text-primary); }
+    .user-email { font-size:0.82rem; color:var(--text-muted); direction:ltr; display:inline-block; }
+    .role-badge { padding:2px 10px; border-radius:999px; font-size:0.72rem; font-weight:700; }
+    .role-admin { background:rgba(99,102,241,0.2); color:#a5b4fc; }
+    .role-manager { background:rgba(34,197,94,0.2); color:#86efac; }
+    .badge-inactive { background:rgba(239,68,68,0.2); color:#fca5a5; padding:2px 8px; border-radius:999px; font-size:0.72rem; font-weight:700; }
+    .admin-note { font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem; font-style:italic; }
+    .branch-pills { display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem; align-items:center; }
+    .branch-pill { display:inline-flex; align-items:center; gap:0.3rem; background:rgba(255,255,255,0.06); border:1px solid var(--card-border); border-radius:999px; padding:0.2rem 0.6rem; font-size:0.78rem; color:var(--text-secondary); }
+    .branch-pill .pill-remove { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:0.85rem; padding:0 2px; line-height:1; transition:color 0.15s; }
+    .branch-pill .pill-remove:hover { color:#f87171; }
+    .add-branch-wrap { display:inline-flex; align-items:center; gap:0.3rem; }
+    .add-branch-wrap select { background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.25rem 0.5rem; color:var(--text-primary); font-size:0.78rem; font-family:inherit; }
+    .add-branch-wrap button { background:var(--accent); border:none; border-radius:6px; padding:0.25rem 0.6rem; color:white; font-size:0.78rem; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity 0.15s; }
+    .add-branch-wrap button:hover { opacity:0.85; }
+    .add-branch-wrap button:disabled { opacity:0.4; cursor:not-allowed; }
+    .info-note { font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem; }
+    .all-assigned { font-size:0.78rem; color:var(--text-muted); padding:0.25rem 0.6rem; }
+    .loading { text-align:center; padding:3rem; color:var(--text-muted); }
+    @media (max-width: 768px) {
+        .admin-container { padding:0.75rem; }
+        .admin-header h1 { font-size:1.25rem; }
+        .admin-header { flex-direction:column; align-items:flex-start; }
+        .admin-nav { margin-right:0; }
+        .user-card { padding:0.85rem; }
+        .branch-pill .pill-remove { min-width:28px; min-height:28px; display:flex; align-items:center; justify-content:center; }
+        .add-branch-wrap select, .add-branch-wrap button { font-size:16px !important; min-height:40px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="admin-container">
+    <div class="admin-header">
+        <h1>ניהול משתמשים וסניפים</h1>
+        <div class="admin-nav">
+            <a href="/admin/branches">סניפים</a>
+            <a href="/admin/users" class="active">משתמשים</a>
+        </div>
+    </div>
+
+    <div id="users-container">
+        <div class="loading">טוען...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let ALL_USERS = [];
+let ALL_BRANCHES = [];
+
+async function loadData() {
+    const [usersRes, branchesRes] = await Promise.all([
+        fetch('/api/admin/users'),
+        fetch('/api/admin/branches-list')
+    ]);
+    if (usersRes.status === 401 || branchesRes.status === 401) {
+        window.location.href = '/login';
+        return;
+    }
+    ALL_USERS = await usersRes.json();
+    ALL_BRANCHES = await branchesRes.json();
+    render();
+}
+
+function render() {
+    const container = document.getElementById('users-container');
+    if (!ALL_USERS.length) {
+        container.innerHTML = '<div class="loading">אין משתמשים</div>';
+        return;
+    }
+    container.innerHTML = ALL_USERS.map(u => renderCard(u)).join('');
+}
+
+function renderCard(u) {
+    const roleBadge = u.role === 'admin'
+        ? '<span class="role-badge role-admin">אדמין</span>'
+        : '<span class="role-badge role-manager">מנהל</span>';
+    const activeBadge = u.active ? '' : ' <span class="badge-inactive">לא פעיל</span>';
+
+    let body = '';
+    if (u.role === 'admin') {
+        body = '<div class="admin-note">גישה לכל הסניפים (דרך תפקיד)</div>';
+    } else {
+        const assignedIds = new Set(u.branches.map(b => b.id));
+        const available = ALL_BRANCHES.filter(b => !assignedIds.has(b.id));
+
+        const pills = u.branches.map(b =>
+            `<span class="branch-pill">${b.name} — ${b.city}<button class="pill-remove" onclick="removeBranch(${u.id}, ${b.id})" title="הסר סניף">✕</button></span>`
+        ).join('');
+
+        let addControl = '';
+        if (available.length === 0) {
+            addControl = '<span class="all-assigned">משויך לכל הסניפים הקיימים</span>';
+        } else {
+            const options = available.map(b => `<option value="${b.id}">${b.name} — ${b.city}</option>`).join('');
+            addControl = `
+                <div class="add-branch-wrap">
+                    <select id="add-sel-${u.id}"><option value="">הוסף סניף...</option>${options}</select>
+                    <button onclick="addBranch(${u.id})">הוסף</button>
+                </div>`;
+        }
+
+        body = `<div class="branch-pills">${pills}${addControl}</div>
+                <div class="info-note">שינוי ייכנס לתוקף בהתחברות הבאה של המשתמש</div>`;
+    }
+
+    return `<div class="user-card" id="user-card-${u.id}">
+        <div class="user-card-header">
+            <span class="user-name">${u.name}</span>
+            <span class="user-email">${u.email}</span>
+            ${roleBadge}${activeBadge}
+        </div>
+        ${body}
+    </div>`;
+}
+
+async function addBranch(userId) {
+    const sel = document.getElementById('add-sel-' + userId);
+    const branchId = parseInt(sel.value);
+    if (!branchId) return;
+    try {
+        const resp = await fetch(`/api/admin/users/${userId}/branches`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({branch_id: branchId})
+        });
+        if (resp.status === 409) {
+            await mkAlert({type: 'warning', title: 'כבר משויך', message: 'הסניף כבר משויך למשתמש זה'});
+            return;
+        }
+        if (!resp.ok) {
+            const err = await resp.json();
+            await mkAlert({type: 'danger', title: 'שגיאה', message: err.error || 'שגיאה לא צפויה'});
+            return;
+        }
+        const branch = ALL_BRANCHES.find(b => b.id === branchId);
+        const user = ALL_USERS.find(u => u.id === userId);
+        if (user && branch) {
+            user.branches.push({id: branch.id, name: branch.name, city: branch.city});
+        }
+        render();
+    } catch (err) {
+        await mkAlert({type: 'danger', title: 'שגיאה', message: err.message});
+    }
+}
+
+async function removeBranch(userId, branchId) {
+    const user = ALL_USERS.find(u => u.id === userId);
+    const branch = user?.branches.find(b => b.id === branchId);
+    if (!branch) return;
+    const confirmed = await mkConfirm({
+        type: 'warning',
+        title: 'הסרת סניף',
+        message: `להסיר את "${branch.name}" מ-${user.name}?`
+    });
+    if (!confirmed) return;
+    try {
+        const resp = await fetch(`/api/admin/users/${userId}/branches/${branchId}`, {method: 'DELETE'});
+        if (resp.status === 422) {
+            const err = await resp.json();
+            await mkAlert({type: 'danger', title: 'לא ניתן להסיר', message: err.error});
+            return;
+        }
+        if (!resp.ok && resp.status !== 204) {
+            await mkAlert({type: 'danger', title: 'שגיאה', message: 'שגיאה לא צפויה'});
+            return;
+        }
+        if (user) {
+            user.branches = user.branches.filter(b => b.id !== branchId);
+        }
+        render();
+    } catch (err) {
+        await mkAlert({type: 'danger', title: 'שגיאה', message: err.message});
+    }
+}
+
+loadData();
+</script>
+{% endblock %}
