@@ -47,8 +47,12 @@
 
 {% block content %}
 <div class="admin-container">
-    <div class="admin-header">
-        <h1>ניהול סניפים</h1>
+    <div class="admin-header" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+        <h1 style="margin:0;">ניהול סניפים</h1>
+        <div style="display:flex;gap:0.5rem;margin-right:auto;">
+            <a href="/admin/branches" style="font-size:0.82rem;padding:0.35rem 0.8rem;border-radius:6px;color:white;text-decoration:none;background:var(--accent);border:1px solid var(--accent);">סניפים</a>
+            <a href="/admin/users" style="font-size:0.82rem;padding:0.35rem 0.8rem;border-radius:6px;color:var(--text-secondary);text-decoration:none;border:1px solid var(--card-border);transition:all 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.06)';this.style.color='white'" onmouseout="this.style.background='';this.style.color='var(--text-secondary)'">משתמשים</a>
+        </div>
     </div>
 
     <div class="success-banner" id="success-banner"></div>

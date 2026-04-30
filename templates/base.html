@@ -30,6 +30,7 @@
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
             {% if session.get('user_role') == 'admin' %}
             <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
+            <li><a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">ניהול</a></li>
             {% endif %}
         </ul>
     </nav>
@@ -58,6 +59,7 @@
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
         {% if session.get('user_role') == 'admin' %}
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
+        <a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">ניהול</a>
         {% endif %}
     </div>
     <div class="month-switcher-mobile">
