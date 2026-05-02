@@ -279,6 +279,43 @@
     </div>
 </section>
 
+<!-- Electricity Fork Dialog -->
+<div id="elec-fork-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--card,#1e293b);border:1px solid var(--card-border,#334155);border-radius:12px;width:90%;max-width:420px;padding:1.5rem;">
+    <h3 style="font-size:1.1rem;font-weight:700;color:white;margin:0 0 1.25rem 0;text-align:center;">הגדרת עלות חשמל</h3>
+    <div style="display:flex;flex-direction:column;gap:0.75rem;">
+      <button onclick="document.getElementById('elec-fork-modal').style.display='none';location.href='/fixed-expenses'" style="background:rgba(129,140,248,0.12);border:1px solid rgba(129,140,248,0.4);border-radius:10px;padding:1rem;cursor:pointer;text-align:right;font-family:inherit;">
+        <div style="font-size:0.95rem;font-weight:700;color:#c7d2fe;margin-bottom:0.3rem;">⚡ חיבור ל-IEC (אוטומטי)</div>
+        <div style="font-size:0.82rem;color:#94a3b8;">מתחבר לחשבון חשמל ומושך חשבוניות אוטומטית.</div>
+      </button>
+      <button onclick="document.getElementById('elec-fork-modal').style.display='none';openManualElecDialog()" style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);border-radius:10px;padding:1rem;cursor:pointer;text-align:right;font-family:inherit;">
+        <div style="font-size:0.95rem;font-weight:700;color:#fbbf24;margin-bottom:0.3rem;">✏️ הזנה ידנית</div>
+        <div style="font-size:0.82rem;color:#94a3b8;">הזן את הסכום החודשי בעצמך. פשוט יותר, דורש עדכון חודשי.</div>
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:1rem;">
+      <button onclick="document.getElementById('elec-fork-modal').style.display='none'" style="background:none;border:none;color:#64748b;font-size:0.85rem;cursor:pointer;font-family:inherit;">ביטול</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manual Electricity Entry Dialog -->
+<div id="manual-elec-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1001;align-items:center;justify-content:center;" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--card,#1e293b);border:1px solid var(--card-border,#334155);border-radius:12px;width:90%;max-width:380px;padding:1.5rem;">
+    <h3 style="font-size:1rem;font-weight:700;color:white;margin:0 0 1rem 0;">⚡ הזנת עלות חשמל</h3>
+    <div id="manual-elec-error" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:0.5rem 0.75rem;color:#fca5a5;font-size:0.82rem;margin-bottom:0.75rem;"></div>
+    <label style="display:block;font-size:0.85rem;font-weight:600;color:#94a3b8;margin-bottom:0.3rem;">חודש</label>
+    <input type="month" id="manual-elec-month" style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.5rem 0.75rem;color:white;font-size:0.95rem;font-family:inherit;margin-bottom:0.75rem;">
+    <label style="display:block;font-size:0.85rem;font-weight:600;color:#94a3b8;margin-bottom:0.3rem;">סכום חשבונית בש״ח</label>
+    <input type="number" id="manual-elec-amount" inputmode="decimal" step="0.01" min="0" placeholder="0.00"
+           style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.5rem 0.75rem;color:white;font-size:1.1rem;font-family:inherit;direction:ltr;text-align:center;">
+    <button id="manual-elec-save-btn" onclick="saveManualElectricity()" style="width:100%;margin-top:1rem;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.5);border-radius:8px;padding:0.6rem;color:#86efac;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">שמור</button>
+    <div style="text-align:center;margin-top:0.5rem;">
+      <button onclick="document.getElementById('manual-elec-modal').style.display='none'" style="background:none;border:none;color:#64748b;font-size:0.85rem;cursor:pointer;font-family:inherit;">ביטול</button>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -309,9 +346,9 @@ async function loadSummary() {
         // Electricity subtitle on orange tile
         const elecSub = document.getElementById('fixed-elec-sub');
         const elec = d.electricity;
-        if (elec && elec.source !== 'none' && elec.amount > 0) {
+        if (elec && elec.source !== 'none' && elec.source !== 'manual_missing' && elec.amount > 0) {
             const prefix = elec.source === 'estimate' ? 'כולל ~' : 'כולל ';
-            const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : ' חשמל';
+            const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : (elec.source === 'manual' ? ' חשמל (ידני)' : ' חשמל');
             elecSub.textContent = prefix + formatMoney(elec.amount) + suffix;
         } else {
             elecSub.textContent = '';
@@ -320,42 +357,36 @@ async function loadSummary() {
         // Electricity strip — state-driven rendering
         const strip = document.getElementById('elec-strip');
         const le = d.latest_electricity;
+        const branchElecSource = d.electricity_source; // 'iec', 'manual', or null
         const elecSource = elec ? elec.source : 'none';
-        strip.setAttribute('data-source', elecSource);
-        const headline = document.getElementById('elec-strip-headline');
-        const detail = document.getElementById('elec-strip-detail');
-        const stripRight = document.getElementById('elec-strip-right');
-
-        if (elecSource === 'real' && le) {
-            // STATE REAL
-            headline.innerHTML = '⚡ חשבונית אחרונה';
+        if (le) {
             const dueFmt = le.due_date ? le.due_date.split('-').reverse().join('/') : '';
-            detail.textContent = (le.period_label || '') + ' · ' + formatMoney(le.amount) + (dueFmt ? ' · תשלום עד ' + dueFmt : '');
-            let syncText = '';
-            if (d.iec_last_sync_at) {
+            document.getElementById('elec-strip-detail').textContent =
+                (le.period_label || '') + ' · ' + formatMoney(le.amount) + (dueFmt ? ' · תשלום עד ' + dueFmt : '');
+            strip.style.display = 'block';
+            strip.style.borderColor = 'var(--card-border,#334155)';
+
+            const syncEl = document.getElementById('elec-strip-sync');
+            if (branchElecSource === 'manual') {
+                syncEl.textContent = 'הזנה ידנית';
+            } else if (d.iec_last_sync_at) {
                 const sd = new Date(d.iec_last_sync_at);
-                syncText = 'עודכן: ' + sd.toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit'}) + ' ' + sd.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
-            }
-            stripRight.innerHTML = '<span style="font-size:0.75rem;color:#64748b">' + syncText + '</span>';
+                syncEl.textContent = 'עודכן: ' + sd.toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit'}) + ' ' + sd.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
+            } else { syncEl.textContent = ''; }
+        } else if (elec && elec.source === 'manual_missing') {
+            // Manual mode but current month not entered — amber badge
+            document.getElementById('elec-strip-detail').innerHTML =
+                'חשמל — חודש זה לא הוזן &nbsp;<button onclick="openManualElecDialog()" style="background:rgba(251,191,36,0.2);border:1px solid rgba(251,191,36,0.5);border-radius:6px;padding:0.25rem 0.75rem;color:#fbbf24;font-size:0.82rem;font-weight:600;cursor:pointer;font-family:inherit;">+ הזן סכום</button>';
+            document.getElementById('elec-strip-sync').textContent = '';
             strip.style.display = 'block';
-        } else if (elecSource === 'estimate') {
-            // STATE ESTIMATE
-            headline.innerHTML = '⚡ חשמל חודשי: ~' + formatMoney(elec.amount) + ' <span class="elec-estimate-badge">משוער</span>';
-            let detailText = 'על בסיס ' + (elec.estimate_basis || '');
-            if (le) {
-                const dueFmt = le.due_date ? le.due_date.split('-').reverse().join('/') : '';
-                detailText += ' · חשבונית אחרונה: ' + formatMoney(le.amount) + (dueFmt ? ' · עד ' + dueFmt : '');
-            }
-            detail.textContent = detailText;
-            stripRight.innerHTML = '<span style="font-size:0.75rem;color:#D97706">יעודכן כשחשבונית חדשה תגיע</span>';
+            strip.style.borderColor = 'rgba(251,191,36,0.4)';
+        } else if (elec && elec.source === 'none') {
+            // Not configured or no data yet — show fork dialog button (red)
+            document.getElementById('elec-strip-detail').innerHTML =
+                'חשמל — טרם הוגדר עבור סניף זה &nbsp;<button onclick="openElecForkDialog()" style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);border-radius:6px;padding:0.25rem 0.75rem;color:#fca5a5;font-size:0.82rem;font-weight:600;cursor:pointer;font-family:inherit;">הגדר חשמל</button>';
+            document.getElementById('elec-strip-sync').textContent = '';
             strip.style.display = 'block';
-        } else if (elecSource === 'none') {
-            // STATE NONE
-            headline.textContent = '⚡ חשמל לא מוגדר';
-            headline.style.color = '#fca5a5';
-            detail.textContent = 'הרווח המוצג לא כולל עלות חשמל';
-            stripRight.innerHTML = "<button class=\"elec-setup-btn\" onclick=\"if(typeof iecWizard!=='undefined')iecWizard.open();else location.href='/fixed-expenses'\">הגדר חשמל</button>";
-            strip.style.display = 'block';
+            strip.style.borderColor = 'rgba(239,68,68,0.3)';
         }
 
         // Profit quality badge
@@ -650,6 +681,53 @@ async function loadAmazonDeliveries() {
     }
 }
 {% endif %}
+
+function openElecForkDialog() {
+    document.getElementById('elec-fork-modal').style.display = 'flex';
+}
+
+function openManualElecDialog(prefillMonth) {
+    const monthInput = document.getElementById('manual-elec-month');
+    monthInput.value = prefillMonth || SELECTED_MONTH;
+    document.getElementById('manual-elec-amount').value = '';
+    document.getElementById('manual-elec-error').style.display = 'none';
+    document.getElementById('manual-elec-modal').style.display = 'flex';
+    document.getElementById('manual-elec-amount').focus();
+}
+
+async function saveManualElectricity() {
+    const month = document.getElementById('manual-elec-month').value;
+    const amount = parseFloat(document.getElementById('manual-elec-amount').value);
+    const errEl = document.getElementById('manual-elec-error');
+    if (!month || isNaN(amount) || amount < 0) {
+        errEl.textContent = 'נא למלא חודש וסכום תקין';
+        errEl.style.display = 'block';
+        return;
+    }
+    const btn = document.getElementById('manual-elec-save-btn');
+    btn.disabled = true;
+    btn.textContent = 'שומר...';
+    try {
+        const res = await fetch('/api/electricity/manual', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({month, amount})
+        });
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        document.getElementById('manual-elec-modal').style.display = 'none';
+        loadSummary();
+        loadHistory();
+    } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'שמור';
+    }
+}
 
 loadSummary();
 loadHistory();

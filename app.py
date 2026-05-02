@@ -695,9 +695,9 @@ def api_summary():
         "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
         (branch_id,)
     ).fetchone()
-    # IEC last sync time
-    iec_sync = db.execute(
-        "SELECT iec_last_sync_at FROM branches WHERE id = ?", (branch_id,)
+    # IEC last sync time + electricity_source
+    branch_elec = db.execute(
+        "SELECT iec_last_sync_at, electricity_source FROM branches WHERE id = ?", (branch_id,)
     ).fetchone()
 
     return jsonify({
@@ -724,7 +724,8 @@ def api_summary():
             'amount': latest_elec['amount'],
             'due_date': latest_elec['due_date'],
         } if latest_elec else None,
-        'iec_last_sync_at': iec_sync['iec_last_sync_at'] if iec_sync and iec_sync['iec_last_sync_at'] else None,
+        'iec_last_sync_at': branch_elec['iec_last_sync_at'] if branch_elec and branch_elec['iec_last_sync_at'] else None,
+        'electricity_source': branch_elec['electricity_source'] if branch_elec else None,
     })
 
 
@@ -1557,54 +1558,74 @@ def _get_real_electricity(branch_id: int, year: int, month: int, db) -> float:
 def get_electricity_for_month(branch_id: int, year: int, month: int, db=None) -> dict:
     """
     Returns electricity contribution for a branch in a given month.
-    Returns: {amount: float, source: 'real'|'estimate'|'none', estimate_basis: str|None}
+    Returns: {amount: float, source: 'real'|'estimate'|'none'|'manual', estimate_basis: str|None}
     """
     if db is None:
         db = get_db()
-    # Check if branch has IEC integration
-    has_iec = db.execute(
-        "SELECT iec_token FROM branches WHERE id = ?", (branch_id,)
+
+    # Check branch electricity_source setting
+    branch = db.execute(
+        "SELECT electricity_source, iec_token FROM branches WHERE id = ?", (branch_id,)
     ).fetchone()
-    if not has_iec or not has_iec['iec_token']:
+    if not branch:
         return {'amount': 0, 'source': 'none', 'estimate_basis': None}
-    # Check if any invoices exist at all
-    any_invoice = db.execute(
-        "SELECT 1 FROM electricity_invoices WHERE branch_id = ? LIMIT 1", (branch_id,)
-    ).fetchone()
-    if not any_invoice:
+
+    elec_source = branch['electricity_source']
+
+    # Manual mode: look for manual entry for this month
+    if elec_source == 'manual':
+        month_str = f'{year:04d}-{month:02d}'
+        manual_row = db.execute(
+            "SELECT amount FROM electricity_invoices WHERE branch_id = ? AND source = 'manual' AND month = ?",
+            (branch_id, month_str)
+        ).fetchone()
+        if manual_row:
+            return {'amount': manual_row['amount'], 'source': 'manual', 'estimate_basis': None}
+        return {'amount': 0, 'source': 'manual_missing', 'estimate_basis': None}
+
+    # IEC mode (or legacy: no electricity_source but has iec_token)
+    if elec_source == 'iec' or (elec_source is None and branch['iec_token']):
+        # Check if any invoices exist at all
+        any_invoice = db.execute(
+            "SELECT 1 FROM electricity_invoices WHERE branch_id = ? LIMIT 1", (branch_id,)
+        ).fetchone()
+        if not any_invoice:
+            return {'amount': 0, 'source': 'none', 'estimate_basis': None}
+        # Try REAL
+        real_amount = _get_real_electricity(branch_id, year, month, db)
+        if real_amount > 0:
+            return {'amount': real_amount, 'source': 'real', 'estimate_basis': None}
+        # ESTIMATE: try same month last year
+        prev_year_amount = _get_real_electricity(branch_id, year - 1, month, db)
+        if prev_year_amount > 0:
+            return {'amount': prev_year_amount, 'source': 'estimate', 'estimate_basis': f'{month:02d}/{year - 1}'}
+        # Search closest month within ±12 months that has real data
+        best_amount = 0.0
+        best_distance = 999
+        best_basis = None
+        for offset in range(1, 13):
+            for direction in (-1, 1):
+                search_m = month + offset * direction
+                search_y = year
+                while search_m < 1:
+                    search_m += 12
+                    search_y -= 1
+                while search_m > 12:
+                    search_m -= 12
+                    search_y += 1
+                amt = _get_real_electricity(branch_id, search_y, search_m, db)
+                if amt > 0 and offset < best_distance:
+                    best_amount = amt
+                    best_distance = offset
+                    best_basis = f'{search_m:02d}/{search_y}'
+                    break
+            if best_distance <= offset:
+                break
+        if best_amount > 0:
+            return {'amount': best_amount, 'source': 'estimate', 'estimate_basis': best_basis}
         return {'amount': 0, 'source': 'none', 'estimate_basis': None}
-    # Try REAL
-    real_amount = _get_real_electricity(branch_id, year, month, db)
-    if real_amount > 0:
-        return {'amount': real_amount, 'source': 'real', 'estimate_basis': None}
-    # ESTIMATE: try same month last year
-    prev_year_amount = _get_real_electricity(branch_id, year - 1, month, db)
-    if prev_year_amount > 0:
-        return {'amount': prev_year_amount, 'source': 'estimate', 'estimate_basis': f'{month:02d}/{year - 1}'}
-    # Search closest month within ±12 months that has real data
-    best_amount = 0.0
-    best_distance = 999
-    best_basis = None
-    for offset in range(1, 13):
-        for direction in (-1, 1):
-            search_m = month + offset * direction
-            search_y = year
-            while search_m < 1:
-                search_m += 12
-                search_y -= 1
-            while search_m > 12:
-                search_m -= 12
-                search_y += 1
-            amt = _get_real_electricity(branch_id, search_y, search_m, db)
-            if amt > 0 and offset < best_distance:
-                best_amount = amt
-                best_distance = offset
-                best_basis = f'{search_m:02d}/{search_y}'
-                break  # found for this offset, no need to check other direction at same distance
-        if best_distance <= offset:
-            break  # found something at this distance, no need to search further
-    if best_amount > 0:
-        return {'amount': best_amount, 'source': 'estimate', 'estimate_basis': best_basis}
+
+    # Not configured at all
     return {'amount': 0, 'source': 'none', 'estimate_basis': None}
 
 
@@ -2408,6 +2429,153 @@ def api_admin_branch_update(branch_id):
     return jsonify({'ok': True})
 
 
+# ── Manual electricity endpoints ──────────────────────────────────────────
+
+@app.route('/api/electricity/manual', methods=['POST'])
+@login_required
+def api_electricity_manual_create():
+    """Create or update a manual electricity entry for a month."""
+    branch_id = get_branch_id()
+    data = request.get_json(force=True)
+    month = data.get('month', '').strip()
+    amount = data.get('amount')
+    if not month or amount is None:
+        return jsonify({'error': 'month and amount required'}), 400
+    try:
+        amount = round(float(amount), 2)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'invalid amount'}), 400
+
+    db = get_db()
+    branch = db.execute(
+        "SELECT electricity_source FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    elec_source = branch['electricity_source'] if branch else None
+
+    if elec_source == 'iec':
+        return jsonify({'error': 'Branch is on IEC mode. Switch source first.'}), 409
+
+    # Upsert manual entry
+    existing = db.execute(
+        "SELECT id FROM electricity_invoices WHERE branch_id = ? AND source = 'manual' AND month = ?",
+        (branch_id, month)
+    ).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE electricity_invoices SET amount = ? WHERE id = ?",
+            (amount, existing['id'])
+        )
+    else:
+        db.execute(
+            "INSERT INTO electricity_invoices (branch_id, amount, source, month, period_label) VALUES (?, ?, 'manual', ?, ?)",
+            (branch_id, amount, month, month)
+        )
+
+    # Auto-set source to 'manual' if not yet configured
+    if elec_source is None:
+        db.execute("UPDATE branches SET electricity_source = 'manual' WHERE id = ?", (branch_id,))
+
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/electricity/manual/<int:entry_id>', methods=['PUT'])
+@login_required
+def api_electricity_manual_update(entry_id):
+    """Edit an existing manual electricity entry."""
+    branch_id = get_branch_id()
+    data = request.get_json(force=True)
+    amount = data.get('amount')
+    if amount is None:
+        return jsonify({'error': 'amount required'}), 400
+    try:
+        amount = round(float(amount), 2)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'invalid amount'}), 400
+
+    db = get_db()
+    row = db.execute(
+        "SELECT id, source FROM electricity_invoices WHERE id = ? AND branch_id = ?",
+        (entry_id, branch_id)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    if row['source'] != 'manual':
+        return jsonify({'error': 'Cannot edit IEC entries via manual endpoint'}), 403
+
+    db.execute("UPDATE electricity_invoices SET amount = ? WHERE id = ?", (amount, entry_id))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/electricity/source', methods=['POST'])
+@login_required
+def api_electricity_source_switch():
+    """Switch electricity source between 'iec' and 'manual'. Future-only."""
+    branch_id = get_branch_id()
+    data = request.get_json(force=True)
+    new_source = data.get('source', '').strip()
+    if new_source not in ('iec', 'manual'):
+        return jsonify({'error': "source must be 'iec' or 'manual'"}), 400
+
+    db = get_db()
+    db.execute("UPDATE branches SET electricity_source = ? WHERE id = ?", (new_source, branch_id))
+    db.commit()
+    return jsonify({'ok': True, 'source': new_source})
+
+
+@app.route('/api/electricity/status')
+@login_required
+def api_electricity_status():
+    """Return electricity configuration status for the branch."""
+    branch_id = get_branch_id()
+    db = get_db()
+    branch = db.execute(
+        "SELECT electricity_source, iec_token, iec_last_sync_at FROM branches WHERE id = ?", (branch_id,)
+    ).fetchone()
+    elec_source = branch['electricity_source'] if branch else None
+
+    try:
+        latest = db.execute(
+            "SELECT month FROM electricity_invoices WHERE branch_id = ? ORDER BY month DESC, due_date DESC LIMIT 1",
+            (branch_id,)
+        ).fetchone()
+    except Exception:
+        latest = None
+
+    # Find months with manual entries for current year
+    current_year = _now_il().year
+    try:
+        manual_months = [r['month'] for r in db.execute(
+            "SELECT DISTINCT month FROM electricity_invoices WHERE branch_id = ? AND source = 'manual' AND month LIKE ?",
+            (branch_id, f'{current_year}-%')
+        ).fetchall()]
+    except Exception:
+        manual_months = []
+
+    return jsonify({
+        'branch_id': branch_id,
+        'source': elec_source,
+        'has_iec_token': bool(branch and branch['iec_token']),
+        'latest_month_with_data': latest['month'] if latest and latest['month'] else None,
+        'manual_months_this_year': manual_months,
+    })
+
+
+@app.route('/api/electricity/history')
+@login_required
+def api_electricity_history():
+    """Return all electricity entries for the branch, for history display."""
+    branch_id = get_branch_id()
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
+        "FROM electricity_invoices WHERE branch_id = ? ORDER BY COALESCE(month, due_date) DESC",
+        (branch_id,)
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 # ── IEC status & accuracy endpoints ─────────────────────────────────────
 
 @app.route('/api/iec-status')
@@ -2866,7 +3034,8 @@ def iec_onboard_save():
     try:
         db = get_db()
         db.execute('''
-            UPDATE branches SET iec_user_id = ?, iec_token = ?, iec_bp_number = ?, iec_contract_id = ?
+            UPDATE branches SET iec_user_id = ?, iec_token = ?, iec_bp_number = ?, iec_contract_id = ?,
+                   electricity_source = 'iec'
             WHERE id = ?
         ''', (result.get('iec_user_id'), result.get('iec_token'),
               result.get('iec_bp_number'), contract_id, branch_id))
