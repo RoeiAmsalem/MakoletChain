@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}MakoletChain{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ static_v('css/style.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
@@ -12,7 +12,7 @@
 <nav class="navbar">
     <div class="navbar-top" style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
         <a href="/" class="navbar-brand" style="text-decoration:none;">
-            <img src="{{ url_for('static', filename='makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
+            <img src="{{ static_v('makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
             <span class="store-name">{{ branch_name }}</span>
         </a>
         {% if session.get('user_role') == 'admin' or (session.get('user_branches') and session['user_branches']|length > 1) %}
@@ -109,7 +109,7 @@ document.getElementById('hamburger').addEventListener('click', function() {
 });
 </script>
 
-<script src="{{ url_for('static', filename='dialog.js') }}?v=1"></script>
+<script src="{{ static_v('dialog.js') }}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
