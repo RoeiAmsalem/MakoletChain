@@ -230,7 +230,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script src="{{ static_v('js/charts.js') }}"></script>
 <script>
 'use strict';
 const SELECTED_MONTH = {{ selected_month | tojson }};

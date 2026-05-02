@@ -29,6 +29,18 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-change-in-production')
 
+
+def static_v(path: str) -> str:
+    """Return /static/{path}?v={mtime} for cache-busting on deploys."""
+    try:
+        mtime = int(os.path.getmtime(os.path.join(app.static_folder, path)))
+    except OSError:
+        mtime = 0
+    return f"/static/{path}?v={mtime}"
+
+
+app.jinja_env.globals['static_v'] = static_v
+
 DB_PATH = os.path.join(os.path.dirname(__file__), 'db', 'makolet_chain.db')
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), 'db', 'schema.sql')
 IL_TZ = ZoneInfo('Asia/Jerusalem')
