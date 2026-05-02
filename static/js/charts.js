@@ -91,12 +91,24 @@ function loadLiveSales() {
                 el.textContent = '₪ ' + d.amount.toLocaleString('he-IL', {minimumFractionDigits: 0});
                 el.className = 'kpi-value profit';
                 document.getElementById('live-sub').textContent = (d.transactions || 0) + ' עסקאות';
+                const basketEl = document.getElementById('live-basket');
+                if (basketEl) {
+                    if (d.transactions && d.transactions > 0) {
+                        basketEl.textContent = 'סל ממוצע: ₪' + (d.amount / d.transactions).toFixed(2);
+                        basketEl.style.display = '';
+                    } else {
+                        basketEl.textContent = '';
+                        basketEl.style.display = 'none';
+                    }
+                }
                 const timeOnly = d.last_updated ? d.last_updated.split(' ')[0] : '';
                 document.getElementById('live-updated').textContent = timeOnly ? 'עודכן: ' + timeOnly : '';
             } else {
                 el.textContent = 'אין נתונים';
                 el.className = 'kpi-value';
                 document.getElementById('live-sub').textContent = '';
+                const basketElNone = document.getElementById('live-basket');
+                if (basketElNone) { basketElNone.textContent = ''; basketElNone.style.display = 'none'; }
                 document.getElementById('live-updated').textContent = '';
             }
             // Also refresh summary tiles (income includes live data)
