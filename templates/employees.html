@@ -351,8 +351,8 @@
                 </div>
             </div>
             <div class="form-group">
-                <label>תעריף שעתי (₪)</label>
-                <input type="number" id="new-emp-rate" placeholder="0" min="0" step="0.5">
+                <label>תעריף שעתי (₪) <span style="color:#fca5a5">*</span></label>
+                <input type="number" id="new-emp-rate" placeholder="40" min="0.5" step="0.5" required>
             </div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeNewModal()">ביטול</button>
@@ -374,7 +374,27 @@
 'use strict';
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
+const BRANCH_NAME = {{ branch_name | tojson }};
 const monthLabel = {{ month_display | tojson }};
+
+// Mirror of agents/_employee_matching._clean_name — strips numeric ID prefix
+// and store-name suffix from a raw Aviv/CSV employee name.
+function cleanEmployeeName(raw) {
+    if (!raw) return '';
+    let s = String(raw).trim();
+    // Strip leading numeric ID + whitespace ("551 אגם צאצאן" -> "אגם צאצאן")
+    s = s.replace(/^\d+\s+/, '');
+    const storeWords = new Set(['איינשטיין', 'אינשטיין', 'einstein']);
+    if (BRANCH_NAME) {
+        storeWords.add(BRANCH_NAME.trim());
+        BRANCH_NAME.trim().split(/\s+/).forEach(w => w && storeWords.add(w));
+    }
+    let words = s.split(/\s+/).filter(Boolean);
+    while (words.length && storeWords.has(words[words.length - 1])) {
+        words.pop();
+    }
+    return words.join(' ').trim();
+}
 document.getElementById('month-label').textContent = monthLabel;
 
 let ALL_EMPLOYEES = [];
@@ -868,7 +888,7 @@ async function loadPendingMatches() {
             banner.style.display = '';
             document.getElementById('unknown-count').textContent = unknowns.length;
             document.getElementById('unknown-list').innerHTML = unknowns.map(p => {
-                const srcLabel = p.source === 'aviv_api' ? 'Aviv' : 'CSV';
+                const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
                 const escapedName = p.csv_name.replace(/'/g, "\\'");
                 return `<div id="pending-${p.id}" style="background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.2); border-radius:8px; padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
                   <div>
@@ -905,7 +925,7 @@ async function loadPendingMatches() {
                 `<option value="${e.id}" ${e.id === p.suggested_employee_id ? 'selected' : ''}>${e.name} (₪${e.hourly_rate}/שעה)</option>`
             ).join('');
 
-            const srcLabel = p.source === 'aviv_api' ? 'Aviv' : 'CSV';
+            const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
             return `<div class="pending-row" id="pending-${p.id}">
                 <div class="pending-info">
                     <div class="pending-csv-name">${p.csv_name}</div>
@@ -968,11 +988,13 @@ async function reassignPending(id) {
 
 function openNewFromPending(pendingId, csvName) {
     document.getElementById('new-pending-id').value = pendingId;
-    document.getElementById('new-emp-name').value = csvName;
+    // Strip "551 " ID prefix and trailing store suffix before pre-filling.
+    const cleaned = cleanEmployeeName(csvName) || csvName;
+    document.getElementById('new-emp-name').value = cleaned;
     document.getElementById('new-emp-rate').value = '';
     document.querySelector('input[name="new-emp-role"][value="ערב"]').checked = true;
     document.getElementById('new-emp-modal').classList.add('open');
-    document.getElementById('new-emp-name').focus();
+    document.getElementById('new-emp-rate').focus();
 }
 
 async function dismissUnknown(pendingId) {

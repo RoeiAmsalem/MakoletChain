@@ -49,8 +49,16 @@ class TestParseEmployerReport(unittest.TestCase):
     def test_six_employees(self):
         self.assertEqual(len(self.parsed), 6)
 
-    def test_first_employee_name(self):
-        self.assertEqual(self.parsed[0]['raw_name'], '551 אגם צאצאן תיכון')
+    def test_first_employee_name_strips_id_prefix(self):
+        self.assertEqual(self.parsed[0]['raw_name'], 'אגם צאצאן תיכון')
+        self.assertEqual(self.parsed[0]['aviv_employee_id'], 551)
+
+    def test_all_employees_have_aviv_id(self):
+        ids = [p['aviv_employee_id'] for p in self.parsed]
+        self.assertEqual(sorted(ids), [551, 585, 712, 732, 733, 734])
+        for p in self.parsed:
+            self.assertFalse(p['raw_name'].split()[0].isdigit(),
+                             f"raw_name still has prefix: {p['raw_name']}")
 
     def test_total_hours_sum(self):
         # subtotals in fixture: 49:26 + 108:34 + 47:22 + 106:42 + 40:14 + 35:24 = 387:42 = 387.7
@@ -62,8 +70,8 @@ class TestParseEmployerReport(unittest.TestCase):
         total_open = sum(p['open_shift_count'] for p in self.parsed)
         self.assertEqual(total_open, 2)
         by_name = {p['raw_name']: p for p in self.parsed}
-        self.assertEqual(by_name['732 דביר פישר תיכון']['open_shift_count'], 1)
-        self.assertEqual(by_name['733 דוד דהן תיכון']['open_shift_count'], 1)
+        self.assertEqual(by_name['דביר פישר תיכון']['open_shift_count'], 1)
+        self.assertEqual(by_name['דוד דהן תיכון']['open_shift_count'], 1)
 
     def test_each_has_shift_count(self):
         for p in self.parsed:
@@ -187,12 +195,12 @@ class TestUpdateEmployeeHours(unittest.TestCase):
 
     def _parsed(self):
         return [
-            {'raw_name': '551 אגם צאצאן תיכון', 'total_hours': 49.4333,
-             'shift_count': 8, 'open_shift_count': 0},
-            {'raw_name': '732 דביר פישר תיכון', 'total_hours': 106.7,
-             'shift_count': 14, 'open_shift_count': 1},
-            {'raw_name': '999 רנדומלי תיכון', 'total_hours': 10.0,
-             'shift_count': 1, 'open_shift_count': 0},
+            {'raw_name': 'אגם צאצאן תיכון', 'aviv_employee_id': 551,
+             'total_hours': 49.4333, 'shift_count': 8, 'open_shift_count': 0},
+            {'raw_name': 'דביר פישר תיכון', 'aviv_employee_id': 732,
+             'total_hours': 106.7, 'shift_count': 14, 'open_shift_count': 1},
+            {'raw_name': 'רנדומלי תיכון', 'aviv_employee_id': 999,
+             'total_hours': 10.0, 'shift_count': 1, 'open_shift_count': 0},
         ]
 
     def test_basic_apply(self):
@@ -213,10 +221,12 @@ class TestUpdateEmployeeHours(unittest.TestCase):
             self.assertEqual(r['source'], 'aviv_report')
 
         pend = self.conn.execute(
-            "SELECT csv_name FROM employee_match_pending WHERE branch_id=127"
+            "SELECT csv_name, aviv_employee_id, source FROM employee_match_pending WHERE branch_id=127"
         ).fetchall()
         self.assertEqual(len(pend), 1)
-        self.assertEqual(pend[0]['csv_name'], '999 רנדומלי תיכון')
+        self.assertEqual(pend[0]['csv_name'], 'רנדומלי תיכון')
+        self.assertEqual(pend[0]['aviv_employee_id'], 999)
+        self.assertEqual(pend[0]['source'], 'aviv_report')
 
     def test_does_not_touch_aviv_api_rows(self):
         """aviv_api rows for OTHER employees in same month must not be deleted."""

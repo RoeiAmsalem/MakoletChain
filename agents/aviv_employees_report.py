@@ -150,8 +150,25 @@ def parse_hh_mm(s) -> float:
         return 0.0
 
 
+def _split_id_prefix(raw: str) -> tuple[int | None, str]:
+    """'551 אגם צאצאן תיכון' -> (551, 'אגם צאצאן תיכון').
+
+    If the first whitespace-separated token is purely digits, treat it as the
+    Aviv employee_id and return the rest of the string. Otherwise return
+    (None, raw_unchanged). Store suffix (e.g. 'תיכון') is left intact for the
+    matcher to handle.
+    """
+    raw = (raw or '').strip()
+    if not raw:
+        return None, raw
+    parts = raw.split(None, 1)
+    if len(parts) == 2 and parts[0].isdigit():
+        return int(parts[0]), parts[1].strip()
+    return None, raw
+
+
 def parse_employer_report(xls_bytes: bytes) -> list[dict]:
-    """Parse legacy .xls → list of {raw_name, total_hours, shift_count, open_shift_count}.
+    """Parse legacy .xls → list of {raw_name, aviv_employee_id, total_hours, shift_count, open_shift_count}.
 
     Sheet 0 has 9 columns; row 0 is header, then groups of rows per employee
     ending with a "סה''כ שורות N" subtotal row. Final row of file is a
@@ -161,6 +178,9 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
             continuation rows; "סה''כ שורות N" on subtotal rows.
     col 3 = "אין יציאה" on shifts with no clock-out.
     col 2 = "HH:MM" hours (can exceed 24h).
+
+    The numeric id prefix is split off into aviv_employee_id; raw_name keeps
+    the (possibly suffixed) name for downstream matching.
     """
     import xlrd
     wb = xlrd.open_workbook(file_contents=xls_bytes)
@@ -168,6 +188,7 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
 
     results: list[dict] = []
     current_name = None
+    current_aviv_id = None
     current_open = 0
 
     for i in range(1, sh.nrows):
@@ -176,27 +197,25 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
         col8 = str(sh.cell(i, 8).value).strip()
 
         if col8.startswith(SUBTOTAL_PREFIX):
-            # Subtotal row. If we have an in-progress employee, emit it.
-            # Otherwise this is the grand-total at end of file — skip.
             if current_name is not None:
                 m = re.search(r'(\d+)', col8)
                 shift_count = int(m.group(1)) if m else 0
                 results.append({
                     'raw_name': current_name,
+                    'aviv_employee_id': current_aviv_id,
                     'total_hours': round(parse_hh_mm(col2), 4),
                     'shift_count': shift_count,
                     'open_shift_count': current_open,
                 })
                 current_name = None
+                current_aviv_id = None
                 current_open = 0
             continue
 
         if col8:
-            # First row of a new employee group.
-            current_name = col8
+            current_aviv_id, current_name = _split_id_prefix(col8)
             current_open = 1 if col3 == NO_CLOCKOUT else 0
         else:
-            # Continuation row inside the current group.
             if col3 == NO_CLOCKOUT:
                 current_open += 1
 
@@ -226,6 +245,7 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
     for col_sql in (
         "ALTER TABLE employee_match_pending ADD COLUMN source TEXT DEFAULT 'csv'",
         "ALTER TABLE employee_match_pending ADD COLUMN is_new_employee INTEGER DEFAULT 0",
+        "ALTER TABLE employee_match_pending ADD COLUMN aviv_employee_id INTEGER",
     ):
         try:
             conn.execute(col_sql)
@@ -252,6 +272,7 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
 
     for row in parsed:
         raw_name = row['raw_name']
+        aviv_emp_id = row.get('aviv_employee_id')
         hours = float(row['total_hours'])
         open_shifts_total += int(row.get('open_shift_count', 0))
         total_hours += hours
@@ -282,10 +303,10 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
                 try:
                     conn.execute('''
                         INSERT INTO employee_match_pending
-                        (branch_id, month, csv_name, suggested_employee_id,
+                        (branch_id, month, csv_name, aviv_employee_id, suggested_employee_id,
                          confidence, hours, salary, source, is_new_employee)
-                        VALUES (?, ?, ?, ?, ?, ?, 0, 'aviv_report', ?)
-                    ''', (branch_id, month, raw_name, emp_id, confidence,
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'aviv_report', ?)
+                    ''', (branch_id, month, raw_name, aviv_emp_id, emp_id, confidence,
                           round(hours, 2), is_new))
                 except sqlite3.OperationalError:
                     # Schema variant — fall back to minimal insert
@@ -298,8 +319,8 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
                           round(hours, 2)))
             else:
                 conn.execute(
-                    'UPDATE employee_match_pending SET hours=? WHERE id=?',
-                    (round(hours, 2), existing[0]))
+                    'UPDATE employee_match_pending SET hours=?, aviv_employee_id=COALESCE(?, aviv_employee_id) WHERE id=?',
+                    (round(hours, 2), aviv_emp_id, existing[0]))
 
     conn.commit()
 

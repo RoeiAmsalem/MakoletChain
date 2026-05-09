@@ -59,12 +59,14 @@ def test_salary_calculation_api_only():
     func_start = content.find('def _calculate_salary_cost')
     func_end = content.find('\ndef ', func_start + 1)
     func_body = content[func_start:func_end]
-    # Should NOT have an else branch that queries without source filter
-    assert "WHERE eh.branch_id = ? AND eh.month = ?\n" not in func_body, \
-        "_calculate_salary_cost should not have unfiltered query"
-    assert "AND eh.source = 'aviv_api'" in func_body, \
-        "_calculate_salary_cost should filter by aviv_api"
-    print("PASS: _calculate_salary_cost uses API-only")
+    # Must still gate by aviv_api / aviv_report (no unfiltered fallback path).
+    assert "eh.source IN ('aviv_api', 'aviv_report')" in func_body \
+           or "AND eh.source = 'aviv_api'" in func_body, \
+        "_calculate_salary_cost must filter by aviv_api/aviv_report"
+    # No bare CSV-fallback query should re-appear.
+    assert "WHERE eh.branch_id = ? AND eh.month = ?\n        '''" not in func_body, \
+        "_calculate_salary_cost must not have an unfiltered query"
+    print("PASS: _calculate_salary_cost uses API-only (aviv_api + aviv_report)")
 
 
 def test_employees_template_no_csv_ui():

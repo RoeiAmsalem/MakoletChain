@@ -490,6 +490,7 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     db = get_db()
 
     # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
+    # UPDATED 2026-05-09: Include 'aviv_report' source (new employer-report agent).
     # Only include hours for ACTIVE employees (inactive employees excluded from salary).
     rows = db.execute('''
         SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
@@ -498,7 +499,8 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         JOIN employees e ON (
             e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
         )
-        WHERE eh.branch_id = ? AND eh.month = ? AND eh.source = 'aviv_api'
+        WHERE eh.branch_id = ? AND eh.month = ?
+          AND eh.source IN ('aviv_api', 'aviv_report')
     ''', (branch_id, current_month)).fetchall()
 
     if not rows:
@@ -516,7 +518,7 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         sources.add(r['source'] or 'unknown')
 
     # Determine source label
-    has_api = 'aviv_api' in sources
+    has_api = ('aviv_api' in sources) or ('aviv_report' in sources)
     has_csv = 'csv' in sources
     if has_api and has_csv:
         source = 'api+csv'
@@ -1183,6 +1185,7 @@ def api_employee_match_pending():
         FROM employee_match_pending p
         LEFT JOIN employees e ON e.id = p.suggested_employee_id
         WHERE p.branch_id = ? AND p.month = ? AND p.resolved = 0
+          AND COALESCE(p.source, 'csv') IN ('csv', 'aviv_api', 'aviv_report')
         ORDER BY p.hours DESC
     ''', (branch_id, month)).fetchall()
 
@@ -1360,23 +1363,41 @@ def api_pending_add_new(pending_id):
             (branch_id, name, hourly_rate, role, aviv_emp_id))
         new_emp_id = cur.lastrowid
 
-    # Save hours
-    hours = row['hours']
-    salary = round(hours * hourly_rate, 2)
+    # Promote hours from EVERY unresolved pending row that shares the same
+    # (branch_id, csv_name, source) — this covers the case where the same
+    # person has rows for both current and previous month.
     source = 'aviv_api'
     try:
         source = row['source'] or 'csv'
     except (IndexError, KeyError):
         pass
+    csv_name = (row['csv_name'] or '').strip()
 
-    db.execute(
-        "INSERT OR REPLACE INTO employee_hours "
-        "(branch_id, month, employee_name, total_hours, total_salary, source) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (branch_id, row['month'], name, hours, salary, source))
+    sibling_rows = db.execute(
+        "SELECT id, month, hours FROM employee_match_pending "
+        "WHERE branch_id=? AND csv_name=? AND COALESCE(source,'csv')=? AND resolved=0",
+        (branch_id, csv_name, source)).fetchall()
+    if not sibling_rows:
+        # Defensive: at minimum process the row the user clicked.
+        sibling_rows = [row]
+
+    promoted_months = []
+    total_promoted_hours = 0.0
+    for sib in sibling_rows:
+        sib_hours = float(sib['hours'] or 0)
+        sib_month = sib['month']
+        sib_id = sib['id']
+        sib_salary = round(sib_hours * hourly_rate, 2)
+        db.execute(
+            "INSERT OR REPLACE INTO employee_hours "
+            "(branch_id, month, employee_name, total_hours, total_salary, source) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (branch_id, sib_month, name, sib_hours, sib_salary, source))
+        db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (sib_id,))
+        promoted_months.append(sib_month)
+        total_promoted_hours += sib_hours
 
     # Always create alias for the original Aviv/CSV name (prevents re-flagging)
-    csv_name = (row['csv_name'] or '').strip()
     if csv_name:
         db.execute(
             'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
@@ -1387,11 +1408,15 @@ def api_pending_add_new(pending_id):
                 'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
                 (new_emp_id, name, branch_id))
 
-    db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (pending_id,))
     _recalculate_avg_rate(branch_id, db)
     db.commit()
 
-    return jsonify({'ok': True, 'employee_id': new_emp_id})
+    return jsonify({
+        'ok': True,
+        'employee_id': new_emp_id,
+        'promoted_months': promoted_months,
+        'promoted_hours': round(total_promoted_hours, 2),
+    })
 
 
 @app.route('/api/labor-cost-ratio')
