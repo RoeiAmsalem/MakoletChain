@@ -69,6 +69,42 @@ def cmd_status(conn):
     print(f"\n{applied_count} applied, {pending_count} pending.")
 
 
+def _split_statements(sql):
+    """Split a migration SQL file into individual statements.
+
+    Strips line comments (-- ...) and splits on ';'. SQLite has no
+    'ADD COLUMN IF NOT EXISTS', so per-statement execution is needed to
+    let the caller skip 'duplicate column name' errors on DBs where a
+    column was already added at runtime by an agent.
+
+    Adequate for migration files (no string literals containing ';').
+    """
+    cleaned = []
+    for line in sql.split('\n'):
+        idx = line.find('--')
+        if idx >= 0:
+            line = line[:idx]
+        cleaned.append(line)
+    body = '\n'.join(cleaned)
+    return [s.strip() for s in body.split(';') if s.strip()]
+
+
+def _apply_sql(conn, sql):
+    """Run each statement in `sql`; treat 'duplicate column name' as a skip.
+
+    Any other OperationalError or exception propagates so the caller can
+    rollback the migration.
+    """
+    for stmt in _split_statements(sql):
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if 'duplicate column name' in str(e).lower():
+                print(f"\n  [skip] {e}", end="", flush=True)
+                continue
+            raise
+
+
 def cmd_apply(conn, dry_run=False):
     applied = get_applied(conn)
     files = get_migration_files()
@@ -91,7 +127,7 @@ def cmd_apply(conn, dry_run=False):
             with open(filepath, 'r') as fh:
                 sql = fh.read()
             conn.execute("BEGIN")
-            conn.executescript(sql)
+            _apply_sql(conn, sql)
             conn.execute("INSERT INTO _migrations (filename) VALUES (?)", (filename,))
             conn.commit()
             print("OK")

@@ -242,15 +242,6 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
         created_at TEXT DEFAULT (datetime('now')),
         UNIQUE(branch_id, alias_name)
     )''')
-    for col_sql in (
-        "ALTER TABLE employee_match_pending ADD COLUMN source TEXT DEFAULT 'csv'",
-        "ALTER TABLE employee_match_pending ADD COLUMN is_new_employee INTEGER DEFAULT 0",
-        "ALTER TABLE employee_match_pending ADD COLUMN aviv_employee_id INTEGER",
-    ):
-        try:
-            conn.execute(col_sql)
-        except sqlite3.OperationalError:
-            pass
 
     conn.execute(
         "DELETE FROM employee_hours WHERE branch_id=? AND month=? AND source='aviv_report'",
