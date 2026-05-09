@@ -135,17 +135,17 @@ def seed_admin():
     """Seed the admin user if not exists."""
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    existing = conn.execute("SELECT id FROM users WHERE email = ?", ('admin@makolet.com',)).fetchone()
+    existing = conn.execute("SELECT id FROM users WHERE email = ?", ('makoletdashboard@gmail.com',)).fetchone()
     if not existing:
         admin_password = os.environ.get('ADMIN_PASSWORD', secrets.token_urlsafe(16))
         pw_hash = generate_password_hash(admin_password)
         conn.execute(
             "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
-            ('מנהל ראשי', 'admin@makolet.com', pw_hash, 'admin')
+            ('מנהל ראשי', 'makoletdashboard@gmail.com', pw_hash, 'admin')
         )
         conn.commit()
         # Get user id
-        user_row = conn.execute("SELECT id FROM users WHERE email = ?", ('admin@makolet.com',)).fetchone()
+        user_row = conn.execute("SELECT id FROM users WHERE email = ?", ('makoletdashboard@gmail.com',)).fetchone()
         if user_row:
             conn.execute(
                 "INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)",
