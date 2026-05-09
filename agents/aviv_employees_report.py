@@ -80,7 +80,11 @@ def fetch_report_list(aviv_branch_id: int, auth_token: str) -> list:
     if r.status_code == 401:
         raise AuthExpired('reports list 401')
     r.raise_for_status()
-    return r.json()
+    j = r.json()
+    # Aviv wraps the list in {"data": [...]} — unwrap to a list of categories.
+    if isinstance(j, dict):
+        return j.get('data', [])
+    return j
 
 
 def find_employer_report_id(reports: list) -> int:
