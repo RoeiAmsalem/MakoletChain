@@ -49,7 +49,7 @@ def client():
     conn.execute("INSERT OR REPLACE INTO branches (id, name, city, active) VALUES (127, 'התיכון', 'ירושלים', 1)")
     from werkzeug.security import generate_password_hash
     conn.execute(
-        "INSERT INTO users (id, name, email, password_hash, role, active) VALUES (1, 'CEO', 'admin@makolet.com', ?, 'admin', 1)",
+        "INSERT INTO users (id, name, email, password_hash, role, active) VALUES (1, 'CEO', 'makoletdashboard@gmail.com', ?, 'admin', 1)",
         (generate_password_hash('test123'),))
     conn.execute(
         "INSERT INTO users (id, name, email, password_hash, role, active) VALUES (2, 'Manager', 'mgr@test.com', ?, 'manager', 1)",
@@ -87,7 +87,7 @@ def client():
         os.remove(test_db)
 
 
-def _login(client, email='admin@makolet.com', password='test123'):
+def _login(client, email='makoletdashboard@gmail.com', password='test123'):
     """Helper to login and set session."""
     return client.post('/login', data={'email': email, 'password': password}, follow_redirects=True)
 

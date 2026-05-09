@@ -96,13 +96,13 @@ def test_admin_branch_create_stores_email_lowercase(client, tmp_path):
     pw_hash = generate_password_hash('admin123')
     conn.execute(
         "INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)",
-        ('Admin', 'admin@makolet.com', pw_hash, 'admin')
+        ('Admin', 'makoletdashboard@gmail.com', pw_hash, 'admin')
     )
     conn.commit()
     conn.close()
 
     # Login as admin
-    _login(client, 'admin@makolet.com', 'admin123')
+    _login(client, 'makoletdashboard@gmail.com', 'admin123')
 
     # Create branch with mixed-case manager email
     resp = client.post('/api/admin/branches', json={
