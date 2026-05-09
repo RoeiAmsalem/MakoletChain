@@ -25,16 +25,28 @@ Prompts use: Read CLAUDE.md first. and TASK N separators.
 
 - Provider: Hetzner CPX32, Helsinki
 - IP: 204.168.201.244
-- SSH alias: ssh makolet-chain
-- Path: /opt/makolet-chain
-- Services: makolet-chain (Flask) + makolet-chain-scheduler (APScheduler)
+- **Prod SSH alias: `ssh makolet-chain`** (this is THE prod target for this codebase)
+- **Prod path: `/opt/makolet-chain`**
+- **Prod services: `makolet-chain` (Flask) + `makolet-chain-scheduler` (APScheduler)** — both must be restarted on every deploy
+- Staging lives on the same box at `/opt/makolet-chain-staging` with services `makolet-chain-staging` / `makolet-chain-staging-scheduler`. Do not touch staging unless explicitly asked.
+- The `ssh makolet` alias (89.167.72.245, `/opt/makolet-dashboard/`) is a LEGACY single-tenant predecessor. It is NOT this codebase. Never deploy MakoletChain there.
 - Gunicorn: `-w 1 --threads 4` (single worker + threads) — required because IEC wizard holds session state in process memory (`_iec_wizard_sessions`). Do NOT increase `-w` without moving sessions to redis/sqlite first.
 
 ### Deploy Command
 
+Preferred (one-shot script):
+
+ssh makolet-chain '/opt/makolet-chain/deploy-prod.sh'
+
+The script git-pulls, pip-installs, runs `scripts/migrate.py`, and restarts `makolet-chain`. **Known gap: it does NOT restart `makolet-chain-scheduler`.** Whenever a deploy touches `scheduler.py` or any agent registered with APScheduler, follow the script with:
+
+ssh makolet-chain 'systemctl restart makolet-chain-scheduler'
+
+Manual fallback (equivalent to the script + scheduler restart):
+
 git add -A && git commit -m 'message'
 git push origin main
-ssh makolet-chain 'cd /opt/makolet-chain && git pull origin main && pip install -r requirements.txt --break-system-packages && systemctl restart makolet-chain && systemctl restart makolet-chain-scheduler'
+ssh makolet-chain 'cd /opt/makolet-chain && git pull origin main && pip install -r requirements.txt --break-system-packages && python scripts/migrate.py && systemctl restart makolet-chain && systemctl restart makolet-chain-scheduler'
 
 ### Web Stack
 
