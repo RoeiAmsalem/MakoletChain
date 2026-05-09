@@ -159,6 +159,32 @@ class OpsAvivReportAgentTest(unittest.TestCase):
         recent_agents = {r['agent'] for r in body['agent_runs']}
         self.assertIn('aviv_report', recent_agents)
 
+    def test_ops_salary_matches_calculate_salary_cost(self):
+        """/ops branch tile salary must equal _calculate_salary_cost output —
+        same single source of truth as /employees, no more drift."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        current = datetime.now(ZoneInfo('Asia/Jerusalem')).strftime('%Y-%m')
+
+        # Skip if seed data isn't for the current month — _calculate_salary_cost
+        # will return 0 and there's nothing to assert against.
+        if current != '2026-05':
+            self.skipTest('Seed data is for 2026-05 only')
+
+        # Compute expected via the canonical function inside an app context.
+        with self.app_module.app.app_context():
+            expected = self.app_module._calculate_salary_cost(127, current)
+
+        res = self.client.get('/api/ops-status')
+        self.assertEqual(res.status_code, 200)
+        branch = next(b for b in res.get_json()['branches'] if b['id'] == 127)
+
+        self.assertAlmostEqual(branch['salary_cost'], expected['amount'], places=1)
+        self.assertAlmostEqual(branch['salary_hours'], expected['hours'], places=1)
+        self.assertEqual(branch['salary_source'], expected['source'])
+        # Concrete: seed has 18.7h@aviv_api + 45.5h@aviv_report → both count post-fix.
+        self.assertGreater(branch['salary_cost'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
