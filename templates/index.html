@@ -206,6 +206,7 @@
             <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">שעות</th>
             <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">מכירות</th>
             <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">עסקאות</th>
+            <th style="padding:0.5rem 0.75rem; text-align:right; color:#94a3b8; font-weight:600; font-size:0.75rem;">ממוצע לעסקה</th>
           </tr>
         </thead>
         <tbody id="hourly-breakdown-tbody"></tbody>
@@ -633,7 +634,8 @@ async function loadHourlyChart() {
         `<td style="padding:0.4rem 0.75rem; color:${isTop ? '#f59e0b' : '#cbd5e1'}; font-weight:${isTop ? '700' : '400'};">${isTop ? '🏆 ' : ''}${rank}</td>` +
         `<td style="padding:0.4rem 0.75rem; color:#e2e8f0; direction:ltr; text-align:right;">${b.label.replace(/\u200e/g, '')}</td>` +
         `<td style="padding:0.4rem 0.75rem; color:#f1f5f9; font-weight:600;">₪${Math.round(b.total).toLocaleString()}</td>` +
-        `<td style="padding:0.4rem 0.75rem; color:#94a3b8;">${b.count}</td>`;
+        `<td style="padding:0.4rem 0.75rem; color:#94a3b8;">${b.count}</td>` +
+        `<td style="padding:0.4rem 0.75rem; color:#94a3b8;">${b.count ? '₪' + b.average.toFixed(1) : '—'}</td>`;
       tbody.appendChild(tr);
     });
     document.getElementById('hourly-table-wrap').style.display = 'block';

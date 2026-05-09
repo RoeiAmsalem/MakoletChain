@@ -854,7 +854,8 @@ def api_sales_by_hour():
             'end': end,
             'label': f'\u200E{start}-{end}',
             'total': round(total, 2),
-            'count': count
+            'count': count,
+            'average': round(total / count, 2) if count > 0 else 0,
         })
 
     # Stats
