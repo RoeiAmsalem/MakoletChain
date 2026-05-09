@@ -911,9 +911,10 @@ def api_employees_list():
 
     # Hours for this month from employee_hours
     # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
+    # UPDATED 2026-05-09: Include 'aviv_report' rows alongside 'aviv_api'.
     hours_rows = db.execute(
         "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
-        "WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
+        "WHERE branch_id = ? AND month = ? AND source IN ('aviv_api', 'aviv_report')",
         (branch_id, month)
     ).fetchall()
     hours_map = {r['employee_name']: dict(r) for r in hours_rows}
@@ -967,9 +968,11 @@ def api_employees_list():
         while (y, m2) <= (end_y, end_m):
             m_str = f'{y:04d}-{m2:02d}'
             # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
+            # UPDATED 2026-05-09: Include 'aviv_report' rows alongside 'aviv_api'.
             h_row = db.execute(
                 "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-                "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
+                "COUNT(*) as cnt FROM employee_hours "
+                "WHERE branch_id = ? AND month = ? AND source IN ('aviv_api', 'aviv_report')",
                 (branch_id, m_str)
             ).fetchone()
             h_hours = h_row['hours']
@@ -2017,7 +2020,7 @@ def api_ops_status():
         bid = b['id']
         # Last run per agent — exactly one row per agent
         agents_data = {}
-        for agent in ('bilboy', 'gmail', 'aviv_live'):
+        for agent in ('bilboy', 'gmail', 'aviv_live', 'aviv_report'):
             row = db.execute(
                 "SELECT status, message, started_at, duration_seconds, docs_count, amount "
                 "FROM agent_runs WHERE branch_id=? AND agent=? "

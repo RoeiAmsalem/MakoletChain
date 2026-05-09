@@ -399,7 +399,7 @@
 
 {% block scripts %}
 <script>
-const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', iec: 'IEC', aviv_employees: 'עובדים' };
+const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', iec: 'IEC', aviv_employees: 'עובדים', aviv_report: 'דוח עובדים' };
 const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
 const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
 
@@ -437,7 +437,7 @@ function renderBranches(branches) {
         return;
     }
     grid.innerHTML = branches.map(b => {
-        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_employees'].map(agent => {
+        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_employees', 'aviv_report'].map(agent => {
             const a = b.agents[agent];
             if (agent === 'iec' && !b.has_iec_token) {
                 return `<div class="agent-row"><span class="agent-name">IEC</span><span class="agent-msg" style="color:#64748b">לא מוגדר</span><button class="btn-action" style="padding:0.2rem 0.6rem;font-size:0.75rem;" onclick="iecWizard.open(${b.id},'${b.name.replace(/'/g,"\\'")}')">הגדר חשמל</button></div>`;
