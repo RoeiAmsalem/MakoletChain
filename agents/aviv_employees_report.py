@@ -1,20 +1,26 @@
-"""Fetches employee hours from Aviv BI's employer's report.
-Replaces aviv_employees.py once parser is implemented.
+"""Fetches employee hours from Aviv BI's employer's report (report id 301,
+"דוח נוכחות כללי-A4"). Runs in parallel with aviv_employees.py until cutover.
 
-Endpoint: GET https://bi1.aviv-pos.co.il:8443/avivbi/v2/reports?branch={aviv_branch_id}
-Auth: same as aviv_employees.py (login + refresh flow)
+Pipeline (3 HTTP calls on bi1.aviv-pos.co.il:8443):
+  1. POST /avivbi/v2/account/login        → auth token + aviv branch id
+  2. POST /avivbi/v2/reports/result/?branch=X with filters → JSON {url}
+  3. GET that url                         → legacy .xls (CFB) bytes
 
-Schedule (future — NOT wired yet):
-  - Sunday-Thursday: 16:00 + 23:30
-  - Friday: 20:00
-  - Saturday: 23:30
+Schedule (wired in scheduler.py):
+  - Sun-Thu 16:00 IL — current month only
+  - Sun-Thu 23:30 IL — current + previous month
+  - Fri 20:00 IL     — current month only
+  - Sat 23:30 IL     — current + previous month
 
-Status: SKELETON — all functions raise NotImplementedError until we capture
-the live API response during store hours and implement the parser.
+Each scheduled run does a full overwrite for source='aviv_report' rows.
 """
 
 import logging
 import os
+import re
+import sqlite3
+import time
+from datetime import date, datetime
 
 import requests
 import urllib3
@@ -28,11 +34,18 @@ log = logging.getLogger(__name__)
 BASE = 'https://bi1.aviv-pos.co.il:8443/avivbi/v2'
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 REPORTS_BASE = f'{BASE}/reports'
+EMPLOYER_REPORT_ID = 301
+
+SUBTOTAL_PREFIX = "סה''כ שורות"
+NO_CLOCKOUT = 'אין יציאה'
+
+
+class AuthExpired(Exception):
+    """Raised when Aviv returns 401 — caller should re-login and retry."""
 
 
 def _login(username, password):
     """Reuse same login flow as aviv_employees.py."""
-    import time
     r = requests.post(f'{BASE}/account/login',
                       json={'user': username, 'password': password},
                       timeout=15, verify=False)
@@ -45,9 +58,7 @@ def _login(username, password):
 
 
 def _refresh(token):
-    """Refresh auth token (single-use tokens)."""
-    import time
-    time.sleep(0.5)
+    time.sleep(0.3)
     r = requests.post(f'{BASE}/account/refresh',
                       headers={'Authtoken': token, 'Content-Type': 'application/json'},
                       json={}, timeout=10, verify=False)
@@ -57,7 +68,8 @@ def _refresh(token):
 def fetch_report_list(aviv_branch_id: int, auth_token: str) -> list:
     """Fetch list of available reports for a branch.
 
-    Returns list of report dicts. Empty list if POS is offline (404).
+    Returns list of category dicts (each has .reports). Empty list if POS is offline (404).
+    Raises AuthExpired on 401 so caller can re-login.
     """
     url = f'{REPORTS_BASE}?branch={aviv_branch_id}'
     headers = {'Authtoken': auth_token}
@@ -65,48 +77,364 @@ def fetch_report_list(aviv_branch_id: int, auth_token: str) -> list:
     if r.status_code == 404:
         log.info("Branch %s POS offline — no reports available", aviv_branch_id)
         return []
+    if r.status_code == 401:
+        raise AuthExpired('reports list 401')
     r.raise_for_status()
     return r.json()
 
 
-def find_employer_report_id(reports: list) -> int | None:
-    """Identify the employer's report from the report list.
+def find_employer_report_id(reports: list) -> int:
+    """Verify report 301 exists in the report list; return 301 if found."""
+    for category in reports:
+        for r in category.get('reports', []):
+            if r.get('id') == EMPLOYER_REPORT_ID:
+                return EMPLOYER_REPORT_ID
+    raise ValueError(f"Report {EMPLOYER_REPORT_ID} not in available report list")
 
-    TODO: Implement once we capture a real /reports response during store hours.
-    Likely matches by report name in Hebrew (e.g., "דוח מעסיק" or similar).
+
+def fetch_employer_report(aviv_branch_id: int, from_date: str, to_date: str,
+                          auth_token: str) -> bytes:
+    """POST to /reports/result, follow returned URL, return XLS bytes.
+
+    from_date / to_date: 'YYYY-MM-DD'. Server appends 00:00:00 / 23:59:59.
     """
-    raise NotImplementedError("Cannot identify employer report until we see real response shape")
+    filters = [
+        {"id": 1, "name": "fromDate;toDate", "filterType": "DATETIMERANGE",
+         "value": [f"{from_date} 00:00:00", f"{to_date} 23:59:59"]},
+        {"id": 1, "name": "DayOfWeek", "filterType": "MULTICHOICE", "value": []},
+        {"id": 2, "name": "inEmployeeId", "filterType": "MULTICHOICE", "value": []},
+        {"id": 3, "name": "showNumericHours", "filterType": "BOOLEAN", "value": False},
+        {"id": 4, "name": "ShowBreaks", "filterType": "BOOLEAN", "value": False},
+        {"id": 5, "name": "showChartBar", "filterType": "BOOLEAN", "value": True},
+        {"id": 6, "name": "showPerPage", "filterType": "BOOLEAN", "value": False},
+        {"id": 7, "name": "CmbFieldAgg", "filterType": "COMBO",
+         "value": {"key": 0, "value": "", "defaultValue": False}},
+        {"id": None, "name": "orderBy", "filterType": "SORTBY",
+         "value": {"defaultValue": True, "key": "w.user_id", "value": "מספר עובד"}},
+    ]
+    body = {"id": EMPLOYER_REPORT_ID, "outputType": "XLS", "filters": filters}
+    headers = {'Authtoken': auth_token, 'Content-Type': 'application/json'}
+
+    url = f'{BASE}/reports/result/?branch={aviv_branch_id}'
+    r = requests.post(url, json=body, headers=headers, timeout=60, verify=False)
+    if r.status_code == 401:
+        raise AuthExpired('reports/result 401')
+    r.raise_for_status()
+    j = r.json()
+    file_url = j.get('url')
+    if not file_url:
+        raise RuntimeError(f'reports/result missing url: {j}')
+
+    g = requests.get(file_url, headers=headers, timeout=30, verify=False)
+    g.raise_for_status()
+    return g.content
 
 
-def fetch_employer_report(aviv_branch_id: int, report_id: int, auth_token: str) -> bytes:
-    """Download the employer report file (likely Excel).
+def parse_hh_mm(s) -> float:
+    """'108:34' → 108.5667, '49:26' → 49.4333. Returns 0.0 on empty/invalid."""
+    if not s:
+        return 0.0
+    s = str(s).strip()
+    if ':' not in s:
+        return 0.0
+    parts = s.split(':')
+    try:
+        h = int(parts[0])
+        m = int(parts[1])
+        return h + m / 60.0
+    except (ValueError, IndexError):
+        return 0.0
 
-    TODO: Implement once we know the fetch URL pattern.
+
+def parse_employer_report(xls_bytes: bytes) -> list[dict]:
+    """Parse legacy .xls → list of {raw_name, total_hours, shift_count, open_shift_count}.
+
+    Sheet 0 has 9 columns; row 0 is header, then groups of rows per employee
+    ending with a "סה''כ שורות N" subtotal row. Final row of file is a
+    grand-total row which we skip.
+
+    col 8 = "{id} {name} {store_suffix}" on first row of each group; blank on
+            continuation rows; "סה''כ שורות N" on subtotal rows.
+    col 3 = "אין יציאה" on shifts with no clock-out.
+    col 2 = "HH:MM" hours (can exceed 24h).
     """
-    raise NotImplementedError("Cannot fetch report until we see real URL pattern")
+    import xlrd
+    wb = xlrd.open_workbook(file_contents=xls_bytes)
+    sh = wb.sheet_by_index(0)
+
+    results: list[dict] = []
+    current_name = None
+    current_open = 0
+
+    for i in range(1, sh.nrows):
+        col2 = str(sh.cell(i, 2).value).strip()
+        col3 = str(sh.cell(i, 3).value).strip()
+        col8 = str(sh.cell(i, 8).value).strip()
+
+        if col8.startswith(SUBTOTAL_PREFIX):
+            # Subtotal row. If we have an in-progress employee, emit it.
+            # Otherwise this is the grand-total at end of file — skip.
+            if current_name is not None:
+                m = re.search(r'(\d+)', col8)
+                shift_count = int(m.group(1)) if m else 0
+                results.append({
+                    'raw_name': current_name,
+                    'total_hours': round(parse_hh_mm(col2), 4),
+                    'shift_count': shift_count,
+                    'open_shift_count': current_open,
+                })
+                current_name = None
+                current_open = 0
+            continue
+
+        if col8:
+            # First row of a new employee group.
+            current_name = col8
+            current_open = 1 if col3 == NO_CLOCKOUT else 0
+        else:
+            # Continuation row inside the current group.
+            if col3 == NO_CLOCKOUT:
+                current_open += 1
+
+    return results
 
 
-def parse_employer_report(report_bytes: bytes) -> list[dict]:
-    """Parse report into list of {employee_name, hours, ...} dicts.
+def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) -> dict:
+    """Apply parsed report to employee_hours table for (branch_id, month).
 
-    TODO: Implement once we have a sample file.
-    Use openpyxl (already in requirements.txt).
+    Strategy: DELETE existing rows where source='aviv_report', then upsert each
+    parsed employee. Rows from source='aviv_api' are not deleted, but may be
+    overwritten via ON CONFLICT (UNIQUE is on branch_id+month+employee_name).
+
+    Unmatched names go into employee_match_pending for manager review (mirrors
+    aviv_employees.py behaviour) and are NOT inserted into employee_hours.
+
+    Returns: {matched, unmatched, open_shifts_total, total_hours, written_names}
     """
-    raise NotImplementedError("Cannot parse report until we see structure")
+    conn.execute('''CREATE TABLE IF NOT EXISTS employee_aliases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id INTEGER NOT NULL,
+        alias_name TEXT NOT NULL,
+        branch_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(branch_id, alias_name)
+    )''')
+    for col_sql in (
+        "ALTER TABLE employee_match_pending ADD COLUMN source TEXT DEFAULT 'csv'",
+        "ALTER TABLE employee_match_pending ADD COLUMN is_new_employee INTEGER DEFAULT 0",
+    ):
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass
+
+    conn.execute(
+        "DELETE FROM employee_hours WHERE branch_id=? AND month=? AND source='aviv_report'",
+        (branch_id, month))
+
+    branch_row = conn.execute('SELECT name FROM branches WHERE id=?', (branch_id,)).fetchone()
+    branch_name = branch_row[0] if branch_row else ''
+
+    db_employees_rows = conn.execute(
+        'SELECT id, name, hourly_rate FROM employees WHERE branch_id=? AND active=1',
+        (branch_id,)).fetchall()
+    db_employees = [{'id': r[0], 'name': r[1], 'hourly_rate': r[2]} for r in db_employees_rows]
+
+    matched = 0
+    unmatched = 0
+    open_shifts_total = 0
+    total_hours = 0.0
+    written_names: list[str] = []
+
+    for row in parsed:
+        raw_name = row['raw_name']
+        hours = float(row['total_hours'])
+        open_shifts_total += int(row.get('open_shift_count', 0))
+        total_hours += hours
+
+        emp_id, confidence, db_name, rate = match_employee_name(
+            raw_name, db_employees, branch_name, branch_id)
+
+        if confidence in ('exact', 'high') and emp_id and db_name:
+            salary = round(hours * (rate or 0), 2)
+            conn.execute('''
+                INSERT INTO employee_hours (branch_id, month, employee_name, total_hours, total_salary, source)
+                VALUES (?, ?, ?, ?, ?, 'aviv_report')
+                ON CONFLICT(branch_id, month, employee_name) DO UPDATE SET
+                    total_hours=excluded.total_hours,
+                    total_salary=excluded.total_salary,
+                    source='aviv_report'
+            ''', (branch_id, month, db_name, round(hours, 2), salary))
+            matched += 1
+            written_names.append(db_name)
+        else:
+            unmatched += 1
+            existing = conn.execute(
+                '''SELECT id FROM employee_match_pending
+                   WHERE branch_id=? AND month=? AND csv_name=? AND resolved=0''',
+                (branch_id, month, raw_name)).fetchone()
+            if not existing:
+                is_new = 1 if emp_id is None else 0
+                try:
+                    conn.execute('''
+                        INSERT INTO employee_match_pending
+                        (branch_id, month, csv_name, suggested_employee_id,
+                         confidence, hours, salary, source, is_new_employee)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, 'aviv_report', ?)
+                    ''', (branch_id, month, raw_name, emp_id, confidence,
+                          round(hours, 2), is_new))
+                except sqlite3.OperationalError:
+                    # Schema variant — fall back to minimal insert
+                    conn.execute('''
+                        INSERT INTO employee_match_pending
+                        (branch_id, month, csv_name, suggested_employee_id,
+                         confidence, hours, salary)
+                        VALUES (?, ?, ?, ?, ?, ?, 0)
+                    ''', (branch_id, month, raw_name, emp_id, confidence,
+                          round(hours, 2)))
+            else:
+                conn.execute(
+                    'UPDATE employee_match_pending SET hours=? WHERE id=?',
+                    (round(hours, 2), existing[0]))
+
+    conn.commit()
+
+    return {
+        'matched': matched,
+        'unmatched': unmatched,
+        'open_shifts_total': open_shifts_total,
+        'total_hours': round(total_hours, 2),
+        'written_names': written_names,
+    }
 
 
-def update_employee_hours(branch_id: int, parsed_rows: list[dict], conn) -> dict:
-    """Apply parsed report data to the DB.
+def _month_window(today: date, *, current: bool):
+    """Return (month_str, from_date, to_date) for current or previous month."""
+    if current:
+        first = today.replace(day=1)
+        return (today.strftime('%Y-%m'),
+                first.strftime('%Y-%m-%d'),
+                today.strftime('%Y-%m-%d'))
+    # previous month: full month
+    first_this = today.replace(day=1)
+    last_prev = first_this.replace(day=1)
+    # subtract one day to get last day of prev month
+    from datetime import timedelta
+    last_prev = first_this - timedelta(days=1)
+    first_prev = last_prev.replace(day=1)
+    return (last_prev.strftime('%Y-%m'),
+            first_prev.strftime('%Y-%m-%d'),
+            last_prev.strftime('%Y-%m-%d'))
 
-    Reuses match_employee_name() from _employee_matching for each row.
-    Returns: {matched: int, unmatched: int, errors: int}
+
+def run_for_branch(branch_id: int, include_previous_month: bool = False,
+                   today: date | None = None) -> dict:
+    """Main entry point per branch per scheduled run.
+
+    Always pulls current-month-to-date. When include_previous_month=True,
+    additionally re-pulls the entire previous month (used for 23:30 + Sat runs
+    so late corrections to clock-outs are captured).
     """
-    raise NotImplementedError("Implement after parser is done")
+    today = today or date.today()
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    branch = None
+    run_id = None
 
+    try:
+        cur = conn.execute(
+            "INSERT INTO agent_runs (branch_id, agent, status, started_at) "
+            "VALUES (?, 'aviv_report', 'running', datetime('now'))",
+            (branch_id,))
+        run_id = cur.lastrowid
+        conn.commit()
 
-def run_for_branch(branch_id: int) -> dict:
-    """Main entry point. Called by scheduler per branch."""
-    raise NotImplementedError("Wire after all components done")
+        branch = conn.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
+        if not branch or not branch['aviv_user_id']:
+            msg = 'No Aviv credentials'
+            conn.execute(
+                "UPDATE agent_runs SET status='error', message=?, finished_at=datetime('now') WHERE id=?",
+                (msg, run_id))
+            conn.commit()
+            return {'ok': False, 'error': msg}
+
+        password = branch['aviv_password'] or branch['aviv_user_id']
+        token, aviv_branch_id = _login(branch['aviv_user_id'], password)
+        token = _refresh(token)
+
+        reports = fetch_report_list(aviv_branch_id, token)
+        if not reports:
+            msg = 'POS offline, skipping'
+            conn.execute(
+                "UPDATE agent_runs SET status='success', message=?, finished_at=datetime('now') WHERE id=?",
+                (msg, run_id))
+            conn.commit()
+            log.info("branch=%d %s", branch_id, msg)
+            return {'ok': True, 'skipped': True, 'reason': 'pos_offline'}
+
+        find_employer_report_id(reports)  # raises if missing
+
+        windows = [_month_window(today, current=True)]
+        if include_previous_month:
+            windows.append(_month_window(today, current=False))
+
+        agg = {'matched': 0, 'unmatched': 0, 'open_shifts_total': 0,
+               'total_hours': 0.0, 'months': []}
+
+        for month_str, from_d, to_d in windows:
+            try:
+                xls_bytes = fetch_employer_report(aviv_branch_id, from_d, to_d, token)
+            except AuthExpired:
+                token, _ = _login(branch['aviv_user_id'], password)
+                token = _refresh(token)
+                xls_bytes = fetch_employer_report(aviv_branch_id, from_d, to_d, token)
+
+            parsed = parse_employer_report(xls_bytes)
+            res = update_employee_hours(branch_id, month_str, parsed, conn)
+            log.info("branch=%d month=%s matched=%d unmatched=%d open_shifts=%d total_hours=%.2f",
+                     branch_id, month_str, res['matched'], res['unmatched'],
+                     res['open_shifts_total'], res['total_hours'])
+            agg['matched'] += res['matched']
+            agg['unmatched'] += res['unmatched']
+            agg['open_shifts_total'] += res['open_shifts_total']
+            agg['total_hours'] += res['total_hours']
+            agg['months'].append({'month': month_str, **res})
+
+        msg = (f"matched={agg['matched']} unmatched={agg['unmatched']} "
+               f"open_shifts={agg['open_shifts_total']} hours={agg['total_hours']:.1f}")
+        conn.execute(
+            "UPDATE agent_runs SET status='success', docs_count=?, amount=?, "
+            "message=?, finished_at=datetime('now') WHERE id=?",
+            (agg['matched'], agg['total_hours'], msg, run_id))
+        conn.commit()
+
+        if agg['unmatched'] > 0 or agg['open_shifts_total'] >= 3:
+            try:
+                from utils.notify import notify
+                bname = branch['name'] if branch else f'Branch {branch_id}'
+                notify(
+                    f'Aviv employer report — {bname}',
+                    f"{agg['unmatched']} unmatched, {agg['open_shifts_total']} open shifts."
+                )
+            except Exception:
+                pass
+
+        return {'ok': True, **agg}
+
+    except Exception as e:
+        log.exception('aviv_report failed for branch %d', branch_id)
+        msg = str(e)[:200]
+        try:
+            if run_id:
+                conn.execute(
+                    "UPDATE agent_runs SET status='error', message=?, finished_at=datetime('now') WHERE id=?",
+                    (msg, run_id))
+                conn.commit()
+        except Exception:
+            pass
+        return {'ok': False, 'error': msg}
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':
@@ -115,8 +443,12 @@ if __name__ == '__main__':
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-    parser = argparse.ArgumentParser(description='Aviv employer report agent (skeleton)')
-    parser.add_argument('--branch-id', type=int, required=True)
-    args = parser.parse_args()
-    result = run_for_branch(args.branch_id)
+    ap = argparse.ArgumentParser(description='Aviv employer report agent')
+    ap.add_argument('--branch-id', type=int, required=True)
+    ap.add_argument('--include-previous', action='store_true',
+                    help='Also re-fetch previous full month')
+    args = ap.parse_args()
+
+    result = run_for_branch(args.branch_id, include_previous_month=args.include_previous)
     print(result)
+    sys.exit(0 if result.get('ok') else 1)

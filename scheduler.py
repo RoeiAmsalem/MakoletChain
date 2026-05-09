@@ -239,6 +239,68 @@ scheduler.add_job(
 )
 
 
+def run_aviv_report_all(include_previous_month: bool = False):
+    """Run aviv employer-report agent for all active branches with 30s jitter."""
+    import time
+    from agents.aviv_employees_report import run_for_branch
+    branches = get_active_branches()
+    log.info("=== Aviv employer-report run started for %d branches "
+             "(include_previous_month=%s) ===", len(branches), include_previous_month)
+    for idx, bid in enumerate(branches):
+        if idx > 0:
+            time.sleep(30)  # jitter to avoid thundering Aviv
+        log.info("Aviv employer-report for branch %d", bid)
+        try:
+            result = run_for_branch(bid, include_previous_month=include_previous_month)
+            log.info("Branch %d aviv_report: %s", bid, result)
+        except Exception as e:
+            log.error("Branch %d aviv_report failed: %s", bid, e)
+    log.info("=== Aviv employer-report run complete ===")
+
+
+def run_aviv_report_current():
+    run_aviv_report_all(include_previous_month=False)
+
+
+def run_aviv_report_with_prev():
+    run_aviv_report_all(include_previous_month=True)
+
+
+# Sun-Thu 16:00 IL — current month only
+scheduler.add_job(
+    func=run_aviv_report_current,
+    trigger=CronTrigger(day_of_week='sun,mon,tue,wed,thu', hour=16, minute=0,
+                        timezone=IL_TZ),
+    id='aviv_report_weekday_afternoon',
+    name='Aviv employer-report Sun-Thu 16:00',
+)
+
+# Sun-Thu 23:30 IL — current + previous month
+scheduler.add_job(
+    func=run_aviv_report_with_prev,
+    trigger=CronTrigger(day_of_week='sun,mon,tue,wed,thu', hour=23, minute=30,
+                        timezone=IL_TZ),
+    id='aviv_report_weekday_night',
+    name='Aviv employer-report Sun-Thu 23:30 (+prev month)',
+)
+
+# Friday 20:00 IL — current month only
+scheduler.add_job(
+    func=run_aviv_report_current,
+    trigger=CronTrigger(day_of_week='fri', hour=20, minute=0, timezone=IL_TZ),
+    id='aviv_report_friday',
+    name='Aviv employer-report Fri 20:00',
+)
+
+# Saturday 23:30 IL — current + previous month
+scheduler.add_job(
+    func=run_aviv_report_with_prev,
+    trigger=CronTrigger(day_of_week='sat', hour=23, minute=30, timezone=IL_TZ),
+    id='aviv_report_saturday',
+    name='Aviv employer-report Sat 23:30 (+prev month)',
+)
+
+
 def run_iec_sync():
     """06:00 — daily IEC electricity invoice sync via SSH to Israeli VPS.
 
