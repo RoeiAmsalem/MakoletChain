@@ -2013,6 +2013,7 @@ def _convert_run_times(row_dict):
 @_ceo_required
 def api_ops_status():
     db = get_db()
+    current_month = _now_il().strftime('%Y-%m')
     # Branches
     branches_rows = db.execute('SELECT id, name, city, active FROM branches WHERE active = 1').fetchall()
     branches = []
@@ -2086,11 +2087,20 @@ def api_ops_status():
             (bid,)
         ).fetchone()['cnt']
 
+        # Salary — single source of truth, same function /employees uses.
+        # /ops previously estimated salary as branches.hours_this_month *
+        # avg_hourly_rate (Aviv-scraped branch total) which double-counted
+        # vs the per-employee tracked sum on /employees. Reconcile here.
+        salary_data = _calculate_salary_cost(bid, current_month)
+
         branches.append({
             'id': bid, 'name': b['name'], 'city': b['city'],
             'status': overall, 'agents': agents_data,
             'avg_hourly_rate': rate_row['avg_hourly_rate'] if rate_row else 0,
             'hours_this_month': rate_row['hours_this_month'] if rate_row else 0,
+            'salary_cost': salary_data['amount'],
+            'salary_hours': salary_data['hours'],
+            'salary_source': salary_data['source'],
             'employees_with_rates': emp_rate_count,
             'has_iec_token': bool(has_iec),
         })
