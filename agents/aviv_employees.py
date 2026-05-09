@@ -79,10 +79,10 @@ def _match_employee(aviv_name, aviv_emp_id, db_employees, branch_name='', branch
 
     # Second: fuzzy name match (includes alias check)
     try:
-        from agents.gmail_agent import _match_employee_name
+        from agents._employee_matching import match_employee_name
         emp_list = [{'id': e['id'], 'name': e['name'], 'hourly_rate': e['hourly_rate']}
                     for e in db_employees]
-        emp_id, confidence, _, _ = _match_employee_name(aviv_name, emp_list, branch_name, branch_id)
+        emp_id, confidence, _, _ = match_employee_name(aviv_name, emp_list, branch_name, branch_id)
         return emp_id, confidence
     except Exception as e:
         log.warning("Fuzzy match failed for '%s': %s", aviv_name, e)
