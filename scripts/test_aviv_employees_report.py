@@ -159,7 +159,12 @@ def _make_test_db():
             hours REAL,
             salary REAL,
             created_at TEXT,
-            resolved INTEGER DEFAULT 0
+            resolved INTEGER DEFAULT 0,
+            -- Columns formalized by migrations/006_aviv_report_pending_columns.sql
+            aviv_employee_id INTEGER,
+            source TEXT DEFAULT 'csv',
+            is_new_employee INTEGER DEFAULT 0,
+            is_csv_only INTEGER DEFAULT 0
         );
         CREATE TABLE agent_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
