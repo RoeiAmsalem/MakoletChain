@@ -26,6 +26,18 @@ def _clean_name(name: str, branch_name: str = '') -> str:
     return ' '.join(words).strip()
 
 
+def strip_store_suffix(name: str, branch_name: str = '') -> str:
+    """Public wrapper for the suffix-strip step used during matching.
+
+    Used by the unmatched-path of aviv_employees_report so that pending rows
+    are stored with the same cleaned name the matcher used internally —
+    otherwise a name like 'זכאי זיני תיכון' gets stored verbatim into
+    employee_match_pending while 'זכאי זיני' is what the manager sees in
+    every other UI.
+    """
+    return _clean_name(name, branch_name)
+
+
 def _check_alias(csv_name: str, branch_id: int, db_employees: list):
     """Check employee_aliases table for a match. Returns (emp_id, confidence, name, rate) or None."""
     try:
