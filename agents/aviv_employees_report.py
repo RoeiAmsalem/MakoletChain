@@ -27,7 +27,7 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from agents._employee_matching import match_employee_name
+from agents._employee_matching import match_employee_name, strip_store_suffix
 
 log = logging.getLogger(__name__)
 
@@ -285,10 +285,14 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
             written_names.append(db_name)
         else:
             unmatched += 1
+            # Store the suffix-stripped name so pending rows match what the
+            # matcher (and manager UI) actually compares against. Matched-path
+            # already does this implicitly via match_employee_name → _clean_name.
+            stored_name = strip_store_suffix(raw_name, branch_name) or raw_name
             existing = conn.execute(
                 '''SELECT id FROM employee_match_pending
                    WHERE branch_id=? AND month=? AND csv_name=? AND resolved=0''',
-                (branch_id, month, raw_name)).fetchone()
+                (branch_id, month, stored_name)).fetchone()
             if not existing:
                 is_new = 1 if emp_id is None else 0
                 try:
@@ -297,7 +301,7 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
                         (branch_id, month, csv_name, aviv_employee_id, suggested_employee_id,
                          confidence, hours, salary, source, is_new_employee)
                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'aviv_report', ?)
-                    ''', (branch_id, month, raw_name, aviv_emp_id, emp_id, confidence,
+                    ''', (branch_id, month, stored_name, aviv_emp_id, emp_id, confidence,
                           round(hours, 2), is_new))
                 except sqlite3.OperationalError:
                     # Schema variant — fall back to minimal insert
@@ -306,7 +310,7 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
                         (branch_id, month, csv_name, suggested_employee_id,
                          confidence, hours, salary)
                         VALUES (?, ?, ?, ?, ?, ?, 0)
-                    ''', (branch_id, month, raw_name, emp_id, confidence,
+                    ''', (branch_id, month, stored_name, emp_id, confidence,
                           round(hours, 2)))
             else:
                 conn.execute(
@@ -352,6 +356,7 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
     so late corrections to clock-outs are captured).
     """
     today = today or date.today()
+    t0 = time.time()
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     branch = None
@@ -369,8 +374,9 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
         if not branch or not branch['aviv_user_id']:
             msg = 'No Aviv credentials'
             conn.execute(
-                "UPDATE agent_runs SET status='error', message=?, finished_at=datetime('now') WHERE id=?",
-                (msg, run_id))
+                "UPDATE agent_runs SET status='error', message=?, "
+                "finished_at=datetime('now'), duration_seconds=? WHERE id=?",
+                (msg, round(time.time() - t0, 2), run_id))
             conn.commit()
             return {'ok': False, 'error': msg}
 
@@ -382,8 +388,9 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
         if not reports:
             msg = 'POS offline, skipping'
             conn.execute(
-                "UPDATE agent_runs SET status='success', message=?, finished_at=datetime('now') WHERE id=?",
-                (msg, run_id))
+                "UPDATE agent_runs SET status='success', message=?, "
+                "finished_at=datetime('now'), duration_seconds=? WHERE id=?",
+                (msg, round(time.time() - t0, 2), run_id))
             conn.commit()
             log.info("branch=%d %s", branch_id, msg)
             return {'ok': True, 'skipped': True, 'reason': 'pos_offline'}
@@ -420,8 +427,9 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
                f"open_shifts={agg['open_shifts_total']} hours={agg['total_hours']:.1f}")
         conn.execute(
             "UPDATE agent_runs SET status='success', docs_count=?, amount=?, "
-            "message=?, finished_at=datetime('now') WHERE id=?",
-            (agg['matched'], agg['total_hours'], msg, run_id))
+            "message=?, finished_at=datetime('now'), duration_seconds=? WHERE id=?",
+            (agg['matched'], agg['total_hours'], msg,
+             round(time.time() - t0, 2), run_id))
         conn.commit()
 
         if agg['unmatched'] > 0 or agg['open_shifts_total'] >= 3:
@@ -443,8 +451,9 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
         try:
             if run_id:
                 conn.execute(
-                    "UPDATE agent_runs SET status='error', message=?, finished_at=datetime('now') WHERE id=?",
-                    (msg, run_id))
+                    "UPDATE agent_runs SET status='error', message=?, "
+                    "finished_at=datetime('now'), duration_seconds=? WHERE id=?",
+                    (msg, round(time.time() - t0, 2), run_id))
                 conn.commit()
         except Exception:
             pass

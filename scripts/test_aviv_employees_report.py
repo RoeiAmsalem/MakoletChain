@@ -229,9 +229,69 @@ class TestUpdateEmployeeHours(unittest.TestCase):
             "SELECT csv_name, aviv_employee_id, source FROM employee_match_pending WHERE branch_id=127"
         ).fetchall()
         self.assertEqual(len(pend), 1)
-        self.assertEqual(pend[0]['csv_name'], 'רנדומלי תיכון')
+        # Branch suffix 'תיכון' is stripped before insert into pending so the
+        # name matches what the matcher / manager UI displays elsewhere.
+        self.assertEqual(pend[0]['csv_name'], 'רנדומלי')
         self.assertEqual(pend[0]['aviv_employee_id'], 999)
         self.assertEqual(pend[0]['source'], 'aviv_report')
+
+    def test_unmatched_csv_name_has_suffix_stripped(self):
+        """Unmatched-path must call strip_store_suffix before pending insert.
+
+        Regression for prod pending row id=17 ('זכאי זיני תיכון', branch 127):
+        the matched-path strips 'תיכון', the unmatched-path used to store the
+        raw suffixed name verbatim.
+        """
+        from agents.aviv_employees_report import update_employee_hours
+        parsed = [{'raw_name': 'זכאי זיני תיכון', 'aviv_employee_id': 871,
+                   'total_hours': 12.5, 'shift_count': 2, 'open_shift_count': 0}]
+        update_employee_hours(127, '2026-04', parsed, self.conn)
+
+        row = self.conn.execute(
+            "SELECT csv_name FROM employee_match_pending WHERE branch_id=127 AND month='2026-04'"
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row['csv_name'], 'זכאי זיני')
+
+    def test_matched_path_unchanged(self):
+        """Matched-path still writes employees by their DB name, not the raw input."""
+        from agents.aviv_employees_report import update_employee_hours
+        parsed = [{'raw_name': 'אגם צאצאן תיכון', 'aviv_employee_id': 551,
+                   'total_hours': 49.43, 'shift_count': 8, 'open_shift_count': 0}]
+        res = update_employee_hours(127, '2026-05', parsed, self.conn)
+        self.assertEqual(res['matched'], 1)
+        self.assertEqual(res['unmatched'], 0)
+        row = self.conn.execute(
+            "SELECT employee_name FROM employee_hours "
+            "WHERE branch_id=127 AND month='2026-05' AND source='aviv_report'"
+        ).fetchone()
+        self.assertEqual(row['employee_name'], 'אגם צאצאן')
+
+    def test_duration_seconds_populated(self):
+        """run_for_branch must write duration_seconds (was NULL/0 in prod)."""
+        from agents import aviv_employees_report as m
+        with open(FIXTURE_PATH, 'rb') as f:
+            xls_bytes = f.read()
+
+        with _SharedConnContext(self.conn), \
+             patch.object(m, '_login', return_value=('tok', 99)), \
+             patch.object(m, '_refresh', return_value='tok'), \
+             patch.object(m, 'fetch_report_list',
+                           return_value=[{'reports': [{'id': 301}]}]), \
+             patch.object(m, 'fetch_employer_report', return_value=xls_bytes):
+            res = m.run_for_branch(127, today=date(2026, 5, 9))
+
+        self.assertTrue(res.get('ok'))
+        run = self.conn.execute(
+            "SELECT duration_seconds FROM agent_runs "
+            "WHERE agent='aviv_report' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        # The bug was that duration_seconds was never written, leaving the
+        # column NULL (rendered as 0 in /ops). With the fix the agent always
+        # populates it on the final UPDATE. Mocked tests run fast enough that
+        # the rounded value can be 0.0, so we only assert it is not NULL.
+        self.assertIsNotNone(run['duration_seconds'])
+        self.assertGreaterEqual(run['duration_seconds'], 0.0)
 
     def test_does_not_touch_aviv_api_rows(self):
         """aviv_api rows for OTHER employees in same month must not be deleted."""

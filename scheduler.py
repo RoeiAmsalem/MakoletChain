@@ -241,21 +241,31 @@ def cleanup_orphaned_runs():
     conn.close()
 
 
-# 15:00 — per-employee hours from Aviv BI API (midday snapshot)
-scheduler.add_job(
-    func=run_aviv_employees,
-    trigger=CronTrigger(hour=15, minute=0, timezone=IL_TZ),
-    id='aviv_employees_midday',
-    name='Aviv employees hours 15:00',
-)
-
-# 23:45 — per-employee hours from Aviv BI API (end of day)
-scheduler.add_job(
-    func=run_aviv_employees,
-    trigger=CronTrigger(hour=23, minute=45, timezone=IL_TZ),
-    id='aviv_employees',
-    name='Aviv employees hours 23:45',
-)
+# === DEPRECATED 2026-05-10 — replaced by aviv_employees_report agent ===
+# The old aviv_employees agent ran at 15:00 + 23:45 IL and clobbered new
+# aviv_employees_report rows because of UNIQUE(branch_id, month, employee_name)
+# in employee_hours. The 23:45 run landed 15 minutes after the 23:30
+# aviv_employees_report run and overwrote source='aviv_report' rows with
+# source='aviv_api' (audit 2026-05-10: 100% clobber on branch 126, 40% on 127).
+# Cutover to aviv_employees_report on 2026-05-10. Keep this block commented
+# for ~30 days; once monitoring confirms the new agent is stable, delete
+# agents/aviv_employees.py and these lines together.
+#
+# # 15:00 — per-employee hours from Aviv BI API (midday snapshot)
+# scheduler.add_job(
+#     func=run_aviv_employees,
+#     trigger=CronTrigger(hour=15, minute=0, timezone=IL_TZ),
+#     id='aviv_employees_midday',
+#     name='Aviv employees hours 15:00',
+# )
+#
+# # 23:45 — per-employee hours from Aviv BI API (end of day)
+# scheduler.add_job(
+#     func=run_aviv_employees,
+#     trigger=CronTrigger(hour=23, minute=45, timezone=IL_TZ),
+#     id='aviv_employees',
+#     name='Aviv employees hours 23:45',
+# )
 
 
 def run_aviv_report_all(include_previous_month: bool = False):
