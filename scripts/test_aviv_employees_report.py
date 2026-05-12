@@ -84,28 +84,82 @@ class TestParseEmployerReport(unittest.TestCase):
 
 
 class TestFetchReportList(unittest.TestCase):
-    @patch('agents.aviv_employees_report.requests.get')
-    def test_404_returns_empty(self, mock_get):
-        mock_get.return_value = MagicMock(status_code=404)
+    @patch('agents.aviv_employees_report.time.sleep')
+    @patch('agents.aviv_employees_report.requests.request')
+    def test_404_returns_empty(self, mock_req, mock_sleep):
+        # 404 retried 3x by _http_with_retry, then fetch_report_list returns [].
+        mock_req.return_value = MagicMock(status_code=404)
         from agents.aviv_employees_report import fetch_report_list
         self.assertEqual(fetch_report_list(3, 'tok'), [])
+        self.assertEqual(mock_req.call_count, 3)
 
-    @patch('agents.aviv_employees_report.requests.get')
-    def test_401_raises_auth_expired(self, mock_get):
-        mock_get.return_value = MagicMock(status_code=401)
+    @patch('agents.aviv_employees_report.requests.request')
+    def test_401_raises_auth_expired(self, mock_req):
+        mock_req.return_value = MagicMock(status_code=401)
         from agents.aviv_employees_report import fetch_report_list, AuthExpired
         with self.assertRaises(AuthExpired):
             fetch_report_list(3, 'tok')
+        self.assertEqual(mock_req.call_count, 1)
 
-    @patch('agents.aviv_employees_report.requests.get')
-    def test_200_returns_json(self, mock_get):
+    @patch('agents.aviv_employees_report.requests.request')
+    def test_200_returns_json(self, mock_req):
         resp = MagicMock(status_code=200)
         resp.json.return_value = [{'reports': [{'id': 301}]}]
         resp.raise_for_status = MagicMock()
-        mock_get.return_value = resp
+        mock_req.return_value = resp
         from agents.aviv_employees_report import fetch_report_list
         self.assertEqual(fetch_report_list(3, 'tok'),
                          [{'reports': [{'id': 301}]}])
+
+
+class TestHttpRetry(unittest.TestCase):
+    """Retry-with-backoff helper: 30s sleep on 4xx (non-401) / 5xx, max 3 tries."""
+
+    def _resp(self, status):
+        m = MagicMock(status_code=status)
+        m.raise_for_status = MagicMock()
+        return m
+
+    @patch('agents.aviv_employees_report.time.sleep')
+    @patch('agents.aviv_employees_report.requests.request')
+    def test_404_twice_then_200_succeeds(self, mock_req, mock_sleep):
+        mock_req.side_effect = [self._resp(404), self._resp(404), self._resp(200)]
+        from agents.aviv_employees_report import _http_with_retry
+        r = _http_with_retry('GET', 'http://x')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(mock_req.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+    @patch('agents.aviv_employees_report.time.sleep')
+    @patch('agents.aviv_employees_report.requests.request')
+    def test_401_no_retry_fail_fast(self, mock_req, mock_sleep):
+        mock_req.return_value = self._resp(401)
+        from agents.aviv_employees_report import _http_with_retry
+        r = _http_with_retry('GET', 'http://x')
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(mock_req.call_count, 1)
+        self.assertEqual(mock_sleep.call_count, 0)
+
+    @patch('agents.aviv_employees_report.time.sleep')
+    @patch('agents.aviv_employees_report.requests.request')
+    def test_500_three_times_returns_last_failure(self, mock_req, mock_sleep):
+        mock_req.side_effect = [self._resp(500), self._resp(500), self._resp(500)]
+        from agents.aviv_employees_report import _http_with_retry
+        r = _http_with_retry('GET', 'http://x')
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(mock_req.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+
+
+class TestEmployeesTemplateMessage(unittest.TestCase):
+    """Regression: empty-hours wording should not imply upload is pending."""
+
+    def test_new_no_hours_message_present(self):
+        path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'employees.html')
+        with open(path, encoding='utf-8') as f:
+            html = f.read()
+        self.assertIn('לא דווחו שעות באביב — בדוק שהעובד מופיע באביב POS', html)
+        self.assertNotIn('טרם הועלה דוח שעות', html)
 
 
 class TestFindEmployerReportId(unittest.TestCase):

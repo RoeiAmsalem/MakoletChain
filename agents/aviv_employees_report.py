@@ -44,6 +44,43 @@ class AuthExpired(Exception):
     """Raised when Aviv returns 401 — caller should re-login and retry."""
 
 
+RETRY_BACKOFF_SECONDS = 30
+RETRY_MAX_ATTEMPTS = 3
+
+
+def _http_with_retry(method, url, **kwargs):
+    """Retry on 4xx (except 401) / 5xx. 30s backoff. Max 3 attempts.
+
+    401 returns immediately (caller handles re-auth). Connection errors retry
+    too. Final attempt returns the last response or re-raises the last
+    connection error.
+    """
+    last_response = None
+    for attempt in range(RETRY_MAX_ATTEMPTS):
+        try:
+            r = requests.request(method, url, **kwargs)
+            last_response = r
+            if r.status_code == 401:
+                return r
+            if 400 <= r.status_code < 600:
+                if attempt < RETRY_MAX_ATTEMPTS - 1:
+                    log.warning(
+                        "aviv_report attempt %d failed (HTTP %d), retrying in %ds",
+                        attempt + 1, r.status_code, RETRY_BACKOFF_SECONDS)
+                    time.sleep(RETRY_BACKOFF_SECONDS)
+                    continue
+            return r
+        except requests.RequestException as e:
+            if attempt < RETRY_MAX_ATTEMPTS - 1:
+                log.warning(
+                    "aviv_report attempt %d connection error (%s), retrying in %ds",
+                    attempt + 1, e, RETRY_BACKOFF_SECONDS)
+                time.sleep(RETRY_BACKOFF_SECONDS)
+                continue
+            raise
+    return last_response
+
+
 def _login(username, password):
     """Reuse same login flow as aviv_employees.py."""
     r = requests.post(f'{BASE}/account/login',
@@ -73,7 +110,7 @@ def fetch_report_list(aviv_branch_id: int, auth_token: str) -> list:
     """
     url = f'{REPORTS_BASE}?branch={aviv_branch_id}'
     headers = {'Authtoken': auth_token}
-    r = requests.get(url, headers=headers, timeout=30, verify=False)
+    r = _http_with_retry('GET', url, headers=headers, timeout=30, verify=False)
     if r.status_code == 404:
         log.info("Branch %s POS offline — no reports available", aviv_branch_id)
         return []
@@ -120,7 +157,7 @@ def fetch_employer_report(aviv_branch_id: int, from_date: str, to_date: str,
     headers = {'Authtoken': auth_token, 'Content-Type': 'application/json'}
 
     url = f'{BASE}/reports/result/?branch={aviv_branch_id}'
-    r = requests.post(url, json=body, headers=headers, timeout=60, verify=False)
+    r = _http_with_retry('POST', url, json=body, headers=headers, timeout=60, verify=False)
     if r.status_code == 401:
         raise AuthExpired('reports/result 401')
     r.raise_for_status()
