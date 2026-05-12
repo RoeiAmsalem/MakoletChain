@@ -8,19 +8,20 @@ sees all branches via `/ops` and manages users/branches via `/admin/*`.
 
 ## CC Workflow Rules (read first)
 
-1. Always read this file at the start of a task.
-2. Prompts coming in from claude.ai will mark **PASTE INTO: [DEV/STAGING]** or
+1. Read `.claude-skills/lean-output/SKILL.md` at the start of every session for output formatting rules. Default to terse, structured output. Verbose only when explicitly requested.
+2. Always read this file at the start of a task.
+3. Prompts coming in from claude.ai will mark **PASTE INTO: [DEV/STAGING]** or
    **[PROD/MAIN]**. Respect that — never mix the two trees.
-3. Wrap prompt bodies in a single fenced code block. Use `TASK N` separators.
-4. **Deploy via git only** — never `rsync`/`scp`.
-5. **Schema changes via migrations only** — never ad-hoc `sqlite3` ALTER on the
+4. Wrap prompt bodies in a single fenced code block. Use `TASK N` separators.
+5. **Deploy via git only** — never `rsync`/`scp`.
+6. **Schema changes via migrations only** — never ad-hoc `sqlite3` ALTER on the
    server. (Migration 006 retroactively formalized the few cases where this rule
    was broken historically.)
-6. After a deploy, verify by `grep`-ing the new code on the server and/or
+7. After a deploy, verify by `grep`-ing the new code on the server and/or
    hitting `/health`.
-7. Mixed Hebrew/English: keep a line break before/after each Hebrew chunk so
+8. Mixed Hebrew/English: keep a line break before/after each Hebrew chunk so
    diffs stay readable.
-8. Always commit when done.
+9. Always commit when done.
 
 ---
 
