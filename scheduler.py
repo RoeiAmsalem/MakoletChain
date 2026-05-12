@@ -365,6 +365,29 @@ scheduler.add_job(
 )
 
 
+def cleanup_old_user_events():
+    """Delete user_events older than 90 days (hard retention cap)."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        cur = conn.execute(
+            "DELETE FROM user_events WHERE created_at < datetime('now', '-90 days')"
+        )
+        conn.commit()
+        log.info("Cleaned up %d old user_events rows", cur.rowcount)
+        conn.close()
+    except Exception as e:
+        log.error("cleanup_old_user_events failed: %s", e)
+
+
+# 03:00 IL — daily user_events retention cleanup (90-day cap)
+scheduler.add_job(
+    func=cleanup_old_user_events,
+    trigger=CronTrigger(hour=3, minute=0, timezone=IL_TZ),
+    id='cleanup_user_events_daily',
+    name='Cleanup user_events older than 90 days',
+)
+
+
 if __name__ == '__main__':
     if os.getenv('ENABLE_AGENTS', 'true').lower() == 'false':
         log.info('[scheduler] ENABLE_AGENTS=false — skipping all agent scheduling')

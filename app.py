@@ -208,6 +208,53 @@ def send_reset_email(to_email: str, reset_url: str, user_name: str = ''):
 
 # ── Auth ──────────────────────────────────────────────────────
 
+def _record_event(event_type, page=None, branch_id=None, duration_seconds=None):
+    """Record a user_event. Admin events are silently dropped (per design).
+
+    MUST be silent on any failure — analytics must never break a user request.
+    """
+    try:
+        if 'user_id' not in session:
+            return
+        if session.get('user_role') == 'admin':
+            return
+        ua = request.headers.get('User-Agent', '') if request else ''
+        db = get_db()
+        db.execute(
+            'INSERT INTO user_events '
+            '(user_id, event_type, page, branch_id, duration_seconds, user_agent) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (session['user_id'], event_type, page, branch_id,
+             duration_seconds, ua[:255])
+        )
+        db.commit()
+    except Exception as e:
+        try:
+            app.logger.warning(f"_record_event failed: {e}")
+        except Exception:
+            pass
+
+
+@app.before_request
+def _track_page_view():
+    """Track authenticated GETs to HTML pages. Skips API, static, beacons."""
+    if request.method != 'GET':
+        return
+    path = request.path
+    if path.startswith('/api/'):
+        return
+    if path.startswith('/static/'):
+        return
+    if path == '/login' or path == '/logout':
+        return
+    if path == '/forgot-password' or path == '/reset-password':
+        return
+    if 'user_id' not in session:
+        return
+    branch_id = request.args.get('branch_id', type=int) or session.get('branch_id')
+    _record_event('page_view', page=path, branch_id=branch_id)
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -254,6 +301,7 @@ def login():
         if branch_ids:
             session['branch_id'] = branch_ids[0]
 
+        _record_event('login', branch_id=session.get('branch_id'))
         return redirect('/')
 
     return render_template('login.html', error='אימייל או סיסמה שגויים')
@@ -597,6 +645,26 @@ def _recalculate_avg_rate(branch_id: int, conn):
 
 
 # ── API Routes ───────────────────────────────────────────────
+
+@app.route('/api/events/heartbeat', methods=['POST'])
+@login_required
+def api_heartbeat():
+    """Time-on-page heartbeat. Fires every 30s + once on page-leave (beacon).
+    Duration is cumulative from page-load (not delta)."""
+    data = request.get_json(silent=True) or {}
+    page = data.get('page')
+    branch_id = data.get('branch_id')
+    duration = data.get('duration_seconds')
+    if not isinstance(duration, (int, float)) or duration < 0 or duration > 86400:
+        return '', 204
+    try:
+        bid = int(branch_id) if branch_id is not None else None
+    except (TypeError, ValueError):
+        bid = None
+    _record_event('heartbeat', page=page, branch_id=bid,
+                  duration_seconds=int(duration))
+    return '', 204
+
 
 @app.route('/api/branches')
 @login_required
