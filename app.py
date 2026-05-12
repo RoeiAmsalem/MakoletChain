@@ -45,6 +45,14 @@ DB_PATH = os.path.join(os.path.dirname(__file__), 'db', 'makolet_chain.db')
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), 'db', 'schema.sql')
 IL_TZ = ZoneInfo('Asia/Jerusalem')
 
+# Valid user roles.
+#   admin   — full access incl. /ops + /admin/*; sees every active branch.
+#   ceo     — sees every active branch automatically (no user_branches rows),
+#             but is blocked from /ops + /admin/*.
+#   manager — sees only branches listed in user_branches.
+VALID_ROLES = ('admin', 'ceo', 'manager')
+ROLES_ALL_BRANCHES = ('admin', 'ceo')
+
 HEBREW_MONTHS = {
     1: 'ינואר', 2: 'פברואר', 3: 'מרץ', 4: 'אפריל',
     5: 'מאי', 6: 'יוני', 7: 'יולי', 8: 'אוגוסט',
@@ -364,8 +372,8 @@ def get_branch_id():
     user_branches = session.get('user_branches', [])
     if user_branches:
         return user_branches[0]
-    # Admin with no user_branches rows: fall back to first branch in DB
-    if session.get('user_role') == 'admin':
+    # Admin/CEO have no user_branches rows: fall back to first branch in DB
+    if session.get('user_role') in ROLES_ALL_BRANCHES:
         db = get_db()
         row = db.execute('SELECT id FROM branches ORDER BY id LIMIT 1').fetchone()
         return row['id'] if row else None
@@ -379,7 +387,7 @@ def _get_branch_id():
         bid = int(bid)
         role = session.get('user_role')
         branches = session.get('user_branches', [])
-        if role == 'admin' or bid in branches:
+        if role in ROLES_ALL_BRANCHES or bid in branches:
             session['branch_id'] = bid
     return get_branch_id()
 
@@ -595,7 +603,8 @@ def _recalculate_avg_rate(branch_id: int, conn):
 def api_branches():
     db = get_db()
     role = session.get('user_role')
-    if role == 'admin':
+    if role in ROLES_ALL_BRANCHES:
+        # admin/ceo: every branch, no user_branches rows needed
         rows = db.execute('SELECT id, name, city, active FROM branches ORDER BY id').fetchall()
     else:
         user_branches = session.get('user_branches', [])
@@ -2022,7 +2031,9 @@ def api_sales_pdf_pages(sale_date):
         return jsonify({'pages': 0})
 
 
-def _ceo_required(f):
+def _admin_required(f):
+    """Allow only role='admin'. CEO and manager are explicitly rejected here —
+    /ops and /admin/* are operator-only surfaces."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
@@ -2034,7 +2045,7 @@ def _ceo_required(f):
 
 
 @app.route('/ops')
-@_ceo_required
+@_admin_required
 def ops():
     ctx = _page_context('ops')
     return render_template('ops.html', **ctx)
@@ -2078,7 +2089,7 @@ def _convert_run_times(row_dict):
 
 
 @app.route('/api/ops-status')
-@_ceo_required
+@_admin_required
 def api_ops_status():
     db = get_db()
     current_month = _now_il().strftime('%Y-%m')
@@ -2224,7 +2235,7 @@ def api_ops_status():
 
 
 @app.route('/ops/run-agent', methods=['POST'])
-@_ceo_required
+@_admin_required
 def ops_run_agent():
     data = request.get_json()
     branch_id = data.get('branch_id')
@@ -2284,7 +2295,7 @@ def ops_run_agent():
 
 
 @app.route('/ops/logs/<int:branch_id>/<agent>')
-@_ceo_required
+@_admin_required
 def ops_logs(branch_id, agent):
     import re as _re
     if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
@@ -2332,7 +2343,7 @@ def ops_logs(branch_id, agent):
 
 
 @app.route('/ops/dismiss-alert', methods=['POST'])
-@_ceo_required
+@_admin_required
 def ops_dismiss_alert():
     data = request.get_json()
     alert_id = data.get('alert_id')
@@ -2345,7 +2356,7 @@ def ops_dismiss_alert():
 
 
 @app.route('/api/ops-health')
-@_ceo_required
+@_admin_required
 def api_ops_health():
     def _run(cmd):
         try:
@@ -2391,7 +2402,7 @@ def api_ops_health():
 
 
 @app.route('/admin/branches')
-@_ceo_required
+@_admin_required
 def admin_branches():
     db = get_db()
     branches = db.execute('SELECT * FROM branches ORDER BY id').fetchall()
@@ -2407,7 +2418,7 @@ def admin_branches():
 
 
 @app.route('/api/admin/branches', methods=['POST'])
-@_ceo_required
+@_admin_required
 def api_admin_branch_create():
     data = request.get_json()
     db = get_db()
@@ -2443,7 +2454,7 @@ def api_admin_branch_create():
 
 
 @app.route('/api/admin/branches/<int:branch_id>')
-@_ceo_required
+@_admin_required
 def api_admin_branch_get(branch_id):
     db = get_db()
     row = db.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
@@ -2453,7 +2464,7 @@ def api_admin_branch_get(branch_id):
 
 
 @app.route('/api/admin/branches/<int:branch_id>', methods=['PUT'])
-@_ceo_required
+@_admin_required
 def api_admin_branch_update(branch_id):
     data = request.get_json()
     db = get_db()
@@ -2466,6 +2477,120 @@ def api_admin_branch_update(branch_id):
     db.execute(sql, list(updates.values()) + [branch_id])
     db.commit()
     return jsonify({'ok': True})
+
+
+# ── Admin Users & Branch Assignments ────────────────────────────────────
+
+@app.route('/admin/users')
+@_admin_required
+def admin_users():
+    return render_template('admin_users.html', **_page_context('admin'))
+
+
+@app.route('/api/admin/users')
+@_admin_required
+def api_admin_users():
+    db = get_db()
+    users = db.execute('SELECT id, email, name, role, active FROM users ORDER BY id').fetchall()
+    result = []
+    for u in users:
+        branches = db.execute(
+            '''SELECT b.id, b.name, b.city FROM user_branches ub
+               JOIN branches b ON b.id = ub.branch_id
+               WHERE ub.user_id = ? ORDER BY b.id''', (u['id'],)
+        ).fetchall()
+        result.append({
+            'id': u['id'], 'email': u['email'], 'name': u['name'],
+            'role': u['role'], 'active': u['active'],
+            'branches': [{'id': b['id'], 'name': b['name'], 'city': b['city']} for b in branches]
+        })
+    return jsonify(result)
+
+
+@app.route('/api/admin/users', methods=['POST'])
+@_admin_required
+def api_admin_user_create():
+    """Create a manager or CEO user. Admin users are not creatable from the UI."""
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    email = (data.get('email') or '').strip().lower()
+    password = (data.get('password') or '').strip()
+    role = (data.get('role') or 'manager').strip()
+
+    if not name or not email or not password:
+        return jsonify({'error': 'missing name, email, or password'}), 400
+    if role not in ('manager', 'ceo'):
+        return jsonify({'error': 'role must be manager or ceo'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'password must be at least 6 chars'}), 400
+
+    db = get_db()
+    existing = db.execute('SELECT id FROM users WHERE LOWER(email)=?', (email,)).fetchone()
+    if existing:
+        return jsonify({'error': 'email already exists'}), 409
+
+    pw_hash = generate_password_hash(password)
+    cur = db.execute(
+        'INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
+        (name, email, pw_hash, role))
+    db.commit()
+    return jsonify({'ok': True, 'user_id': cur.lastrowid, 'role': role}), 201
+
+
+@app.route('/api/admin/users/<int:user_id>/branches', methods=['POST'])
+@_admin_required
+def api_admin_user_add_branch(user_id):
+    db = get_db()
+    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not user:
+        return jsonify({'error': 'user not found'}), 404
+    if user['role'] in ROLES_ALL_BRANCHES:
+        return jsonify({'error': 'cannot assign branches to admin/ceo users — they see all branches automatically'}), 403
+    data = request.get_json()
+    branch_id = data.get('branch_id')
+    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
+    if not branch:
+        return jsonify({'error': 'branch not found'}), 404
+    existing = db.execute(
+        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
+        (user_id, branch_id)).fetchone()
+    if existing:
+        return jsonify({'error': 'branch already assigned'}), 409
+    db.execute('INSERT INTO user_branches (user_id, branch_id) VALUES (?, ?)',
+               (user_id, branch_id))
+    db.commit()
+    return jsonify({'ok': True, 'user_id': user_id, 'branch_id': branch_id}), 201
+
+
+@app.route('/api/admin/users/<int:user_id>/branches/<int:branch_id>', methods=['DELETE'])
+@_admin_required
+def api_admin_user_remove_branch(user_id, branch_id):
+    db = get_db()
+    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not user:
+        return jsonify({'error': 'user not found'}), 404
+    existing = db.execute(
+        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
+        (user_id, branch_id)).fetchone()
+    if not existing:
+        return '', 204
+    count = db.execute(
+        'SELECT COUNT(*) as cnt FROM user_branches WHERE user_id = ?',
+        (user_id,)).fetchone()['cnt']
+    if count <= 1 and user['role'] == 'manager':
+        return jsonify({'error': 'cannot leave manager without any branches — delete or deactivate the user instead'}), 422
+    db.execute('DELETE FROM user_branches WHERE user_id = ? AND branch_id = ?',
+               (user_id, branch_id))
+    db.commit()
+    return '', 204
+
+
+@app.route('/api/admin/branches-list')
+@_admin_required
+def api_admin_branches_list():
+    db = get_db()
+    rows = db.execute('SELECT id, name, city FROM branches WHERE active = 1 ORDER BY id').fetchall()
+    return jsonify([{'id': r['id'], 'name': r['name'], 'city': r['city']} for r in rows])
 
 
 # ── Manual electricity endpoints ──────────────────────────────────────────
@@ -2615,94 +2740,10 @@ def api_electricity_history():
     return jsonify([dict(r) for r in rows])
 
 
-# ── Admin Users & Branch Assignments ────────────────────────────────────
-
-@app.route('/admin/users')
-@_ceo_required
-def admin_users():
-    return render_template('admin_users.html', **_page_context('admin'))
-
-
-@app.route('/api/admin/users')
-@_ceo_required
-def api_admin_users():
-    db = get_db()
-    users = db.execute('SELECT id, email, name, role, active FROM users ORDER BY id').fetchall()
-    result = []
-    for u in users:
-        branches = db.execute(
-            '''SELECT b.id, b.name, b.city FROM user_branches ub
-               JOIN branches b ON b.id = ub.branch_id
-               WHERE ub.user_id = ? ORDER BY b.id''', (u['id'],)
-        ).fetchall()
-        result.append({
-            'id': u['id'], 'email': u['email'], 'name': u['name'],
-            'role': u['role'], 'active': u['active'],
-            'branches': [{'id': b['id'], 'name': b['name'], 'city': b['city']} for b in branches]
-        })
-    return jsonify(result)
-
-
-@app.route('/api/admin/users/<int:user_id>/branches', methods=['POST'])
-@_ceo_required
-def api_admin_user_add_branch(user_id):
-    db = get_db()
-    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
-    if not user:
-        return jsonify({'error': 'user not found'}), 404
-    if user['role'] == 'admin':
-        return jsonify({'error': 'cannot assign branches to admin users'}), 403
-    data = request.get_json()
-    branch_id = data.get('branch_id')
-    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
-    if not branch:
-        return jsonify({'error': 'branch not found'}), 404
-    existing = db.execute(
-        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
-        (user_id, branch_id)).fetchone()
-    if existing:
-        return jsonify({'error': 'branch already assigned'}), 409
-    db.execute('INSERT INTO user_branches (user_id, branch_id) VALUES (?, ?)',
-               (user_id, branch_id))
-    db.commit()
-    return jsonify({'ok': True, 'user_id': user_id, 'branch_id': branch_id}), 201
-
-
-@app.route('/api/admin/users/<int:user_id>/branches/<int:branch_id>', methods=['DELETE'])
-@_ceo_required
-def api_admin_user_remove_branch(user_id, branch_id):
-    db = get_db()
-    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
-    if not user:
-        return jsonify({'error': 'user not found'}), 404
-    existing = db.execute(
-        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
-        (user_id, branch_id)).fetchone()
-    if not existing:
-        return '', 204
-    count = db.execute(
-        'SELECT COUNT(*) as cnt FROM user_branches WHERE user_id = ?',
-        (user_id,)).fetchone()['cnt']
-    if count <= 1 and user['role'] == 'manager':
-        return jsonify({'error': 'cannot leave manager without any branches — delete or deactivate the user instead'}), 422
-    db.execute('DELETE FROM user_branches WHERE user_id = ? AND branch_id = ?',
-               (user_id, branch_id))
-    db.commit()
-    return '', 204
-
-
-@app.route('/api/admin/branches-list')
-@_ceo_required
-def api_admin_branches_list():
-    db = get_db()
-    rows = db.execute('SELECT id, name, city FROM branches WHERE active = 1 ORDER BY id').fetchall()
-    return jsonify([{'id': r['id'], 'name': r['name'], 'city': r['city']} for r in rows])
-
-
 # ── IEC status & accuracy endpoints ─────────────────────────────────────
 
 @app.route('/api/iec-status')
-@_ceo_required
+@_admin_required
 def api_iec_status():
     branch_id = request.args.get('branch_id', type=int)
     if not branch_id:
@@ -2839,7 +2880,7 @@ def _get_iec_accuracy_data(branch_id: int, db=None) -> list:
 
 
 @app.route('/api/iec-accuracy')
-@_ceo_required
+@_admin_required
 def api_iec_accuracy():
     branch_id = request.args.get('branch_id', type=int)
     db = get_db()
@@ -3004,7 +3045,7 @@ def _wizard_send_recv(proc, cmd, timeout=60):
 
 def _check_branch_permission(branch_id):
     """Check if current user has permission for this branch."""
-    if session.get('user_role') == 'admin':
+    if session.get('user_role') in ROLES_ALL_BRANCHES:
         return True
     return session.get('branch_id') == branch_id
 
