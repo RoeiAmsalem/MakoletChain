@@ -15,7 +15,15 @@
     .user-email { font-size:0.82rem; color:var(--text-muted); direction:ltr; display:inline-block; }
     .role-badge { padding:2px 10px; border-radius:999px; font-size:0.72rem; font-weight:700; }
     .role-admin { background:rgba(99,102,241,0.2); color:#a5b4fc; }
+    .role-ceo { background:rgba(217,119,6,0.2); color:#fcd34d; }
     .role-manager { background:rgba(34,197,94,0.2); color:#86efac; }
+    .create-user-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1rem 1.25rem; margin-bottom:1.25rem; box-shadow:var(--shadow); }
+    .create-user-card h2 { font-size:0.95rem; font-weight:700; margin:0 0 0.75rem; color:var(--text-primary); }
+    .create-user-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.6rem; align-items:end; }
+    .create-user-grid label { display:flex; flex-direction:column; gap:0.25rem; font-size:0.78rem; color:var(--text-muted); }
+    .create-user-grid input, .create-user-grid select { background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.4rem 0.6rem; color:var(--text-primary); font-size:0.85rem; font-family:inherit; }
+    .create-user-grid button { background:var(--accent); border:none; border-radius:6px; padding:0.5rem 0.9rem; color:white; font-size:0.85rem; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity 0.15s; }
+    .create-user-grid button:hover { opacity:0.85; }
     .badge-inactive { background:rgba(239,68,68,0.2); color:#fca5a5; padding:2px 8px; border-radius:999px; font-size:0.72rem; font-weight:700; }
     .admin-note { font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem; font-style:italic; }
     .branch-pills { display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem; align-items:center; }
@@ -50,6 +58,23 @@
             <a href="/admin/branches">סניפים</a>
             <a href="/admin/users" class="active">משתמשים</a>
         </div>
+    </div>
+
+    <div class="create-user-card">
+        <h2>הוספת משתמש חדש</h2>
+        <div class="create-user-grid">
+            <label>שם<input id="new-user-name" type="text" placeholder="שם מלא"></label>
+            <label>אימייל<input id="new-user-email" type="email" placeholder="user@example.com" style="direction:ltr;"></label>
+            <label>סיסמה<input id="new-user-password" type="text" placeholder="לפחות 6 תווים" style="direction:ltr;"></label>
+            <label>תפקיד
+                <select id="new-user-role">
+                    <option value="manager">מנהל סניף</option>
+                    <option value="ceo">מנכ"ל</option>
+                </select>
+            </label>
+            <button onclick="createUser()">צור משתמש</button>
+        </div>
+        <div class="info-note">מנכ"ל רואה את כל הסניפים אוטומטית. מנהל סניף — שיוך ידני בכרטיס.</div>
     </div>
 
     <div id="users-container">
@@ -87,14 +112,21 @@ function render() {
 }
 
 function renderCard(u) {
-    const roleBadge = u.role === 'admin'
-        ? '<span class="role-badge role-admin">אדמין</span>'
-        : '<span class="role-badge role-manager">מנהל</span>';
+    let roleBadge;
+    if (u.role === 'admin') {
+        roleBadge = '<span class="role-badge role-admin">אדמין</span>';
+    } else if (u.role === 'ceo') {
+        roleBadge = '<span class="role-badge role-ceo">מנכ"ל</span>';
+    } else {
+        roleBadge = '<span class="role-badge role-manager">מנהל</span>';
+    }
     const activeBadge = u.active ? '' : ' <span class="badge-inactive">לא פעיל</span>';
 
     let body = '';
     if (u.role === 'admin') {
         body = '<div class="admin-note">גישה לכל הסניפים (דרך תפקיד)</div>';
+    } else if (u.role === 'ceo') {
+        body = '<div class="admin-note">כל הסניפים — אוטומטי</div>';
     } else {
         const assignedIds = new Set(u.branches.map(b => b.id));
         const available = ALL_BRANCHES.filter(b => !assignedIds.has(b.id));
@@ -127,6 +159,36 @@ function renderCard(u) {
         </div>
         ${body}
     </div>`;
+}
+
+async function createUser() {
+    const name = document.getElementById('new-user-name').value.trim();
+    const email = document.getElementById('new-user-email').value.trim();
+    const password = document.getElementById('new-user-password').value.trim();
+    const role = document.getElementById('new-user-role').value;
+    if (!name || !email || !password) {
+        await mkAlert({type: 'warning', title: 'שדות חסרים', message: 'יש למלא שם, אימייל וסיסמה'});
+        return;
+    }
+    try {
+        const resp = await fetch('/api/admin/users', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name, email, password, role})
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            await mkAlert({type: 'danger', title: 'שגיאה', message: err.error || 'שגיאה לא צפויה'});
+            return;
+        }
+        document.getElementById('new-user-name').value = '';
+        document.getElementById('new-user-email').value = '';
+        document.getElementById('new-user-password').value = '';
+        await loadData();
+        await mkAlert({type: 'success', title: 'נוצר', message: 'המשתמש נוסף בהצלחה'});
+    } catch (err) {
+        await mkAlert({type: 'danger', title: 'שגיאה', message: err.message});
+    }
 }
 
 async function addBranch(userId) {
