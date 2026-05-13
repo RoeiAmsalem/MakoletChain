@@ -115,6 +115,15 @@ class TestAdminGate:
         res = client.get('/admin/analytics')
         assert res.status_code == 200
 
+    def test_subnav_renders(self, client):
+        """Admin sub-toggle must include all three tabs."""
+        _login(client, 'admin@test.com')
+        res = client.get('/admin/analytics')
+        body = res.get_data(as_text=True)
+        assert 'ניתוח שימוש' in body
+        assert 'סניפים' in body
+        assert 'משתמשים' in body
+
     def test_anonymous_redirects(self, client):
         res = client.get('/admin/analytics')
         assert res.status_code in (301, 302)
