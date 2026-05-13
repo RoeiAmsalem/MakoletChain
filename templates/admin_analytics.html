@@ -6,6 +6,10 @@
     .an-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
     .an-header { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem; }
     .an-header h1 { font-size:1.5rem; font-weight:700; }
+    .admin-nav { display:flex; gap:0.5rem; }
+    .admin-nav a { font-size:0.82rem; padding:0.35rem 0.8rem; border-radius:6px; color:var(--text-secondary); text-decoration:none; border:1px solid var(--card-border); transition:all 0.15s; }
+    .admin-nav a:hover { background:rgba(255,255,255,0.06); color:white; }
+    .admin-nav a.active { background:var(--accent); color:white; border-color:var(--accent); }
     .an-caption { font-size:0.78rem; color:var(--text-muted); margin-bottom:1rem; }
 
     .range-chips { display:flex; gap:0.4rem; flex-wrap:wrap; }
@@ -78,6 +82,11 @@
 <div class="an-container">
     <div class="an-header">
         <h1>ניתוח שימוש</h1>
+        <div class="admin-nav">
+            <a href="/admin/branches">סניפים</a>
+            <a href="/admin/users">משתמשים</a>
+            <a href="/admin/analytics" class="active">ניתוח שימוש</a>
+        </div>
         <div class="range-chips">
             {% set chips = [('7d', '7 ימים'), ('30d', '30 ימים'), ('month', 'החודש'), ('all', 'מאז ההפעלה')] %}
             {% for key, label in chips %}
