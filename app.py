@@ -52,6 +52,13 @@ IL_TZ = ZoneInfo('Asia/Jerusalem')
 #   manager — sees only branches listed in user_branches.
 VALID_ROLES = ('admin', 'ceo', 'manager')
 ROLES_ALL_BRANCHES = ('admin', 'ceo')
+ROLES_NOT_TRACKED = ('admin', 'ceo')
+
+
+def _should_track(role):
+    """Single source of truth for analytics exclusion. Admin and CEO are
+    excluded from user_events to keep the dataset focused on operator activity."""
+    return role not in ROLES_NOT_TRACKED
 
 HEBREW_MONTHS = {
     1: 'ינואר', 2: 'פברואר', 3: 'מרץ', 4: 'אפריל',
@@ -216,7 +223,7 @@ def _record_event(event_type, page=None, branch_id=None, duration_seconds=None):
     try:
         if 'user_id' not in session:
             return
-        if session.get('user_role') == 'admin':
+        if not _should_track(session.get('user_role')):
             return
         ua = request.headers.get('User-Agent', '') if request else ''
         db = get_db()
@@ -658,9 +665,11 @@ def api_heartbeat():
     if not isinstance(duration, (int, float)) or duration < 0 or duration > 86400:
         return '', 204
     try:
-        bid = int(branch_id) if branch_id is not None else None
+        bid = int(branch_id) if branch_id not in (None, '') else None
     except (TypeError, ValueError):
         bid = None
+    if bid is None:
+        bid = session.get('branch_id')
     _record_event('heartbeat', page=page, branch_id=bid,
                   duration_seconds=int(duration))
     return '', 204

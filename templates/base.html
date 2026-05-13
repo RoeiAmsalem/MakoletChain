@@ -116,8 +116,9 @@ document.getElementById('hamburger').addEventListener('click', function() {
 
 <script>
 (function() {
-  // Server enforces admin exclusion in _record_event. This is a bandwidth-saver.
-  if (document.body.dataset.userRole === 'admin') return;
+  // Server enforces exclusion in _should_track. This is a bandwidth-saver.
+  var role = document.body.dataset.userRole;
+  if (role === 'admin' || role === 'ceo') return;
 
   var pageStart = Date.now();
   var page = window.location.pathname;
