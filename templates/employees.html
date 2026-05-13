@@ -221,21 +221,7 @@
     <h2 style="font-size:1.1rem; font-weight:700;">עובדים – <span id="month-label"></span></h2>
 </div>
 
-<!-- Unknown Employees Banner -->
-<div id="unknown-banner" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.25rem;">
-  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
-    <span style="font-size:1.5rem;">&#9888;&#65039;</span>
-    <div>
-      <div style="font-weight:700; color:#fca5a5; margin-bottom:0.25rem;">
-        <span id="unknown-count">0</span> עובדים חדשים לא מזוהים
-      </div>
-      <div style="font-size:0.85rem; color:#fecaca;">
-        עובדים אלו מופיעים באביב/CSV אך לא קיימים בדשבורד. לחץ להוספה.
-      </div>
-    </div>
-  </div>
-  <div id="unknown-list" style="display:flex; flex-direction:column; gap:0.75rem;"></div>
-</div>
+{% include '_unknown_employees_banner.html' %}
 
 <!-- Discrepancies Banner — DISABLED 2026-04-18: CSV path retired in favor of API-only -->
 <!-- CSV-Only Employees Banner — DISABLED 2026-04-18: CSV path retired in favor of API-only -->
@@ -329,39 +315,6 @@
     </div>
 </div>
 
-<!-- Add-as-New Modal -->
-<div class="modal-overlay" id="new-emp-modal">
-    <div class="modal-box">
-        <div class="modal-header">
-            <h3>הוסף כעובד חדש</h3>
-            <button class="modal-close" onclick="closeNewModal()">✕</button>
-        </div>
-        <div class="modal-body">
-            <input type="hidden" id="new-pending-id">
-            <div class="form-group">
-                <label>שם עובד</label>
-                <input type="text" id="new-emp-name" placeholder="שם מלא">
-            </div>
-            <div class="form-group">
-                <label>תפקיד</label>
-                <div class="role-toggle">
-                    <label><input type="radio" name="new-emp-role" value="בוקר"><span>בוקר</span></label>
-                    <label><input type="radio" name="new-emp-role" value="ערב" checked><span>ערב</span></label>
-                    <label><input type="radio" name="new-emp-role" value="מנהל"><span>מנהל</span></label>
-                </div>
-            </div>
-            <div class="form-group">
-                <label>תעריף שעתי (₪) <span style="color:#fca5a5">*</span></label>
-                <input type="number" id="new-emp-rate" placeholder="40" min="0.5" step="0.5" required>
-            </div>
-            <div class="modal-actions">
-                <button class="btn-cancel" onclick="closeNewModal()">ביטול</button>
-                <button class="btn-primary" onclick="saveNewFromPending()">שמור</button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -377,24 +330,6 @@ const BRANCH_ID = {{ branch_id | tojson }};
 const BRANCH_NAME = {{ branch_name | tojson }};
 const monthLabel = {{ month_display | tojson }};
 
-// Mirror of agents/_employee_matching._clean_name — strips numeric ID prefix
-// and store-name suffix from a raw Aviv/CSV employee name.
-function cleanEmployeeName(raw) {
-    if (!raw) return '';
-    let s = String(raw).trim();
-    // Strip leading numeric ID + whitespace ("551 אגם צאצאן" -> "אגם צאצאן")
-    s = s.replace(/^\d+\s+/, '');
-    const storeWords = new Set(['איינשטיין', 'אינשטיין', 'einstein']);
-    if (BRANCH_NAME) {
-        storeWords.add(BRANCH_NAME.trim());
-        BRANCH_NAME.trim().split(/\s+/).forEach(w => w && storeWords.add(w));
-    }
-    let words = s.split(/\s+/).filter(Boolean);
-    while (words.length && storeWords.has(words[words.length - 1])) {
-        words.pop();
-    }
-    return words.join(' ').trim();
-}
 document.getElementById('month-label').textContent = monthLabel;
 
 let ALL_EMPLOYEES = [];
@@ -869,84 +804,42 @@ async function deleteEmployee(id, name) {
     }
 }
 
-async function loadPendingMatches() {
-    try {
-        const res = await fetch(`/api/employee-match-pending?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
-        if (!res.ok) return;
-        const d = await res.json();
-        const allPending = d.pending || [];
-        const allEmps = d.employees || [];
-
-        // Separate unknown (new) and low-confidence matches
-        // DISABLED 2026-04-18: CSV-only filtering removed — API is sole source of truth
-        const unknowns = allPending.filter(p => p.is_new_employee && !p.is_csv_only);
-        const pending = allPending.filter(p => !p.is_new_employee && !p.is_csv_only);
-
-        // RED banner for unknowns
-        const banner = document.getElementById('unknown-banner');
-        if (unknowns.length) {
-            banner.style.display = '';
-            document.getElementById('unknown-count').textContent = unknowns.length;
-            document.getElementById('unknown-list').innerHTML = unknowns.map(p => {
-                const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
-                const escapedName = p.csv_name.replace(/'/g, "\\'");
-                return `<div id="pending-${p.id}" style="background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.2); border-radius:8px; padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
-                  <div>
-                    <div style="font-weight:600; color:white;">${p.csv_name}</div>
-                    <div style="font-size:0.8rem; color:#94a3b8;">${p.hours.toFixed(1)} שעות החודש · מקור: ${srcLabel}</div>
-                  </div>
-                  <div style="display:flex; gap:0.5rem;">
-                    <button onclick="openNewFromPending(${p.id}, '${escapedName}')"
-                            style="padding:0.5rem 1rem; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); border-radius:6px; color:#fca5a5; font-weight:600; cursor:pointer; font-family:inherit; font-size:0.85rem;">
-                      הוסף עובד ←
-                    </button>
-                    <button onclick="dismissUnknown(${p.id})"
-                            style="padding:0.5rem 0.75rem; background:transparent; border:1px solid #475569; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; font-size:0.85rem;">
-                      התעלם
-                    </button>
-                  </div>
-                </div>`;
-            }).join('');
-        } else {
-            banner.style.display = 'none';
-        }
-
-        // Yellow section for low-confidence matches
-        const section = document.getElementById('pending-section');
-        if (!pending.length) {
-            section.style.display = 'none';
-            return;
-        }
-        section.style.display = '';
-
-        const list = document.getElementById('pending-list');
-        list.innerHTML = pending.map(p => {
-            const opts = allEmps.map(e =>
-                `<option value="${e.id}" ${e.id === p.suggested_employee_id ? 'selected' : ''}>${e.name} (₪${e.hourly_rate}/שעה)</option>`
-            ).join('');
-
-            const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
-            return `<div class="pending-row" id="pending-${p.id}">
-                <div class="pending-info">
-                    <div class="pending-csv-name">${p.csv_name}</div>
-                    <div class="pending-meta">${p.hours.toFixed(1)} שעות · ${srcLabel} · ${p.confidence === 'low' ? 'התאמה חלשה' : 'לא זוהה'}</div>
-                </div>
-                <span class="pending-arrow">&larr;</span>
-                <div class="pending-suggestion">
-                    ${p.suggested_name ? p.suggested_name + '?' : 'אין הצעה'}
-                </div>
-                <div class="pending-actions">
-                    <select id="reassign-${p.id}">${opts}</select>
-                    <button class="btn-approve" onclick="approvePending(${p.id})">אשר</button>
-                    <button class="btn-approve" onclick="reassignPending(${p.id})" style="background:rgba(99,102,241,0.2);border-color:rgba(99,102,241,0.3);color:#a5b4fc;">שייך</button>
-                    <button class="btn-new" onclick="openNewFromPending(${p.id}, '${p.csv_name.replace(/'/g, "\\'")}')">+ חדש</button>
-                    <button class="btn-reject" onclick="rejectPending(${p.id})">דחה</button>
-                </div>
-            </div>`;
-        }).join('');
-    } catch (err) {
-        console.error('Failed to load pending matches:', err);
+// Yellow low-confidence pending-section render — invoked from the partial's
+// loadPendingMatches() with the filtered pending rows + employees list.
+function renderPendingSection(pending, allEmps) {
+    const section = document.getElementById('pending-section');
+    if (!section) return;
+    if (!pending.length) {
+        section.style.display = 'none';
+        return;
     }
+    section.style.display = '';
+
+    const list = document.getElementById('pending-list');
+    list.innerHTML = pending.map(p => {
+        const opts = allEmps.map(e =>
+            `<option value="${e.id}" ${e.id === p.suggested_employee_id ? 'selected' : ''}>${e.name} (₪${e.hourly_rate}/שעה)</option>`
+        ).join('');
+
+        const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
+        return `<div class="pending-row" id="pending-${p.id}">
+            <div class="pending-info">
+                <div class="pending-csv-name">${p.csv_name}</div>
+                <div class="pending-meta">${p.hours.toFixed(1)} שעות · ${srcLabel} · ${p.confidence === 'low' ? 'התאמה חלשה' : 'לא זוהה'}</div>
+            </div>
+            <span class="pending-arrow">&larr;</span>
+            <div class="pending-suggestion">
+                ${p.suggested_name ? p.suggested_name + '?' : 'אין הצעה'}
+            </div>
+            <div class="pending-actions">
+                <select id="reassign-${p.id}">${opts}</select>
+                <button class="btn-approve" onclick="approvePending(${p.id})">אשר</button>
+                <button class="btn-approve" onclick="reassignPending(${p.id})" style="background:rgba(99,102,241,0.2);border-color:rgba(99,102,241,0.3);color:#a5b4fc;">שייך</button>
+                <button class="btn-new" onclick="openNewFromPending(${p.id}, '${p.csv_name.replace(/'/g, "\\'")}')">+ חדש</button>
+                <button class="btn-reject" onclick="rejectPending(${p.id})">דחה</button>
+            </div>
+        </div>`;
+    }).join('');
 }
 
 async function approvePending(id) {
@@ -986,66 +879,11 @@ async function reassignPending(id) {
     } catch (err) { showToast(err.message, 'error'); }
 }
 
-function openNewFromPending(pendingId, csvName) {
-    document.getElementById('new-pending-id').value = pendingId;
-    // Strip "551 " ID prefix and trailing store suffix before pre-filling.
-    const cleaned = cleanEmployeeName(csvName) || csvName;
-    document.getElementById('new-emp-name').value = cleaned;
-    document.getElementById('new-emp-rate').value = '';
-    document.querySelector('input[name="new-emp-role"][value="ערב"]').checked = true;
-    document.getElementById('new-emp-modal').classList.add('open');
-    document.getElementById('new-emp-rate').focus();
-}
-
-async function dismissUnknown(pendingId) {
-    if (!await mkConfirm({ type: 'warning', title: 'התעלמות מעובד', message: 'להתעלם מעובד זה? השעות לא יישמרו.', confirmText: 'התעלם' })) return;
-    try {
-        const res = await fetch(`/api/employee-match-pending/${pendingId}/reject`, {method:'POST'});
-        if (!res.ok) throw new Error('שגיאה');
-        showToast('שעות נדחו', 'success');
-        loadPendingMatches();
-    } catch (err) { showToast(err.message, 'error'); }
-}
-
-function closeNewModal() {
-    document.getElementById('new-emp-modal').classList.remove('open');
-}
-
-async function saveNewFromPending() {
-    const pendingId = document.getElementById('new-pending-id').value;
-    const name = document.getElementById('new-emp-name').value.trim();
-    const hourly_rate = parseFloat(document.getElementById('new-emp-rate').value) || 0;
-    const role = document.querySelector('input[name="new-emp-role"]:checked')?.value || 'ערב';
-
-    if (!name) { showToast('נא למלא שם עובד', 'error'); return; }
-    if (hourly_rate <= 0) { showToast('נא להגדיר תעריף שעתי', 'error'); return; }
-
-    try {
-        const res = await fetch(`/api/employee-match-pending/${pendingId}/add-new`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, hourly_rate, role })
-        });
-        const ct = res.headers.get('content-type') || '';
-        if (!ct.includes('application/json')) {
-            if (res.status === 401 || res.redirected) { window.location.href = '/login'; return; }
-            if (res.status === 404) { showToast('הכתובת לא נמצאה בשרת — ייתכן שפעולה זו טרם הוטמעה.', 'error'); }
-            else { showToast(`שגיאה מהשרת (${res.status}). פרטים בקונסול.`, 'error'); }
-            const text = await res.text(); console.error('Non-JSON response:', res.status, text.substring(0, 200));
-            return;
-        }
-        const d = await res.json();
-        if (!res.ok) { showToast(d.error || 'שגיאה', 'error'); return; }
-        closeNewModal();
-        showToast('עובד חדש נוצר ושעות נשמרו', 'success');
-        await loadPendingMatches();
-        await loadEmployees();
-    } catch (err) { showToast(err.message || 'שגיאת רשת', 'error'); }
-}
-
 // DISABLED 2026-04-18: loadDiscrepancies() and resolveDisc() removed — CSV path retired in favor of API-only
+// openNewFromPending / dismissUnknown / closeNewModal / saveNewFromPending /
+// cleanEmployeeName live in templates/_unknown_employees_banner.html (partial).
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); closeNewModal(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 // Click-toggle tooltips for mobile (Pattern I)
 document.addEventListener('click', e => {

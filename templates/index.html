@@ -150,6 +150,8 @@
     </div>
 </section>
 
+{% include '_unknown_employees_banner.html' %}
+
 <!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
 <div id="elec-hourly-cluster" style="display:flex; flex-direction:column; gap:6px;">
     <div id="elec-strip" class="electricity-strip" data-source="real" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem;">
@@ -326,6 +328,7 @@
 'use strict';
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
+const BRANCH_NAME = {{ branch_name | tojson }};
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
 async function loadSummary() {
@@ -736,5 +739,6 @@ loadHistory();
 loadHourlyChart();
 {% if branch_id == 126 %}loadAmazonDeliveries();{% endif %}
 if (typeof loadLiveSales === 'function') loadLiveSales();
+if (typeof loadPendingMatches === 'function') loadPendingMatches();
 </script>
 {% endblock %}

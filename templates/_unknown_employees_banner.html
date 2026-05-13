@@ -1,0 +1,223 @@
+{# Unknown-employees red banner — shared between /employees and /.
+
+  Renders only when /api/employee-match-pending returns rows with
+  is_new_employee && !is_csv_only. Self-contained: brings its own CSS,
+  modal markup, toast, and JS. Requires page to define globals
+  BRANCH_ID, SELECTED_MONTH, BRANCH_NAME and to call loadPendingMatches()
+  after the consts are declared. mkConfirm comes from base.html (dialog.js).
+#}
+<style>
+    .unk-modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+    .unk-modal-overlay.open { display: flex; }
+    .unk-modal-box { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius); width: 90%; max-width: 400px; }
+    .unk-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--card-border); }
+    .unk-modal-header h3 { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+    .unk-modal-close { background: none; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; }
+    .unk-modal-body { padding: 1.25rem; }
+    .unk-modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+    .unk-form-group { margin-bottom: 1rem; }
+    .unk-form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.35rem; }
+    .unk-form-group input { width: 100%; padding: 0.5rem 0.75rem; background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); border-radius: 6px; color: var(--text-primary); font-family: inherit; font-size: 0.9rem; box-sizing: border-box; }
+    .unk-form-group input:focus { outline: none; border-color: rgba(99,102,241,0.5); }
+    .unk-role-toggle { display: flex; gap: 0.5rem; }
+    .unk-role-toggle label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); padding: 0.35rem 0.7rem; border-radius: 6px; border: 1px solid var(--card-border); transition: all 0.15s; }
+    .unk-role-toggle input { display: none; }
+    .unk-role-toggle input:checked + span { color: var(--text-primary); }
+    .unk-role-toggle label:has(input:checked) { border-color: rgba(99,102,241,0.5); background: rgba(99,102,241,0.1); }
+    .unk-btn-primary { background: rgba(99,102,241,0.3); border: 1px solid rgba(99,102,241,0.4); border-radius: 8px; padding: 0.5rem 1.25rem; color: #c7d2fe; cursor: pointer; font-family: inherit; font-size: 0.85rem; font-weight: 600; }
+    .unk-btn-primary:hover { background: rgba(99,102,241,0.45); }
+    .unk-btn-cancel { background: rgba(255,255,255,0.06); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.5rem 1.25rem; color: var(--text-secondary); cursor: pointer; font-family: inherit; font-size: 0.85rem; font-weight: 600; }
+    .unk-btn-cancel:hover { background: rgba(255,255,255,0.12); }
+    .unk-toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+    .unk-toast.show { opacity: 1; }
+    .unk-toast.success { background: #065f46; color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+    .unk-toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+    @media (max-width: 768px) {
+        .unk-btn-primary, .unk-btn-cancel { min-height: 44px; font-size: 0.9rem !important; touch-action: manipulation; }
+        .unk-modal-box { max-height: 95vh; }
+        .unk-form-group input { font-size: 16px !important; }
+    }
+</style>
+
+<div id="unknown-banner" style="display:none; background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.3); border-radius:10px; padding:1rem 1.25rem; margin-bottom:1.25rem;">
+  <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem;">
+    <span style="font-size:1.5rem;">&#9888;&#65039;</span>
+    <div>
+      <div style="font-weight:700; color:#fca5a5; margin-bottom:0.25rem;">
+        <span id="unknown-count">0</span> עובדים חדשים לא מזוהים
+      </div>
+      <div style="font-size:0.85rem; color:#fecaca;">
+        עובדים אלו מופיעים באביב/CSV אך לא קיימים בדשבורד. לחץ להוספה.
+      </div>
+    </div>
+  </div>
+  <div id="unknown-list" style="display:flex; flex-direction:column; gap:0.75rem;"></div>
+</div>
+
+<div class="unk-modal-overlay" id="new-emp-modal">
+    <div class="unk-modal-box">
+        <div class="unk-modal-header">
+            <h3>הוסף כעובד חדש</h3>
+            <button class="unk-modal-close" onclick="closeNewModal()">&#10005;</button>
+        </div>
+        <div class="unk-modal-body">
+            <input type="hidden" id="new-pending-id">
+            <div class="unk-form-group">
+                <label>שם עובד</label>
+                <input type="text" id="new-emp-name" placeholder="שם מלא">
+            </div>
+            <div class="unk-form-group">
+                <label>תפקיד</label>
+                <div class="unk-role-toggle">
+                    <label><input type="radio" name="new-emp-role" value="בוקר"><span>בוקר</span></label>
+                    <label><input type="radio" name="new-emp-role" value="ערב" checked><span>ערב</span></label>
+                    <label><input type="radio" name="new-emp-role" value="מנהל"><span>מנהל</span></label>
+                </div>
+            </div>
+            <div class="unk-form-group">
+                <label>תעריף שעתי (₪) <span style="color:#fca5a5">*</span></label>
+                <input type="number" id="new-emp-rate" placeholder="40" min="0.5" step="0.5" required>
+            </div>
+            <div class="unk-modal-actions">
+                <button class="unk-btn-cancel" onclick="closeNewModal()">ביטול</button>
+                <button class="unk-btn-primary" onclick="saveNewFromPending()">שמור</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="unk-toast" id="unk-toast"></div>
+
+<script>
+'use strict';
+
+if (typeof window.showToast !== 'function') {
+    window.showToast = function (msg, type) {
+        const t = document.getElementById('unk-toast') || document.getElementById('toast');
+        if (!t) return;
+        t.textContent = msg;
+        t.className = (t.id === 'unk-toast' ? 'unk-toast show ' : 'toast show ') + type;
+        setTimeout(() => { t.className = (t.id === 'unk-toast' ? 'unk-toast' : 'toast'); }, 3000);
+    };
+}
+
+if (typeof window.cleanEmployeeName !== 'function') {
+    window.cleanEmployeeName = function (raw) {
+        if (!raw) return '';
+        let s = String(raw).trim();
+        s = s.replace(/^\d+\s+/, '');
+        const storeWords = new Set(['איינשטיין', 'אינשטיין', 'einstein']);
+        const bn = (typeof BRANCH_NAME !== 'undefined') ? BRANCH_NAME : '';
+        if (bn) {
+            storeWords.add(bn.trim());
+            bn.trim().split(/\s+/).forEach(w => w && storeWords.add(w));
+        }
+        let words = s.split(/\s+/).filter(Boolean);
+        while (words.length && storeWords.has(words[words.length - 1])) words.pop();
+        return words.join(' ').trim();
+    };
+}
+
+window.loadPendingMatches = async function () {
+    try {
+        const res = await fetch(`/api/employee-match-pending?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        const allPending = d.pending || [];
+        const unknowns = allPending.filter(p => p.is_new_employee && !p.is_csv_only);
+        const pending = allPending.filter(p => !p.is_new_employee && !p.is_csv_only);
+
+        const banner = document.getElementById('unknown-banner');
+        if (banner) {
+            if (unknowns.length) {
+                banner.style.display = '';
+                document.getElementById('unknown-count').textContent = unknowns.length;
+                document.getElementById('unknown-list').innerHTML = unknowns.map(p => {
+                    const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
+                    const escapedName = p.csv_name.replace(/'/g, "\\'");
+                    return `<div id="pending-${p.id}" style="background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.2); border-radius:8px; padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;">
+                      <div>
+                        <div style="font-weight:600; color:white;">${p.csv_name}</div>
+                        <div style="font-size:0.8rem; color:#94a3b8;">${p.hours.toFixed(1)} שעות החודש · מקור: ${srcLabel}</div>
+                      </div>
+                      <div style="display:flex; gap:0.5rem;">
+                        <button onclick="openNewFromPending(${p.id}, '${escapedName}')"
+                                style="padding:0.5rem 1rem; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.4); border-radius:6px; color:#fca5a5; font-weight:600; cursor:pointer; font-family:inherit; font-size:0.85rem;">
+                          הוסף עובד &larr;
+                        </button>
+                        <button onclick="dismissUnknown(${p.id})"
+                                style="padding:0.5rem 0.75rem; background:transparent; border:1px solid #475569; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; font-size:0.85rem;">
+                          התעלם
+                        </button>
+                      </div>
+                    </div>`;
+                }).join('');
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        if (typeof renderPendingSection === 'function') renderPendingSection(pending, d.employees || []);
+    } catch (err) {
+        console.error('loadPendingMatches:', err);
+    }
+};
+
+window.openNewFromPending = function (pendingId, csvName) {
+    document.getElementById('new-pending-id').value = pendingId;
+    const cleaned = cleanEmployeeName(csvName) || csvName;
+    document.getElementById('new-emp-name').value = cleaned;
+    document.getElementById('new-emp-rate').value = '';
+    document.querySelector('input[name="new-emp-role"][value="ערב"]').checked = true;
+    document.getElementById('new-emp-modal').classList.add('open');
+    document.getElementById('new-emp-rate').focus();
+};
+
+window.closeNewModal = function () {
+    document.getElementById('new-emp-modal').classList.remove('open');
+};
+
+window.dismissUnknown = async function (pendingId) {
+    if (!await mkConfirm({ type: 'warning', title: 'התעלמות מעובד', message: 'להתעלם מעובד זה? השעות לא יישמרו.', confirmText: 'התעלם' })) return;
+    try {
+        const res = await fetch(`/api/employee-match-pending/${pendingId}/reject`, {method:'POST'});
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('שעות נדחו', 'success');
+        loadPendingMatches();
+    } catch (err) { showToast(err.message, 'error'); }
+};
+
+window.saveNewFromPending = async function () {
+    const pendingId = document.getElementById('new-pending-id').value;
+    const name = document.getElementById('new-emp-name').value.trim();
+    const hourly_rate = parseFloat(document.getElementById('new-emp-rate').value) || 0;
+    const role = document.querySelector('input[name="new-emp-role"]:checked')?.value || 'ערב';
+
+    if (!name) { showToast('נא למלא שם עובד', 'error'); return; }
+    if (hourly_rate <= 0) { showToast('נא להגדיר תעריף שעתי', 'error'); return; }
+
+    try {
+        const res = await fetch(`/api/employee-match-pending/${pendingId}/add-new`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, hourly_rate, role })
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) {
+            if (res.status === 401 || res.redirected) { window.location.href = '/login'; return; }
+            if (res.status === 404) { showToast('הכתובת לא נמצאה בשרת — ייתכן שפעולה זו טרם הוטמעה.', 'error'); }
+            else { showToast(`שגיאה מהשרת (${res.status}). פרטים בקונסול.`, 'error'); }
+            const text = await res.text(); console.error('Non-JSON response:', res.status, text.substring(0, 200));
+            return;
+        }
+        const d = await res.json();
+        if (!res.ok) { showToast(d.error || 'שגיאה', 'error'); return; }
+        closeNewModal();
+        showToast('עובד חדש נוצר ושעות נשמרו', 'success');
+        await loadPendingMatches();
+        if (typeof loadEmployees === 'function') await loadEmployees();
+    } catch (err) { showToast(err.message || 'שגיאת רשת', 'error'); }
+};
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeNewModal(); });
+</script>
