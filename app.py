@@ -3275,6 +3275,39 @@ def api_iec_sync():
 # always starts a fresh session even if the gap is smaller.
 _SESSION_GAP_SECONDS = 30 * 60
 
+# Bump when the cached payload structure changes — old entries are dropped.
+_ANALYTICS_CACHE_VERSION = 2
+
+PAGE_LABELS = {
+    '/': 'בית',
+    '/sales': 'הכנסות',
+    '/goods': 'סחורה',
+    '/employees': 'עובדים',
+    '/fixed-expenses': 'הוצאות קבועות',
+    '/electricity-history': 'חשמל',
+    '/ops': 'בקרה',
+    '/admin/branches': 'ניהול סניפים',
+    '/admin/users': 'ניהול משתמשים',
+    '/admin/analytics': 'ניתוח שימוש',
+}
+
+
+def format_duration_he(seconds):
+    """Format a duration in seconds as Hebrew text.
+    0 → '—', <60 → 'פחות מדקה', <3600 → 'N דקות',
+    >=3600 → 'H שעות [M דקות]'."""
+    if not seconds or seconds <= 0:
+        return '—'
+    if seconds < 60:
+        return 'פחות מדקה'
+    if seconds < 3600:
+        return f'{seconds // 60} דקות'
+    hours = seconds // 3600
+    rem_min = (seconds % 3600) // 60
+    if rem_min == 0:
+        return f'{hours} שעות'
+    return f'{hours} שעות {rem_min} דקות'
+
 
 def _classify_device(ua):
     """mobile vs desktop from user_agent (keyword match)."""
@@ -3372,17 +3405,6 @@ def _fetch_events_range(db, start_utc, end_utc, user_id=None):
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
-def _format_active_time(seconds):
-    """seconds → 'Xh Ym'. < 1m → '0m'."""
-    if seconds <= 0:
-        return '0m'
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    if h == 0:
-        return f'{m}m'
-    return f'{h}h {m}m'
-
-
 def _analytics_aggregate(range_key, user_id=None):
     """Compute aggregates for the requested window. Returns a dict that the
     template renders directly. NEVER call this when the cache should be hit
@@ -3394,6 +3416,7 @@ def _analytics_aggregate(range_key, user_id=None):
     # Empty state.
     if not events:
         return {
+            '_v': _ANALYTICS_CACHE_VERSION,
             'empty': True,
             'range': range_key,
             'user_id': user_id,
@@ -3435,12 +3458,16 @@ def _analytics_aggregate(range_key, user_id=None):
     # Tile 4 — days active.
     distinct_days = len({e['created_at'][:10] for e in events})
 
-    # Hour heatmap — 24 buckets (UTC hour → IL hour).
+    # Hour chart — 24 buckets (UTC hour → IL hour).
     hour_counts = [0] * 24
     for e in events:
         ts_il = _parse_event_ts(e['created_at']).astimezone(IL_TZ)
         hour_counts[ts_il.hour] += 1
     max_hour = max(hour_counts) or 1
+    # Peak hours: top hours by count, only those with non-zero events.
+    hours_with_events = [(h, c) for h, c in enumerate(hour_counts) if c > 0]
+    hours_with_events.sort(key=lambda hc: -hc[1])
+    peak_hours = [h for h, _ in hours_with_events[:2]]
 
     # Top pages.
     page_counts = {}
@@ -3451,7 +3478,8 @@ def _analytics_aggregate(range_key, user_id=None):
     top_pages = sorted(page_counts.items(), key=lambda kv: -kv[1])[:5]
     total_pv = sum(page_counts.values()) or 1
     top_pages_out = [
-        {'page': p, 'count': c, 'pct': round(c * 100 / total_pv)}
+        {'page': p, 'label': PAGE_LABELS.get(p, p),
+         'count': c, 'pct': round(c * 100 / total_pv)}
         for p, c in top_pages
     ]
 
@@ -3502,12 +3530,21 @@ def _analytics_aggregate(range_key, user_id=None):
             'initial': (meta['name'][:1] if meta['name'] else '?'),
             'branch_name': meta['branch_name'],
             'logins': u['logins'],
-            'active_time': _format_active_time(active_s),
+            'active_time': format_duration_he(active_s),
             'last_active_utc': last_event,
         })
     users_table.sort(key=lambda r: -r['logins'])
 
+    # Active-time tile subtitle: "Y דק' ליום בממוצע" unless avg >= 60 min,
+    # in which case use the Hebrew duration helper.
+    avg_active_seconds_per_day = int(active_seconds / days_in_window) if days_in_window else 0
+    if avg_active_seconds_per_day >= 3600:
+        active_per_day_label = format_duration_he(avg_active_seconds_per_day) + ' ליום בממוצע'
+    else:
+        active_per_day_label = f"{active_minutes_per_day} דק' ליום בממוצע"
+
     return {
+        '_v': _ANALYTICS_CACHE_VERSION,
         'empty': False,
         'range': range_key,
         'user_id': user_id,
@@ -3517,11 +3554,13 @@ def _analytics_aggregate(range_key, user_id=None):
         'session_count': session_count,
         'sessions_per_day': sessions_per_day,
         'active_seconds': active_seconds,
-        'active_time': _format_active_time(active_seconds),
+        'active_time': format_duration_he(active_seconds),
         'active_minutes_per_day': active_minutes_per_day,
+        'active_per_day_label': active_per_day_label,
         'distinct_days': distinct_days,
         'hour_counts': hour_counts,
         'hour_max': max_hour,
+        'peak_hours': peak_hours,
         'top_pages': top_pages_out,
         'device': device,
         'users_table': users_table,
@@ -3540,6 +3579,8 @@ def _analytics_cache_get(range_key):
         if not row:
             return None
         payload = json.loads(row['payload'])
+        if payload.get('_v') != _ANALYTICS_CACHE_VERSION:
+            return None
         payload['computed_at_utc'] = row['computed_at']
         return payload
     except Exception:
