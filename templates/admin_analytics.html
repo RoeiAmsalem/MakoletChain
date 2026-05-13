@@ -32,12 +32,23 @@
     .section-card h2 { font-size:1rem; font-weight:600; margin-bottom:1rem; color:var(--text-primary); }
 
     /* Hour heatmap */
+    .chart-subtitle { font-size:0.78rem; color:var(--text-muted); margin:-0.5rem 0 0.85rem; }
+    .chart-head { display:flex; align-items:baseline; justify-content:space-between; gap:0.75rem; margin-bottom:0.25rem; flex-wrap:wrap; }
+    .chart-max { font-size:0.78rem; color:var(--text-secondary); white-space:nowrap; }
     .heatmap { display:grid; grid-template-columns:repeat(24, 1fr); gap:3px; direction:ltr; }
-    .heatmap-cell { height:32px; border-radius:4px; background:var(--bg); position:relative; cursor:default; }
+    .heatmap-cell { height:32px; border-radius:4px; background:var(--bg); position:relative; cursor:pointer; transition:opacity 0.1s; }
+    .heatmap-cell:hover { opacity:0.85; }
     .heatmap-cell.lvl-1 { background:#B5D4F4; }
     .heatmap-cell.lvl-2 { background:#378ADD; }
-    .heatmap-axis { display:grid; grid-template-columns:repeat(24, 1fr); margin-top:0.4rem; font-size:0.7rem; color:var(--text-muted); direction:ltr; }
+    .heatmap-axis { display:grid; grid-template-columns:repeat(24, 1fr); margin-top:0.4rem; font-size:10px; color:var(--text-muted); direction:ltr; }
     .heatmap-axis span { text-align:center; }
+    .heatmap-axis span.label-skip { visibility:hidden; }
+    .hour-detail { font-size:0.85rem; color:var(--text-primary); margin-top:0.75rem; min-height:1.2em; }
+    .peak-line { font-size:0.82rem; color:var(--text-secondary); margin-top:0.45rem; }
+
+    @media (max-width: 600px) {
+        .heatmap-axis span.label-skip-mobile { visibility:hidden; }
+    }
 
     /* Pages + device side-by-side */
     .two-col { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem; }
@@ -131,24 +142,33 @@
         <div class="kpi-card kpi-card--neutral">
             <div class="kpi-header"><span class="kpi-label">מפגשים</span></div>
             <span class="kpi-value">{{ '{:,}'.format(analytics.session_count) }}</span>
-            <span class="tile-sub">{{ analytics.sessions_per_day }} ליום בממוצע</span>
+            <span class="tile-sub">{{ '%g'|format(analytics.sessions_per_day) }} ליום בממוצע</span>
         </div>
 
         <div class="kpi-card kpi-card--salary">
             <div class="kpi-header"><span class="kpi-label">זמן פעיל</span></div>
             <span class="kpi-value">{{ analytics.active_time }}</span>
-            <span class="tile-sub">{{ analytics.active_minutes_per_day }} דק' ליום בממוצע</span>
+            <span class="tile-sub">{{ analytics.active_per_day_label }}</span>
         </div>
 
         <div class="kpi-card kpi-card--fixed">
             <div class="kpi-header"><span class="kpi-label">ימים פעילים</span></div>
             <span class="kpi-value">{{ analytics.distinct_days }} / {{ analytics.days_in_window }}</span>
+            {% if analytics.distinct_days == analytics.days_in_window %}
+            <span class="tile-sub" style="color:#86efac;">פעיל בכל יום</span>
+            {% else %}
+            <span class="tile-sub">{{ analytics.distinct_days }} מתוך {{ analytics.days_in_window }} ימים</span>
+            {% endif %}
         </div>
     </div>
 
     <div class="section-card">
-        <h2>פעילות לפי שעה</h2>
-        <div class="heatmap">
+        <div class="chart-head">
+            <h2 style="margin:0;">פעילות לפי שעה</h2>
+            <span class="chart-max">מקסימום: {{ analytics.hour_max }} פעולות בשעה</span>
+        </div>
+        <div class="chart-subtitle">כמות פעולות בכל שעה ביום (כל המשתמשים, סך הטווח שנבחר)</div>
+        <div class="heatmap" id="hour-heatmap">
             {% for c in analytics.hour_counts %}
                 {% if c == 0 %}
                     {% set lvl = '' %}
@@ -157,14 +177,23 @@
                 {% else %}
                     {% set lvl = 'lvl-1' %}
                 {% endif %}
-                <div class="heatmap-cell {{ lvl }}" title="{{ '%02d'|format(loop.index0) }}:00 — {{ c }} אירועים"></div>
+                <div class="heatmap-cell {{ lvl }}"
+                     data-hour="{{ '%02d'|format(loop.index0) }}"
+                     data-count="{{ c }}"
+                     title="{{ '%02d'|format(loop.index0) }}:00 — {{ c }} אירועים"></div>
             {% endfor %}
         </div>
         <div class="heatmap-axis">
             {% for i in range(24) %}
-                <span>{% if i in [0, 6, 12, 18, 23] %}{{ '%02d'|format(i) }}{% endif %}</span>
+                <span class="{% if i % 3 != 0 %}label-skip-mobile{% endif %}">{{ '%02d'|format(i) }}</span>
             {% endfor %}
         </div>
+        <div class="hour-detail" id="hour-detail"></div>
+        {% if analytics.peak_hours and analytics.peak_hours|length >= 2 %}
+        <div class="peak-line">שעות הפעילות העיקריות: {{ '%02d'|format(analytics.peak_hours[0]) }}:00 ו-{{ '%02d'|format(analytics.peak_hours[1]) }}:00</div>
+        {% elif analytics.peak_hours and analytics.peak_hours|length == 1 %}
+        <div class="peak-line">שעת הפעילות העיקרית: {{ '%02d'|format(analytics.peak_hours[0]) }}:00</div>
+        {% endif %}
     </div>
 
     <div class="two-col">
@@ -173,7 +202,7 @@
             {% if analytics.top_pages %}
                 {% for p in analytics.top_pages %}
                 <div class="page-row">
-                    <span class="name">{{ p.page }}</span>
+                    <span class="name">{{ p.label }}</span>
                     <span class="page-bar"><span class="page-bar-fill" style="width:{{ p.pct }}%"></span></span>
                     <span class="count">{{ '{:,}'.format(p.count) }}</span>
                 </div>
@@ -304,7 +333,20 @@ function escapeHtml(s) {
     })[c]);
 }
 
+function wireHourBars() {
+    const detail = document.getElementById('hour-detail');
+    if (!detail) return;
+    document.querySelectorAll('#hour-heatmap .heatmap-cell').forEach(cell => {
+        cell.addEventListener('click', () => {
+            const h = cell.dataset.hour;
+            const n = cell.dataset.count;
+            detail.textContent = 'שעה ' + h + ':00 — ' + n + ' אירועים';
+        });
+    });
+}
+
 refreshRelativeTimes();
+wireHourBars();
 setInterval(refreshRelativeTimes, 30000);
 setInterval(refreshTable, 60000);
 </script>

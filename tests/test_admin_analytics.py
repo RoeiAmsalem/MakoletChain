@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app import app, _compute_sessions
+from app import app, _compute_sessions, format_duration_he
 from werkzeug.security import generate_password_hash
 
 
@@ -266,3 +266,85 @@ class TestCache:
             client.get('/admin/analytics?range=7d&user_id=2')
             client.get('/admin/analytics?range=7d&user_id=2')
             assert spy.call_count == 2
+
+
+# ── Polish pass ───────────────────────────────────────────────
+
+class TestFormatDurationHe:
+
+    def test_zero(self):
+        assert format_duration_he(0) == '—'
+
+    def test_under_minute(self):
+        assert format_duration_he(30) == 'פחות מדקה'
+
+    def test_minutes(self):
+        assert format_duration_he(90) == '1 דקות'
+
+    def test_exact_hour(self):
+        assert format_duration_he(3600) == '1 שעות'
+
+    def test_hour_and_minutes(self):
+        assert format_duration_he(3700) == '1 שעות 1 דקות'
+
+    def test_two_hours(self):
+        assert format_duration_he(7200) == '2 שעות'
+
+
+class TestPolishRendering:
+
+    def test_page_labels_mapping(self, client):
+        """Top pages must render Hebrew labels (e.g. 'בית'), not raw paths."""
+        now = datetime.now(timezone.utc)
+        for i in range(3):
+            _seed_event(2, now - timedelta(hours=i + 1),
+                        event_type='page_view', page='/')
+        _clear_cache()
+        _login(client, 'admin@test.com')
+        res = client.get('/admin/analytics?range=7d')
+        body = res.get_data(as_text=True)
+        assert 'בית' in body
+        # The raw '/' path should not appear as a popular-page list-item label.
+        # We assert the .name span around the page label uses Hebrew.
+        assert '<span class="name">בית</span>' in body
+
+    def test_active_days_subtitle_full(self, client):
+        """When distinct_days == days_in_window the tile shows 'פעיל בכל יום'."""
+        now = datetime.now(timezone.utc)
+        # 7 events spread across 7 distinct days to match 7d window.
+        for i in range(7):
+            _seed_event(2, now - timedelta(days=i, hours=2),
+                        event_type='page_view')
+        _clear_cache()
+        _login(client, 'admin@test.com')
+        res = client.get('/admin/analytics?range=7d')
+        body = res.get_data(as_text=True)
+        assert 'פעיל בכל יום' in body
+
+    def test_sessions_per_day_rounding(self, client):
+        """4.0 should render as '4', not '4.0'."""
+        now = datetime.now(timezone.utc)
+        # 4 logins per day for 1 day → 4 sessions / 7 days ≈ 0.6 (not integer)
+        # To get exactly 4.0 ses/day, we'd need 28 sessions in 7d. Use 7
+        # distinct logins (one per day, >30min apart) → 7 sessions / 7 days = 1.0.
+        for i in range(7):
+            _seed_event(2, now - timedelta(days=i, hours=2),
+                        event_type='login')
+        _clear_cache()
+        _login(client, 'admin@test.com')
+        res = client.get('/admin/analytics?range=7d')
+        body = res.get_data(as_text=True)
+        # The string '1.0' must not appear in the subtitle; '1 ליום' should.
+        assert '1.0 ליום בממוצע' not in body
+        assert '1 ליום בממוצע' in body
+
+    def test_hour_chart_subtitle(self, client):
+        """The hour chart must render the explanatory subtitle."""
+        now = datetime.now(timezone.utc)
+        _seed_event(2, now - timedelta(hours=2), event_type='page_view')
+        _clear_cache()
+        _login(client, 'admin@test.com')
+        res = client.get('/admin/analytics?range=7d')
+        body = res.get_data(as_text=True)
+        assert 'כמות פעולות בכל שעה ביום' in body
+        assert 'מקסימום' in body
