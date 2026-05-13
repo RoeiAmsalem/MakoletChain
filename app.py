@@ -3344,7 +3344,10 @@ def api_iec_sync():
 _SESSION_GAP_SECONDS = 30 * 60
 
 # Bump when the cached payload structure changes — old entries are dropped.
-_ANALYTICS_CACHE_VERSION = 2
+_ANALYTICS_CACHE_VERSION = 3
+
+# Line colors assigned to managers in user_id order (stable across renders).
+USER_LINE_COLORS = ['#378ADD', '#1D9E75', '#D85A30', '#B5739D', '#E0B341', '#7D5BA6']
 
 PAGE_LABELS = {
     '/': 'בית',
@@ -3473,6 +3476,53 @@ def _fetch_events_range(db, start_utc, end_utc, user_id=None):
     return [dict(r) for r in db.execute(sql, params).fetchall()]
 
 
+def _daily_per_user(events, start_utc, end_utc, db):
+    """Daily per-user event counts for the chart. Zero-fills missing days
+    so each user's data array has one entry per calendar day in the range
+    (Israel time), ordered ascending."""
+    # Build the inclusive list of IL date strings in the window.
+    start_il = start_utc.astimezone(IL_TZ).date()
+    end_il = end_utc.astimezone(IL_TZ).date()
+    days = []
+    d = start_il
+    while d <= end_il:
+        days.append(d)
+        d += timedelta(days=1)
+    day_index = {d.isoformat(): i for i, d in enumerate(days)}
+    labels = [d.strftime('%d/%m') for d in days]
+
+    # Bucket events by (user_id, IL-date).
+    per_user = {}
+    for e in events:
+        ts_il = _parse_event_ts(e['created_at']).astimezone(IL_TZ).date()
+        idx = day_index.get(ts_il.isoformat())
+        if idx is None:
+            continue
+        u = per_user.setdefault(e['user_id'], [0] * len(days))
+        u[idx] += 1
+
+    if not per_user:
+        return {'labels': labels, 'users': []}
+
+    # Resolve user names; assign color by sorted user_id.
+    ids = sorted(per_user.keys())
+    placeholders = ','.join(['?'] * len(ids))
+    rows = db.execute(
+        f"SELECT id, name FROM users WHERE id IN ({placeholders})", ids
+    ).fetchall()
+    name_by_id = {r['id']: (r['name'] or f'#{r["id"]}') for r in rows}
+
+    users_out = []
+    for i, uid in enumerate(ids):
+        users_out.append({
+            'user_id': uid,
+            'name': name_by_id.get(uid, f'#{uid}'),
+            'color': USER_LINE_COLORS[i % len(USER_LINE_COLORS)],
+            'data': per_user[uid],
+        })
+    return {'labels': labels, 'users': users_out}
+
+
 def _analytics_aggregate(range_key, user_id=None):
     """Compute aggregates for the requested window. Returns a dict that the
     template renders directly. NEVER call this when the cache should be hit
@@ -3526,16 +3576,8 @@ def _analytics_aggregate(range_key, user_id=None):
     # Tile 4 — days active.
     distinct_days = len({e['created_at'][:10] for e in events})
 
-    # Hour chart — 24 buckets (UTC hour → IL hour).
-    hour_counts = [0] * 24
-    for e in events:
-        ts_il = _parse_event_ts(e['created_at']).astimezone(IL_TZ)
-        hour_counts[ts_il.hour] += 1
-    max_hour = max(hour_counts) or 1
-    # Peak hours: top hours by count, only those with non-zero events.
-    hours_with_events = [(h, c) for h, c in enumerate(hour_counts) if c > 0]
-    hours_with_events.sort(key=lambda hc: -hc[1])
-    peak_hours = [h for h, _ in hours_with_events[:2]]
+    # Daily per-user line chart payload.
+    daily_per_user = _daily_per_user(events, start_utc, end_utc, db)
 
     # Top pages.
     page_counts = {}
@@ -3626,9 +3668,7 @@ def _analytics_aggregate(range_key, user_id=None):
         'active_minutes_per_day': active_minutes_per_day,
         'active_per_day_label': active_per_day_label,
         'distinct_days': distinct_days,
-        'hour_counts': hour_counts,
-        'hour_max': max_hour,
-        'peak_hours': peak_hours,
+        'daily_per_user': daily_per_user,
         'top_pages': top_pages_out,
         'device': device,
         'users_table': users_table,

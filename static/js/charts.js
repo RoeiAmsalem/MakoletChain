@@ -81,6 +81,76 @@ function buildProfitBarChart(canvasId, labels, values) {
     });
 }
 
+function initDailyActivityChart(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return null;
+    const ctx = canvas.getContext('2d');
+    const datasets = (payload.users || []).map(u => ({
+        label: u.name,
+        data: u.data,
+        borderColor: u.color,
+        backgroundColor: hexToRgba(u.color, 0.12),
+        borderWidth: 2,
+        tension: 0.3,
+        fill: false,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        pointBackgroundColor: u.color,
+    }));
+    return new Chart(ctx, {
+        type: 'line',
+        data: { labels: payload.labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    rtl: true,
+                    labels: {
+                        color: PALETTE.tickText,
+                        font: { size: 12 },
+                        usePointStyle: true,
+                        boxWidth: 8,
+                    },
+                },
+                tooltip: {
+                    rtl: true,
+                    backgroundColor: 'rgba(15,23,42,0.97)',
+                    titleColor: '#f1f5f9',
+                    bodyColor: '#cbd5e1',
+                    padding: 10,
+                    callbacks: {
+                        footer: items => {
+                            const total = items.reduce((s, it) => s + (it.parsed.y || 0), 0);
+                            return 'סה"כ: ' + total;
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 } },
+                    border: { color: PALETTE.border },
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText,
+                        font: { size: 11 },
+                        precision: 0,
+                        stepSize: 1,
+                    },
+                },
+            },
+        },
+    });
+}
+
 function loadLiveSales() {
     fetch('/api/live-sales')
         .then(r => r.json())

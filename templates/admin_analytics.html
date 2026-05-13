@@ -33,22 +33,8 @@
 
     /* Hour heatmap */
     .chart-subtitle { font-size:0.78rem; color:var(--text-muted); margin:-0.5rem 0 0.85rem; }
-    .chart-head { display:flex; align-items:baseline; justify-content:space-between; gap:0.75rem; margin-bottom:0.25rem; flex-wrap:wrap; }
-    .chart-max { font-size:0.78rem; color:var(--text-secondary); white-space:nowrap; }
-    .heatmap { display:grid; grid-template-columns:repeat(24, 1fr); gap:3px; direction:ltr; }
-    .heatmap-cell { height:32px; border-radius:4px; background:var(--bg); position:relative; cursor:pointer; transition:opacity 0.1s; }
-    .heatmap-cell:hover { opacity:0.85; }
-    .heatmap-cell.lvl-1 { background:#B5D4F4; }
-    .heatmap-cell.lvl-2 { background:#378ADD; }
-    .heatmap-axis { display:grid; grid-template-columns:repeat(24, 1fr); margin-top:0.4rem; font-size:10px; color:var(--text-muted); direction:ltr; }
-    .heatmap-axis span { text-align:center; }
-    .heatmap-axis span.label-skip { visibility:hidden; }
-    .hour-detail { font-size:0.85rem; color:var(--text-primary); margin-top:0.75rem; min-height:1.2em; }
-    .peak-line { font-size:0.82rem; color:var(--text-secondary); margin-top:0.45rem; }
-
-    @media (max-width: 600px) {
-        .heatmap-axis span.label-skip-mobile { visibility:hidden; }
-    }
+    .daily-chart-wrap { position:relative; height:240px; }
+    .chart-empty { padding:2.5rem 1rem; text-align:center; color:var(--text-muted); font-size:0.9rem; }
 
     /* Pages + device side-by-side */
     .two-col { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem; }
@@ -163,36 +149,15 @@
     </div>
 
     <div class="section-card">
-        <div class="chart-head">
-            <h2 style="margin:0;">פעילות לפי שעה</h2>
-            <span class="chart-max">מקסימום: {{ analytics.hour_max }} פעולות בשעה</span>
+        <h2 style="margin:0;">מספר פעולות בכל יום בטווח שנבחר, מפוצל לפי משתמש</h2>
+        <div class="chart-subtitle">סך הפעולות לכל משתמש לפי תאריך</div>
+        {% set has_data = analytics.daily_per_user.users and (analytics.daily_per_user.users|map(attribute='data')|map('sum')|sum) > 0 %}
+        {% if has_data %}
+        <div class="daily-chart-wrap">
+            <canvas id="dailyActivityChart" style="max-height:240px;"></canvas>
         </div>
-        <div class="chart-subtitle">כמות פעולות בכל שעה ביום (כל המשתמשים, סך הטווח שנבחר)</div>
-        <div class="heatmap" id="hour-heatmap">
-            {% for c in analytics.hour_counts %}
-                {% if c == 0 %}
-                    {% set lvl = '' %}
-                {% elif (c * 100 // analytics.hour_max) >= 50 %}
-                    {% set lvl = 'lvl-2' %}
-                {% else %}
-                    {% set lvl = 'lvl-1' %}
-                {% endif %}
-                <div class="heatmap-cell {{ lvl }}"
-                     data-hour="{{ '%02d'|format(loop.index0) }}"
-                     data-count="{{ c }}"
-                     title="{{ '%02d'|format(loop.index0) }}:00 — {{ c }} אירועים"></div>
-            {% endfor %}
-        </div>
-        <div class="heatmap-axis">
-            {% for i in range(24) %}
-                <span class="{% if i % 3 != 0 %}label-skip-mobile{% endif %}">{{ '%02d'|format(i) }}</span>
-            {% endfor %}
-        </div>
-        <div class="hour-detail" id="hour-detail"></div>
-        {% if analytics.peak_hours and analytics.peak_hours|length >= 2 %}
-        <div class="peak-line">שעות הפעילות העיקריות: {{ '%02d'|format(analytics.peak_hours[0]) }}:00 ו-{{ '%02d'|format(analytics.peak_hours[1]) }}:00</div>
-        {% elif analytics.peak_hours and analytics.peak_hours|length == 1 %}
-        <div class="peak-line">שעת הפעילות העיקרית: {{ '%02d'|format(analytics.peak_hours[0]) }}:00</div>
+        {% else %}
+        <div class="chart-empty">אין מספיק נתונים — חזור בעוד כמה ימים</div>
         {% endif %}
     </div>
 
@@ -333,21 +298,20 @@ function escapeHtml(s) {
     })[c]);
 }
 
-function wireHourBars() {
-    const detail = document.getElementById('hour-detail');
-    if (!detail) return;
-    document.querySelectorAll('#hour-heatmap .heatmap-cell').forEach(cell => {
-        cell.addEventListener('click', () => {
-            const h = cell.dataset.hour;
-            const n = cell.dataset.count;
-            detail.textContent = 'שעה ' + h + ':00 — ' + n + ' אירועים';
-        });
-    });
-}
-
 refreshRelativeTimes();
-wireHourBars();
 setInterval(refreshRelativeTimes, 30000);
 setInterval(refreshTable, 60000);
 </script>
+
+{% if not analytics.empty %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="{{ static_v('js/charts.js') }}"></script>
+<script>
+const DAILY_PAYLOAD = {{ analytics.daily_per_user|tojson }};
+(function () {
+    if (!document.getElementById('dailyActivityChart')) return;
+    initDailyActivityChart('dailyActivityChart', DAILY_PAYLOAD);
+})();
+</script>
+{% endif %}
 {% endblock %}
