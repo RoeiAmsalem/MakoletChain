@@ -149,8 +149,8 @@
     </div>
 
     <div class="section-card">
-        <h2 style="margin:0;">מספר פעולות בכל יום בטווח שנבחר, מפוצל לפי משתמש</h2>
-        <div class="chart-subtitle">סך הפעולות לכל משתמש לפי תאריך</div>
+        <h2 style="margin:0;">פעילות יומית</h2>
+        <div class="chart-subtitle">מספר פעולות יומיות, מפוצל לפי משתמש</div>
         {% set has_data = analytics.daily_per_user.users and (analytics.daily_per_user.users|map(attribute='data')|map('sum')|sum) > 0 %}
         {% if has_data %}
         <div class="daily-chart-wrap">

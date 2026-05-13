@@ -89,21 +89,19 @@ function initDailyActivityChart(canvasId, payload) {
         label: u.name,
         data: u.data,
         borderColor: u.color,
-        backgroundColor: hexToRgba(u.color, 0.12),
-        borderWidth: 2,
-        tension: 0.3,
-        fill: false,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        pointBackgroundColor: u.color,
+        backgroundColor: hexToRgba(u.color, 0.85),
+        borderWidth: 1,
+        borderRadius: 4,
     }));
     return new Chart(ctx, {
-        type: 'line',
+        type: 'bar',
         data: { labels: payload.labels, datasets },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
+            barPercentage: 0.8,
+            categoryPercentage: 0.8,
             plugins: {
                 legend: {
                     position: 'bottom',
