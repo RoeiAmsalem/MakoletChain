@@ -388,6 +388,29 @@ scheduler.add_job(
 )
 
 
+def recompute_analytics_cache():
+    """Recompute /admin/analytics aggregates for all ranges. Runs right after
+    the 03:00 retention cleanup so the cache reflects the post-prune dataset."""
+    try:
+        from app import app, _analytics_aggregate, _analytics_cache_set, _VALID_ANALYTICS_RANGES
+        with app.app_context():
+            for r in _VALID_ANALYTICS_RANGES:
+                payload = _analytics_aggregate(r)
+                _analytics_cache_set(r, payload)
+        log.info("Recomputed analytics_cache for %d ranges", len(_VALID_ANALYTICS_RANGES))
+    except Exception as e:
+        log.error("recompute_analytics_cache failed: %s", e)
+
+
+# 03:30 IL — nightly recompute of analytics_cache (right after 03:00 cleanup)
+scheduler.add_job(
+    func=recompute_analytics_cache,
+    trigger=CronTrigger(hour=3, minute=30, timezone=IL_TZ),
+    id='recompute_analytics_cache_daily',
+    name='Recompute /admin/analytics cache',
+)
+
+
 if __name__ == '__main__':
     if os.getenv('ENABLE_AGENTS', 'true').lower() == 'false':
         log.info('[scheduler] ENABLE_AGENTS=false — skipping all agent scheduling')

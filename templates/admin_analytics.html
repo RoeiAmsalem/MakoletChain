@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% block title %}ניתוח שימוש — MakoletChain{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<style>
+    .an-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
+    .an-header { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem; }
+    .an-header h1 { font-size:1.5rem; font-weight:700; }
+    .an-caption { font-size:0.78rem; color:var(--text-muted); margin-bottom:1rem; }
+
+    .range-chips { display:flex; gap:0.4rem; flex-wrap:wrap; }
+    .range-chip { background:rgba(255,255,255,0.04); border:1px solid var(--card-border); color:var(--text-secondary); border-radius:999px; padding:0.35rem 0.85rem; cursor:pointer; font-size:0.82rem; font-family:inherit; transition:background 0.15s, color 0.15s, border-color 0.15s; text-decoration:none; }
+    .range-chip:hover { color:#fff; background:rgba(255,255,255,0.08); }
+    .range-chip.active { background:rgba(99,102,241,0.2); border-color:rgba(99,102,241,0.45); color:#a5b4fc; }
+
+    .filter-chip { display:inline-flex; align-items:center; gap:0.4rem; background:rgba(99,102,241,0.15); border:1px solid rgba(99,102,241,0.35); color:#c7d2fe; border-radius:999px; padding:0.3rem 0.75rem; font-size:0.82rem; margin-bottom:1rem; }
+    .filter-chip a { color:#c7d2fe; text-decoration:none; font-weight:700; padding:0 0.2rem; }
+
+    .an-tiles { display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; margin-bottom:1.5rem; }
+
+    .delta-badge { display:inline-block; font-size:0.72rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:999px; margin-top:0.25rem; }
+    .delta-badge.up { background:rgba(34,197,94,0.18); color:#86efac; }
+    .delta-badge.down { background:rgba(239,68,68,0.18); color:#fca5a5; }
+    .delta-badge.flat { background:rgba(148,163,184,0.18); color:#cbd5e1; }
+    .tile-sub { font-size:0.75rem; color:rgba(241,245,249,0.6); margin-top:0.25rem; }
+
+    .section-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); margin-bottom:1.5rem; }
+    .section-card h2 { font-size:1rem; font-weight:600; margin-bottom:1rem; color:var(--text-primary); }
+
+    /* Hour heatmap */
+    .heatmap { display:grid; grid-template-columns:repeat(24, 1fr); gap:3px; direction:ltr; }
+    .heatmap-cell { height:32px; border-radius:4px; background:var(--bg); position:relative; cursor:default; }
+    .heatmap-cell.lvl-1 { background:#B5D4F4; }
+    .heatmap-cell.lvl-2 { background:#378ADD; }
+    .heatmap-axis { display:grid; grid-template-columns:repeat(24, 1fr); margin-top:0.4rem; font-size:0.7rem; color:var(--text-muted); direction:ltr; }
+    .heatmap-axis span { text-align:center; }
+
+    /* Pages + device side-by-side */
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem; }
+
+    .page-row { display:flex; align-items:center; gap:0.75rem; padding:0.45rem 0; font-size:0.88rem; }
+    .page-row .name { flex:1; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .page-row .count { color:var(--text-muted); font-size:0.78rem; min-width:40px; text-align:left; direction:ltr; }
+    .page-bar { height:6px; background:rgba(255,255,255,0.05); border-radius:3px; flex:1; max-width:140px; overflow:hidden; }
+    .page-bar-fill { height:100%; background:#378ADD; }
+
+    .device-card { display:flex; align-items:center; justify-content:space-around; gap:1.5rem; padding:1rem 0.5rem; }
+    .device-item { text-align:center; flex:1; }
+    .device-icon { font-size:2rem; color:var(--text-secondary); margin-bottom:0.5rem; }
+    .device-pct { font-size:1.6rem; font-weight:700; color:var(--text-primary); }
+    .device-label { font-size:0.78rem; color:var(--text-muted); margin-top:0.2rem; }
+
+    /* User table */
+    .user-table { width:100%; border-collapse:collapse; font-size:0.88rem; }
+    .user-table thead th { font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); padding:0.6rem 0.75rem; border-bottom:1px solid var(--card-border); text-align:right; }
+    .user-table tbody td { padding:0.65rem 0.75rem; border-bottom:1px solid rgba(255,255,255,0.04); }
+    .user-table tbody tr { cursor:pointer; transition:background 0.1s; }
+    .user-table tbody tr:hover { background:rgba(255,255,255,0.03); }
+    .user-avatar { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,#4338ca,#6366f1); color:#fff; font-weight:700; font-size:0.85rem; margin-left:0.6rem; vertical-align:middle; }
+    .user-cell { display:flex; align-items:center; }
+
+    .empty-box { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:3rem 1.5rem; text-align:center; color:var(--text-secondary); }
+    .empty-box .em-title { font-size:1rem; color:var(--text-primary); margin-bottom:0.5rem; }
+
+    @media (max-width: 768px) {
+        .an-container { padding:0.75rem !important; }
+        .an-header h1 { font-size:1.2rem !important; }
+        .an-tiles { grid-template-columns:repeat(2, 1fr); }
+        .two-col { grid-template-columns:1fr; }
+        .kpi-value { font-size:1.25rem !important; }
+        .kpi-label { font-size:0.68rem !important; }
+        .heatmap-cell { height:24px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="an-container">
+    <div class="an-header">
+        <h1>ניתוח שימוש</h1>
+        <div class="range-chips">
+            {% set chips = [('7d', '7 ימים'), ('30d', '30 ימים'), ('month', 'החודש'), ('all', 'מאז ההפעלה')] %}
+            {% for key, label in chips %}
+            <a href="{{ '/admin/analytics?range=' ~ key ~ ('&user_id=' ~ selected_user_id if selected_user_id else '') }}"
+               class="range-chip {% if range_key == key %}active{% endif %}">{{ label }}</a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="an-caption" id="updated-caption"></div>
+
+    {% if selected_user_id %}
+    <div class="filter-chip">
+        מסונן לפי: <strong>{{ selected_user_name or selected_user_id }}</strong>
+        <a href="{{ '/admin/analytics?range=' ~ range_key }}" title="הסר סינון">×</a>
+    </div>
+    {% endif %}
+
+    {% if analytics.empty %}
+    <div class="empty-box">
+        <div class="em-title">אוסף נתונים — חזור בעוד כמה שעות.</div>
+        <div style="font-size:0.85rem;">לא נמצאו אירועי שימוש בטווח שנבחר.</div>
+    </div>
+    {% else %}
+
+    <div class="an-tiles">
+        <div class="kpi-card kpi-card--income">
+            <div class="kpi-header"><span class="kpi-label">כניסות</span></div>
+            <span class="kpi-value" id="tile-logins">{{ '{:,}'.format(analytics.login_count) }}</span>
+            {% if analytics.prev_login_count is not none %}
+                {% set delta = analytics.login_count - analytics.prev_login_count %}
+                {% if delta > 0 %}
+                <span class="delta-badge up">▲ {{ '{:,}'.format(delta) }}</span>
+                {% elif delta < 0 %}
+                <span class="delta-badge down">▼ {{ '{:,}'.format(delta|abs) }}</span>
+                {% else %}
+                <span class="delta-badge flat">ללא שינוי</span>
+                {% endif %}
+            {% endif %}
+        </div>
+
+        <div class="kpi-card kpi-card--neutral">
+            <div class="kpi-header"><span class="kpi-label">מפגשים</span></div>
+            <span class="kpi-value">{{ '{:,}'.format(analytics.session_count) }}</span>
+            <span class="tile-sub">{{ analytics.sessions_per_day }} ליום בממוצע</span>
+        </div>
+
+        <div class="kpi-card kpi-card--salary">
+            <div class="kpi-header"><span class="kpi-label">זמן פעיל</span></div>
+            <span class="kpi-value">{{ analytics.active_time }}</span>
+            <span class="tile-sub">{{ analytics.active_minutes_per_day }} דק' ליום בממוצע</span>
+        </div>
+
+        <div class="kpi-card kpi-card--fixed">
+            <div class="kpi-header"><span class="kpi-label">ימים פעילים</span></div>
+            <span class="kpi-value">{{ analytics.distinct_days }} / {{ analytics.days_in_window }}</span>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2>פעילות לפי שעה</h2>
+        <div class="heatmap">
+            {% for c in analytics.hour_counts %}
+                {% if c == 0 %}
+                    {% set lvl = '' %}
+                {% elif (c * 100 // analytics.hour_max) >= 50 %}
+                    {% set lvl = 'lvl-2' %}
+                {% else %}
+                    {% set lvl = 'lvl-1' %}
+                {% endif %}
+                <div class="heatmap-cell {{ lvl }}" title="{{ '%02d'|format(loop.index0) }}:00 — {{ c }} אירועים"></div>
+            {% endfor %}
+        </div>
+        <div class="heatmap-axis">
+            {% for i in range(24) %}
+                <span>{% if i in [0, 6, 12, 18, 23] %}{{ '%02d'|format(i) }}{% endif %}</span>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="two-col">
+        <div class="section-card" style="margin-bottom:0;">
+            <h2>דפים פופולריים</h2>
+            {% if analytics.top_pages %}
+                {% for p in analytics.top_pages %}
+                <div class="page-row">
+                    <span class="name">{{ p.page }}</span>
+                    <span class="page-bar"><span class="page-bar-fill" style="width:{{ p.pct }}%"></span></span>
+                    <span class="count">{{ '{:,}'.format(p.count) }}</span>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div style="color:var(--text-muted); font-size:0.85rem;">—</div>
+            {% endif %}
+        </div>
+
+        <div class="section-card" style="margin-bottom:0;">
+            <h2>מכשיר</h2>
+            <div class="device-card">
+                <div class="device-item">
+                    <div class="device-icon"><i class="ti ti-device-mobile"></i></div>
+                    <div class="device-pct">{{ analytics.device.mobile_pct }}%</div>
+                    <div class="device-label">נייד</div>
+                </div>
+                <div class="device-item">
+                    <div class="device-icon"><i class="ti ti-device-desktop"></i></div>
+                    <div class="device-pct">{{ analytics.device.desktop_pct }}%</div>
+                    <div class="device-label">דסקטופ</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2>פעילות לפי משתמש</h2>
+        <table class="user-table">
+            <thead>
+                <tr>
+                    <th>משתמש</th>
+                    <th>סניף</th>
+                    <th>כניסות</th>
+                    <th>זמן פעיל</th>
+                    <th>פעיל לאחרונה</th>
+                </tr>
+            </thead>
+            <tbody id="users-tbody">
+                {% for u in analytics.users_table %}
+                <tr data-user-id="{{ u.user_id }}" onclick="filterByUser({{ u.user_id }})">
+                    <td>
+                        <span class="user-cell">
+                            <span class="user-avatar">{{ u.initial }}</span>
+                            <span>{{ u.name }}</span>
+                        </span>
+                    </td>
+                    <td>{{ u.branch_name }}</td>
+                    <td>{{ '{:,}'.format(u.logins) }}</td>
+                    <td>{{ u.active_time }}</td>
+                    <td class="last-active" data-utc="{{ u.last_active_utc }}">—</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const ANALYTICS_RANGE = {{ range_key|tojson }};
+const ANALYTICS_USER_ID = {{ selected_user_id|tojson }};
+const ANALYTICS_COMPUTED_AT = {{ (analytics.computed_at_utc if not analytics.empty else None)|tojson }};
+
+function filterByUser(uid) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('range', ANALYTICS_RANGE);
+    url.searchParams.set('user_id', uid);
+    window.location.href = url.toString();
+}
+
+function formatRelativeTime(utcStr) {
+    if (!utcStr) return '—';
+    const then = new Date(utcStr.replace(' ', 'T') + 'Z');
+    const diffMs = Date.now() - then.getTime();
+    const m = Math.round(diffMs / 60000);
+    if (m < 1) return 'עכשיו';
+    if (m < 60) return 'לפני ' + m + ' דק׳';
+    const h = Math.round(m / 60);
+    if (h < 24) return 'לפני ' + h + ' שע׳';
+    const d = Math.round(h / 24);
+    return 'לפני ' + d + ' ימים';
+}
+
+function refreshRelativeTimes() {
+    document.querySelectorAll('.last-active').forEach(el => {
+        const utc = el.dataset.utc;
+        if (utc) el.textContent = formatRelativeTime(utc);
+    });
+    const cap = document.getElementById('updated-caption');
+    if (cap && ANALYTICS_COMPUTED_AT) {
+        cap.textContent = 'עודכן ' + formatRelativeTime(ANALYTICS_COMPUTED_AT);
+    }
+}
+
+async function refreshTable() {
+    try {
+        const params = new URLSearchParams({range: ANALYTICS_RANGE});
+        if (ANALYTICS_USER_ID) params.set('user_id', ANALYTICS_USER_ID);
+        const res = await fetch('/api/admin/analytics/recent-activity?' + params);
+        if (!res.ok) return;
+        const data = await res.json();
+        const tbody = document.getElementById('users-tbody');
+        if (!tbody || !data.users_table) return;
+        tbody.innerHTML = data.users_table.map(u => `
+            <tr data-user-id="${u.user_id}" onclick="filterByUser(${u.user_id})">
+                <td><span class="user-cell">
+                    <span class="user-avatar">${escapeHtml(u.initial)}</span>
+                    <span>${escapeHtml(u.name)}</span>
+                </span></td>
+                <td>${escapeHtml(u.branch_name)}</td>
+                <td>${new Intl.NumberFormat('he-IL').format(u.logins)}</td>
+                <td>${escapeHtml(u.active_time)}</td>
+                <td class="last-active" data-utc="${escapeHtml(u.last_active_utc)}">—</td>
+            </tr>
+        `).join('');
+        refreshRelativeTimes();
+    } catch (e) { /* silent */ }
+}
+
+function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+}
+
+refreshRelativeTimes();
+setInterval(refreshRelativeTimes, 30000);
+setInterval(refreshTable, 60000);
+</script>
+{% endblock %}

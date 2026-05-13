@@ -3337,6 +3337,350 @@ def api_iec_sync():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+# ── /admin/analytics ────────────────────────────────────────────────────
+
+# Sessions are blocks of contiguous events <=30min apart. A 'login' event
+# always starts a fresh session even if the gap is smaller.
+_SESSION_GAP_SECONDS = 30 * 60
+
+
+def _classify_device(ua):
+    """mobile vs desktop from user_agent (keyword match)."""
+    if not ua:
+        return 'desktop'
+    ua_l = ua.lower()
+    if 'iphone' in ua_l or 'ipad' in ua_l or 'android' in ua_l:
+        return 'mobile'
+    return 'desktop'
+
+
+def _parse_event_ts(s):
+    """user_events.created_at is 'YYYY-MM-DD HH:MM:SS' in UTC."""
+    return datetime.strptime(s, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+
+
+def _compute_sessions(events):
+    """events: iterable of dicts with at least {created_at, event_type, user_id}.
+    Returns a list of sessions. Each session is a list of events. Sorted by user
+    then time; a new session starts on a 'login' event OR a >30min gap from the
+    previous event by the SAME user."""
+    by_user = {}
+    for e in events:
+        by_user.setdefault(e['user_id'], []).append(e)
+    sessions = []
+    for uid, ulist in by_user.items():
+        ulist.sort(key=lambda r: r['created_at'])
+        current = []
+        prev_ts = None
+        for e in ulist:
+            ts = _parse_event_ts(e['created_at'])
+            is_login = e['event_type'] == 'login'
+            gap_too_big = prev_ts is not None and (ts - prev_ts).total_seconds() > _SESSION_GAP_SECONDS
+            if not current or is_login or gap_too_big:
+                if current:
+                    sessions.append(current)
+                current = [e]
+            else:
+                current.append(e)
+            prev_ts = ts
+        if current:
+            sessions.append(current)
+    return sessions
+
+
+def _active_seconds_from_sessions(sessions):
+    """Sum of (last_event_ts - first_event_ts) per session, in seconds.
+    A single-event session contributes 0."""
+    total = 0
+    for s in sessions:
+        if len(s) < 2:
+            continue
+        first = _parse_event_ts(s[0]['created_at'])
+        last = _parse_event_ts(s[-1]['created_at'])
+        total += int((last - first).total_seconds())
+    return total
+
+
+def _range_bounds(range_key, db):
+    """Return (start_dt_utc, end_dt_utc, label_days_in_window). end is now (UTC).
+    For 'all', start = first event's created_at (or epoch fallback)."""
+    now = datetime.now(timezone.utc)
+    if range_key == '7d':
+        start = now - timedelta(days=7)
+        days = 7
+    elif range_key == '30d':
+        start = now - timedelta(days=30)
+        days = 30
+    elif range_key == 'month':
+        il_now = now.astimezone(IL_TZ)
+        start_il = il_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start = start_il.astimezone(timezone.utc)
+        days = il_now.day  # days elapsed in current month
+    else:  # 'all'
+        row = db.execute("SELECT MIN(created_at) AS m FROM user_events").fetchone()
+        if row and row['m']:
+            start = _parse_event_ts(row['m'])
+        else:
+            start = now - timedelta(days=1)
+        delta = now - start
+        days = max(1, int(delta.total_seconds() / 86400) + 1)
+    return start, now, days
+
+
+def _fetch_events_range(db, start_utc, end_utc, user_id=None):
+    sql = ("SELECT id, user_id, event_type, page, branch_id, "
+           "duration_seconds, user_agent, created_at "
+           "FROM user_events WHERE created_at >= ? AND created_at <= ?")
+    params = [start_utc.strftime('%Y-%m-%d %H:%M:%S'),
+              end_utc.strftime('%Y-%m-%d %H:%M:%S')]
+    if user_id:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    sql += " ORDER BY created_at"
+    return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+
+def _format_active_time(seconds):
+    """seconds → 'Xh Ym'. < 1m → '0m'."""
+    if seconds <= 0:
+        return '0m'
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    if h == 0:
+        return f'{m}m'
+    return f'{h}h {m}m'
+
+
+def _analytics_aggregate(range_key, user_id=None):
+    """Compute aggregates for the requested window. Returns a dict that the
+    template renders directly. NEVER call this when the cache should be hit
+    — the route handles cache lookup before calling."""
+    db = get_db()
+    start_utc, end_utc, days_in_window = _range_bounds(range_key, db)
+    events = _fetch_events_range(db, start_utc, end_utc, user_id=user_id)
+
+    # Empty state.
+    if not events:
+        return {
+            'empty': True,
+            'range': range_key,
+            'user_id': user_id,
+            'days_in_window': days_in_window,
+        }
+
+    # Tile 1 — logins + delta vs previous comparable window.
+    login_count = sum(1 for e in events if e['event_type'] == 'login')
+    prev_login_count = None
+    if range_key != 'all' and not user_id:
+        if range_key == 'month':
+            il_start = start_utc.astimezone(IL_TZ)
+            prev_month_last_day = il_start - timedelta(days=1)
+            prev_start_il = prev_month_last_day.replace(day=1, hour=0, minute=0,
+                                                       second=0, microsecond=0)
+            prev_start = prev_start_il.astimezone(timezone.utc)
+            prev_end = start_utc
+        else:
+            window = end_utc - start_utc
+            prev_end = start_utc
+            prev_start = start_utc - window
+        prow = db.execute(
+            "SELECT COUNT(*) AS c FROM user_events "
+            "WHERE event_type='login' AND created_at >= ? AND created_at < ?",
+            (prev_start.strftime('%Y-%m-%d %H:%M:%S'),
+             prev_end.strftime('%Y-%m-%d %H:%M:%S'))
+        ).fetchone()
+        prev_login_count = prow['c']
+
+    # Tile 2 — sessions.
+    sessions = _compute_sessions(events)
+    session_count = len(sessions)
+    sessions_per_day = round(session_count / days_in_window, 1)
+
+    # Tile 3 — active time.
+    active_seconds = _active_seconds_from_sessions(sessions)
+    active_minutes_per_day = round((active_seconds / 60) / days_in_window)
+
+    # Tile 4 — days active.
+    distinct_days = len({e['created_at'][:10] for e in events})
+
+    # Hour heatmap — 24 buckets (UTC hour → IL hour).
+    hour_counts = [0] * 24
+    for e in events:
+        ts_il = _parse_event_ts(e['created_at']).astimezone(IL_TZ)
+        hour_counts[ts_il.hour] += 1
+    max_hour = max(hour_counts) or 1
+
+    # Top pages.
+    page_counts = {}
+    for e in events:
+        if e['event_type'] != 'page_view' or not e['page']:
+            continue
+        page_counts[e['page']] = page_counts.get(e['page'], 0) + 1
+    top_pages = sorted(page_counts.items(), key=lambda kv: -kv[1])[:5]
+    total_pv = sum(page_counts.values()) or 1
+    top_pages_out = [
+        {'page': p, 'count': c, 'pct': round(c * 100 / total_pv)}
+        for p, c in top_pages
+    ]
+
+    # Device split.
+    mobile = sum(1 for e in events if _classify_device(e['user_agent']) == 'mobile')
+    desktop = len(events) - mobile
+    total_dev = mobile + desktop or 1
+    device = {
+        'mobile_pct': round(mobile * 100 / total_dev),
+        'desktop_pct': round(desktop * 100 / total_dev),
+    }
+
+    # Per-user table.
+    user_rows = {}
+    for e in events:
+        u = user_rows.setdefault(e['user_id'], {
+            'user_id': e['user_id'],
+            'logins': 0,
+            'events': [],
+        })
+        u['events'].append(e)
+        if e['event_type'] == 'login':
+            u['logins'] += 1
+    # User name + branch.
+    user_meta = {}
+    if user_rows:
+        ids = tuple(user_rows.keys())
+        placeholders = ','.join(['?'] * len(ids))
+        rows = db.execute(
+            f"SELECT u.id, u.name, "
+            f"(SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
+            f"  WHERE ub.user_id=u.id ORDER BY b.id LIMIT 1) AS branch_name "
+            f"FROM users u WHERE u.id IN ({placeholders})",
+            ids
+        ).fetchall()
+        for r in rows:
+            user_meta[r['id']] = {'name': r['name'] or '—',
+                                  'branch_name': r['branch_name'] or '—'}
+    users_table = []
+    for uid, u in user_rows.items():
+        sess_for_user = _compute_sessions(u['events'])
+        active_s = _active_seconds_from_sessions(sess_for_user)
+        last_event = u['events'][-1]['created_at']
+        meta = user_meta.get(uid, {'name': '—', 'branch_name': '—'})
+        users_table.append({
+            'user_id': uid,
+            'name': meta['name'],
+            'initial': (meta['name'][:1] if meta['name'] else '?'),
+            'branch_name': meta['branch_name'],
+            'logins': u['logins'],
+            'active_time': _format_active_time(active_s),
+            'last_active_utc': last_event,
+        })
+    users_table.sort(key=lambda r: -r['logins'])
+
+    return {
+        'empty': False,
+        'range': range_key,
+        'user_id': user_id,
+        'days_in_window': days_in_window,
+        'login_count': login_count,
+        'prev_login_count': prev_login_count,
+        'session_count': session_count,
+        'sessions_per_day': sessions_per_day,
+        'active_seconds': active_seconds,
+        'active_time': _format_active_time(active_seconds),
+        'active_minutes_per_day': active_minutes_per_day,
+        'distinct_days': distinct_days,
+        'hour_counts': hour_counts,
+        'hour_max': max_hour,
+        'top_pages': top_pages_out,
+        'device': device,
+        'users_table': users_table,
+        'computed_at_utc': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+    }
+
+
+def _analytics_cache_get(range_key):
+    """Return cached payload dict or None. Always silent on errors."""
+    try:
+        db = get_db()
+        row = db.execute(
+            "SELECT payload, computed_at FROM analytics_cache WHERE range = ?",
+            (range_key,)
+        ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row['payload'])
+        payload['computed_at_utc'] = row['computed_at']
+        return payload
+    except Exception:
+        return None
+
+
+def _analytics_cache_set(range_key, payload):
+    try:
+        db = get_db()
+        db.execute(
+            "INSERT INTO analytics_cache (range, payload, computed_at) "
+            "VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(range) DO UPDATE SET "
+            "  payload = excluded.payload, computed_at = excluded.computed_at",
+            (range_key, json.dumps(payload, ensure_ascii=False))
+        )
+        db.commit()
+    except Exception:
+        pass
+
+
+_VALID_ANALYTICS_RANGES = ('7d', '30d', 'month', 'all')
+
+
+@app.route('/admin/analytics')
+@_admin_required
+def admin_analytics():
+    range_key = request.args.get('range', 'all')
+    if range_key not in _VALID_ANALYTICS_RANGES:
+        range_key = 'all'
+    user_id = request.args.get('user_id', type=int)
+
+    # Cache only for unfiltered queries.
+    payload = None
+    if user_id is None:
+        payload = _analytics_cache_get(range_key)
+    if payload is None:
+        payload = _analytics_aggregate(range_key, user_id=user_id)
+        if user_id is None:
+            _analytics_cache_set(range_key, payload)
+
+    # Selected-user name for filter chip.
+    selected_user_name = None
+    if user_id:
+        db = get_db()
+        urow = db.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
+        if urow:
+            selected_user_name = urow['name']
+
+    return render_template(
+        'admin_analytics.html',
+        analytics=payload,
+        range_key=range_key,
+        selected_user_id=user_id,
+        selected_user_name=selected_user_name,
+        **_page_context('admin')
+    )
+
+
+@app.route('/api/admin/analytics/recent-activity')
+@_admin_required
+def api_admin_analytics_recent_activity():
+    """Lightweight endpoint for the user table's 60s auto-refresh.
+    Returns just the users_table portion for the requested range/user filter."""
+    range_key = request.args.get('range', 'all')
+    if range_key not in _VALID_ANALYTICS_RANGES:
+        range_key = 'all'
+    user_id = request.args.get('user_id', type=int)
+    payload = _analytics_aggregate(range_key, user_id=user_id)
+    return jsonify({'users_table': payload.get('users_table', []),
+                    'empty': payload.get('empty', False)})
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'project': 'MakoletChain'})
