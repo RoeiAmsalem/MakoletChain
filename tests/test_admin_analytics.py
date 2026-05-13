@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app import app, _compute_sessions, format_duration_he
+from app import app, _compute_sessions, format_duration_he, _daily_per_user
 from werkzeug.security import generate_password_hash
 
 
@@ -338,13 +338,90 @@ class TestPolishRendering:
         assert '1.0 ליום בממוצע' not in body
         assert '1 ליום בממוצע' in body
 
-    def test_hour_chart_subtitle(self, client):
-        """The hour chart must render the explanatory subtitle."""
+    def test_chart_canvas_renders(self, client):
+        """The new daily-per-user canvas must be present in the response."""
         now = datetime.now(timezone.utc)
         _seed_event(2, now - timedelta(hours=2), event_type='page_view')
         _clear_cache()
         _login(client, 'admin@test.com')
         res = client.get('/admin/analytics?range=7d')
         body = res.get_data(as_text=True)
-        assert 'כמות פעולות בכל שעה ביום' in body
-        assert 'מקסימום' in body
+        assert '<canvas id="dailyActivityChart"' in body
+
+
+# ── Daily per-user chart aggregation ──────────────────────────
+
+def _events_for(user_id, dt_utc):
+    return {'user_id': user_id, 'event_type': 'page_view',
+            'page': '/', 'created_at': dt_utc.strftime('%Y-%m-%d %H:%M:%S')}
+
+
+class TestDailyPerUserAggregation:
+
+    def test_aggregation(self, client):
+        """3 users, 5-day window: labels=5, users=3, data sums match counts."""
+        # Use the live app DB via fixture so user names resolve.
+        from app import get_db
+        now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+        start = now - timedelta(days=4)  # 5-day window inclusive
+
+        events = []
+        # User 2: 3 events on day 0, 1 event on day 2
+        events.append(_events_for(2, start))
+        events.append(_events_for(2, start + timedelta(minutes=5)))
+        events.append(_events_for(2, start + timedelta(minutes=10)))
+        events.append(_events_for(2, start + timedelta(days=2)))
+        # User 3: 2 events on day 4
+        events.append(_events_for(3, start + timedelta(days=4)))
+        events.append(_events_for(3, start + timedelta(days=4, minutes=5)))
+        # User 1 (admin) — included regardless of role, the chart aggregator
+        # works on raw events; role-exclusion happens at the collection layer.
+        events.append(_events_for(1, start + timedelta(days=1)))
+
+        with app.app_context():
+            db = get_db()
+            out = _daily_per_user(events, start, now, db)
+
+        assert len(out['labels']) == 5
+        assert len(out['users']) == 3
+        sums = {u['user_id']: sum(u['data']) for u in out['users']}
+        assert sums[2] == 4
+        assert sums[3] == 2
+        assert sums[1] == 1
+
+    def test_zero_fill(self, client):
+        """Events on day 0 and day 4 only — days 1-3 in data array are 0."""
+        from app import get_db
+        now = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+        start = now - timedelta(days=4)
+        events = [
+            _events_for(2, start),
+            _events_for(2, start + timedelta(days=4)),
+        ]
+        with app.app_context():
+            db = get_db()
+            out = _daily_per_user(events, start, now, db)
+        u2 = [u for u in out['users'] if u['user_id'] == 2][0]
+        assert u2['data'][0] == 1
+        assert u2['data'][1] == 0
+        assert u2['data'][2] == 0
+        assert u2['data'][3] == 0
+        assert u2['data'][4] == 1
+
+    def test_user_filter(self, client):
+        """With ?user_id=N, the payload contains only that user's line."""
+        now = datetime.now(timezone.utc)
+        _seed_event(2, now - timedelta(hours=2), event_type='page_view')
+        _seed_event(3, now - timedelta(hours=2), event_type='page_view')
+        _clear_cache()
+        _login(client, 'admin@test.com')
+        # Hit the JSON endpoint to inspect the payload structurally.
+        # The HTML response doesn't expose the payload directly; the
+        # aggregate is what we care about — call via the API endpoint
+        # by inspecting the cache write side effect isn't user_id-filtered,
+        # so call the helper directly via the route and parse the body.
+        from app import _analytics_aggregate
+        with app.app_context():
+            payload = _analytics_aggregate('7d', user_id=2)
+        assert len(payload['daily_per_user']['users']) == 1
+        assert payload['daily_per_user']['users'][0]['user_id'] == 2
