@@ -492,6 +492,12 @@ def goods():
     ctx = _page_context('goods')
     branch_id = ctx['branch_id']
     month = ctx['selected_month']
+
+    view = request.args.get('view')
+    if view in ('list', 'grouped'):
+        session['goods_view_mode'] = view
+    view_mode = session.get('goods_view_mode', 'list')
+
     db = get_db()
     rows = db.execute(
         "SELECT id, doc_date, supplier, ref_number, amount, doc_type "
@@ -512,8 +518,23 @@ def goods():
     for d in docs:
         d['amount_before_vat'] = round(d['amount'] / 1.17, 2)
 
+    groups_map = {}
+    for d in docs:
+        s = d['supplier'] or '—'
+        g = groups_map.setdefault(s, {
+            'supplier': s, 'count': 0, 'total': 0.0,
+            'total_before_vat': 0.0, 'docs': []
+        })
+        g['count'] += 1
+        g['total'] += d['amount']
+        g['total_before_vat'] += d['amount_before_vat']
+        g['docs'].append(d)
+    groups = sorted(groups_map.values(), key=lambda g: g['total'], reverse=True)
+
     ctx.update({
         'docs': docs,
+        'groups': groups,
+        'view_mode': view_mode,
         'total': total,
         'total_before_vat': total_before_vat,
         'invoices_total': invoices_total,
