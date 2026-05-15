@@ -234,6 +234,25 @@ def test_sales_footer_six_cells(client):
     assert len(cells) == 6, f"expected 6 footer cells, got {len(cells)}: {cells}"
 
 
+def test_sales_footer_source_order(client):
+    """The footer <td>s must be in the SAME source order as the <thead>
+    columns (תאריך | סכום | עסקאות | ממוצע | מקור | PDF), so the RTL
+    browser lays the label adjacent to the totals it labels.
+
+    Catches a regression where the 6 cells exist but are reordered /
+    reversed (e.g. סה"כ rendered last instead of first).
+    """
+    _login(client)
+    res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
+    cells = _footer_cells(res.get_data(as_text=True))
+    assert len(cells) == 6
+    assert 'סה"כ' in cells[0]                       # תאריך column
+    assert '₪' in cells[1] and any(c.isdigit() for c in cells[1])  # סכום
+    assert cells[2].replace(',', '').isdigit()      # עסקאות (txn count)
+    assert '₪' in cells[3]                          # ממוצע לעסקה
+    assert cells[4] == '' and cells[5] == ''        # מקור / PDF: no aggregate
+
+
 def test_sales_footer_transactions_sum(client):
     _login(client)
     res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
