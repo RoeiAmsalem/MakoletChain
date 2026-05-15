@@ -154,7 +154,9 @@ let pdfState = { date: null, page: 0, total: 0 };
 async function loadSales() {
     const kpis = document.getElementById('sales-kpis');
     const tbody = document.getElementById('sales-tbody');
-    const tfoot = document.getElementById('sales-tfoot');
+    // The table footer is server-rendered (single source of truth — see
+    // the <tfoot> Jinja block). JS must NOT rebuild it: a stale inline
+    // script would otherwise resurrect the old 3-cell layout.
     try {
         const res = await fetch(`/api/sales?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -191,7 +193,6 @@ async function loadSales() {
         // Table rows
         if (!d.sales.length) {
             tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
-            tfoot.innerHTML = '';
             return;
         }
 
@@ -220,16 +221,6 @@ async function loadSales() {
                 <td>${pdfBtn}</td>
             </tr>`;
         }).join('');
-
-        const totalTxn = d.sales.reduce((a, s) => a + (Number(s.transactions) || 0), 0);
-        tfoot.innerHTML = `<tr class="tfoot-total" style="font-weight:700;border-top:2px solid #334155;background:#0f172a">
-            <td>סה"כ</td>
-            <td class="money profit" style="direction:ltr;text-align:left;font-weight:700">₪ ${Number(d.total).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
-            <td style="text-align:center">${totalTxn}</td>
-            <td style="text-align:center">₪ ${d.avg_txn_value}</td>
-            <td></td>
-            <td></td>
-        </tr>`;
 
     } catch(err) {
         console.error(err);

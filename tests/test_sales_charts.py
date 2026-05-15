@@ -247,3 +247,40 @@ def test_sales_footer_avg_basket(client):
     cells = _footer_cells(res.get_data(as_text=True))
     basket = int(cells[3].replace('₪', '').replace(',', '').strip())
     assert basket == AVG_BASKET
+
+
+def test_sales_footer_browser_equivalent_six_distinct_cells(client):
+    """Regression for the 'tests pass but the browser shows 3 cells' bug.
+
+    The footer must be ONE source of truth — server-rendered — with six
+    DISTINCT <td>s, none spanning multiple columns. A colspan>1 cell is
+    exactly the old broken layout (סה"כ | total | <td colspan=4>), so we
+    assert there is no colspan>1 AND that the effective column count the
+    browser would lay out is exactly 6.
+
+    NOTE: footer correctness is server-side-only. There is no JS test
+    runner in this repo; the fix removes all client-side <tfoot> writes
+    so the rendered HTML *is* what the browser sees (no runtime rebuild).
+    """
+    _login(client)
+    res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
+    body = res.get_data(as_text=True)
+
+    foot = re.search(r'<tfoot[^>]*>(.*?)</tfoot>', body, re.S)
+    assert foot, 'no <tfoot> in /sales response'
+    foot_html = foot.group(1)
+
+    td_tags = re.findall(r'<td([^>]*)>', foot_html)
+    assert len(td_tags) == 6, \
+        f"expected 6 <td> tags, got {len(td_tags)}"
+
+    # The browser lays out columns by summing colspans. The old broken
+    # footer was 3 <td>s with one colspan=4 (still 6 columns) but only
+    # 3 *visible* cells — so also assert no cell spans.
+    spans = []
+    for attrs in td_tags:
+        m = re.search(r'colspan\s*=\s*["\']?(\d+)', attrs)
+        spans.append(int(m.group(1)) if m else 1)
+    assert all(s == 1 for s in spans), \
+        f"footer has a spanning cell (old 3-cell layout): colspans={spans}"
+    assert sum(spans) == 6
