@@ -1,18 +1,17 @@
-"""Tests for the /sales charts (daily revenue / day-of-week / cumulative).
+"""Tests for the /sales charts + 6-cell table footer.
 
-All red-vs-blue logic lives in the backend helpers, so most of these are
-pure unit tests on the helpers; one render test asserts the three canvases
-reach the page.
+Colour rule (single source of truth in the backend helpers):
+  red  = a bar that represents COMBINED Saturday+Sunday revenue.
+  blue = any single-day bar (Saturday alone, Sunday alone, anything else).
+  Friday is ALWAYS blue.
 
-Weekend rule recap:
-  - Friday is ALWAYS blue (it is NOT the red weekend).
-  - CASE A (branch HAS Saturday Z): Saturday is red; a Sunday is red only
-    when the preceding Saturday also has a Z in range.
-  - CASE B (branch has NO Saturday Z): a Sunday is the merged "שבת+ראשון"
-    red bar only when it has other Z days in its week; a lone isolated
-    Sunday stays a normal blue ראשון.
+  - has_saturday_z True  → every bar is its own day, all blue, no red.
+  - has_saturday_z False → a Sunday with no preceding Saturday Z is the
+    combined שבת+ראשון bar (red); day-of-week chart collapses Sat+Sun
+    into one red bar.
 """
 import os
+import re
 import sys
 import sqlite3
 from datetime import date, timedelta
@@ -23,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app import (
     app,
+    _has_saturday_z,
     _build_daily_chart_data,
     _build_dow_chart_data,
     _build_cumulative_chart_data,
@@ -56,38 +56,29 @@ def _find(daily, ddmm):
     return next(b for b in daily if b['date'] == ddmm)
 
 
-# ── CASE A — branch has Saturday Z reports ────────────────────
+# ── _has_saturday_z ───────────────────────────────────────────
 
-def test_build_daily_chart_has_saturday():
+def test_has_saturday_z_true():
+    assert _has_saturday_z([_z(FRI, 1), _z(SAT, 2), _z(SUN, 3)]) is True
+
+
+def test_has_saturday_z_false():
+    assert _has_saturday_z([_z(SUN, 1), _z(MON, 2), _z(FRI, 3)]) is False
+
+
+# ── Daily chart ───────────────────────────────────────────────
+
+def test_daily_chart_with_saturday_z_no_red():
+    """Branch runs Saturday Zs → every bar is its own day, all blue."""
     daily = _build_daily_chart_data([
-        _z(FRI, 1000), _z(SAT, 2000), _z(SUN, 3000),
+        _z(FRI, 1000), _z(SAT, 2000), _z(SUN, 3000), _z(MON, 1500),
     ])
-    sat = _find(daily, SAT.strftime('%d/%m'))
-    sun = _find(daily, SUN.strftime('%d/%m'))
-    fri = _find(daily, FRI.strftime('%d/%m'))
-
-    assert sat['color'] == 'red' and sat['label_secondary'] == 'שבת'
-    # Sunday is red because the preceding Saturday also has a Z.
-    assert sun['color'] == 'red' and sun['label_secondary'] == 'ראשון'
-    # Friday is NEVER the red weekend.
-    assert fri['color'] == 'blue' and fri['label_secondary'] == 'שישי'
+    assert all(b['color'] == 'blue' for b in daily)
+    assert all(b['label_secondary'] is None for b in daily)
 
 
-def test_sunday_blue_when_no_preceding_saturday_case_a():
-    """CASE A but THIS Sunday's own preceding Saturday has no Z → blue."""
-    other_sat = SAT + timedelta(days=7)        # keeps has_saturday_z True
-    lone_sun = SUN + timedelta(days=14)        # its Saturday (lone_sun-1)
-    daily = _build_daily_chart_data([          # is NOT in the data set
-        _z(other_sat, 500), _z(lone_sun, 900),
-    ])
-    s = _find(daily, lone_sun.strftime('%d/%m'))
-    assert s['color'] == 'blue' and s['label_secondary'] == 'ראשון'
-
-
-# ── CASE B — branch has NO Saturday Z reports ─────────────────
-
-def test_build_daily_chart_no_saturday():
-    # Sunday with neighbour weekday data in its week → merged red bar.
+def test_daily_chart_without_saturday_z():
+    """No Saturday Z → the Sunday becomes the combined שבת+ראשון red bar."""
     daily = _build_daily_chart_data([
         _z(SUN, 4000), _z(MON, 1200), _z(TUE, 1100),
     ])
@@ -95,33 +86,42 @@ def test_build_daily_chart_no_saturday():
     assert sun['color'] == 'red'
     assert sun['label_secondary'] == 'שבת+ראשון'
     assert _find(daily, MON.strftime('%d/%m'))['color'] == 'blue'
+    assert _find(daily, MON.strftime('%d/%m'))['label_secondary'] is None
 
 
-def test_build_daily_chart_lone_sunday_blue():
-    """The clarified edge case: an isolated Sunday (no other Z days in its
-    week) stays a normal blue ראשון even though has_saturday_z is False."""
-    daily = _build_daily_chart_data([_z(SUN, 4000)])
+def test_daily_chart_without_saturday_z_clean_sunday():
+    """One Saturday + its Sunday: has_saturday_z is True (a weekday=5 row
+    exists), so the Sunday is a single-day bar and stays blue."""
+    reports = [_z(SAT, 2000), _z(SUN, 3000)]
+    assert _has_saturday_z(reports) is True
+    daily = _build_daily_chart_data(reports)
     sun = _find(daily, SUN.strftime('%d/%m'))
     assert sun['color'] == 'blue'
-    assert sun['label_secondary'] == 'ראשון'
+    assert sun['label_secondary'] is None
+
+
+def test_daily_friday_always_blue():
+    # CASE A
+    a = _build_daily_chart_data([_z(FRI, 1), _z(SAT, 2), _z(SUN, 3)])
+    assert _find(a, FRI.strftime('%d/%m'))['color'] == 'blue'
+    # CASE B
+    b = _build_daily_chart_data([_z(FRI, 1), _z(SUN, 2), _z(MON, 3)])
+    assert _find(b, FRI.strftime('%d/%m'))['color'] == 'blue'
 
 
 # ── Day-of-week chart ─────────────────────────────────────────
 
-def test_build_dow_chart_has_saturday():
+def test_dow_chart_with_saturday_z_seven_bars_all_blue():
     dow = _build_dow_chart_data([
         _z(FRI, 1000), _z(SAT, 2000), _z(SUN, 3000), _z(MON, 500),
     ])
     assert len(dow) == 7
     assert [b['label'] for b in dow] == \
         ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת']
-    by = {b['label']: b for b in dow}
-    assert by['שבת']['color'] == 'red'
-    assert by['ראשון']['color'] == 'red'
-    assert by['שישי']['color'] == 'blue'        # Friday never red
+    assert all(b['color'] == 'blue' for b in dow)
 
 
-def test_build_dow_chart_no_saturday():
+def test_dow_chart_without_saturday_z_six_bars():
     dow = _build_dow_chart_data([
         _z(SUN, 4000), _z(SUN + timedelta(days=7), 2000),  # two Sundays
         _z(MON, 1000), _z(FRI, 800),
@@ -129,15 +129,16 @@ def test_build_dow_chart_no_saturday():
     assert len(dow) == 6
     assert dow[0]['label'] == 'שבת+ראשון'
     assert dow[0]['color'] == 'red'
-    assert dow[0]['value'] == 3000              # mean(4000, 2000)
+    assert dow[0]['value'] == 3000               # mean(4000, 2000)
+    assert all(b['color'] == 'blue' for b in dow[1:])
     by = {b['label']: b for b in dow}
-    assert by['שישי']['color'] == 'blue'        # Friday never red
-    assert 'שבת' not in by                       # no standalone Saturday bar
+    assert by['שישי']['color'] == 'blue'         # Friday never red
+    assert 'שבת' not in by                        # no standalone Saturday bar
 
 
 # ── Cumulative ────────────────────────────────────────────────
 
-def test_build_cumulative():
+def test_cumulative_running_sum():
     d0 = date(2026, 5, 4)
     cum = _build_cumulative_chart_data([
         _z(d0, 100),
@@ -158,24 +159,14 @@ def test_cumulative_sorts_unordered_input():
     assert [c['value'] for c in cum] == [100, 150, 225]
 
 
-# ── Friday is never red, in every scenario ────────────────────
+# ── Page render + footer ──────────────────────────────────────
 
-def test_friday_never_red():
-    # daily, CASE A
-    a = _build_daily_chart_data([_z(FRI, 1), _z(SAT, 2), _z(SUN, 3)])
-    assert _find(a, FRI.strftime('%d/%m'))['color'] == 'blue'
-    # daily, CASE B
-    b = _build_daily_chart_data([_z(SUN, 1), _z(FRI, 2), _z(MON, 3)])
-    assert _find(b, FRI.strftime('%d/%m'))['color'] == 'blue'
-    # dow, CASE A
-    da = _build_dow_chart_data([_z(FRI, 1), _z(SAT, 2), _z(SUN, 3)])
-    assert {x['label']: x for x in da}['שישי']['color'] == 'blue'
-    # dow, CASE B
-    db = _build_dow_chart_data([_z(FRI, 1), _z(SUN, 2), _z(MON, 3)])
-    assert {x['label']: x for x in db}['שישי']['color'] == 'blue'
+# (date, amount, transactions)
+SEED = [(FRI, 1000, 10), (SAT, 2000, 20), (SUN, 3000, 25), (MON, 1500, 12)]
+TOTAL_REV = sum(a for _, a, _ in SEED)            # 7500
+TOTAL_TXN = sum(t for _, _, t in SEED)            # 67
+AVG_BASKET = round(TOTAL_REV / TOTAL_TXN)         # 112
 
-
-# ── Page render ───────────────────────────────────────────────
 
 @pytest.fixture
 def client():
@@ -197,11 +188,11 @@ def client():
         "VALUES (2, 'Manager', 'mgr@test.com', ?, 'manager', 1)",
         (generate_password_hash('test123'),))
     conn.execute("INSERT INTO user_branches (user_id, branch_id) VALUES (2, 126)")
-    for d, amt in [(FRI, 1000), (SAT, 2000), (SUN, 3000), (MON, 1500)]:
+    for d, amt, txn in SEED:
         conn.execute(
-            "INSERT INTO daily_sales (branch_id, date, amount, source) "
-            "VALUES (?, ?, ?, 'z_report')",
-            (126, d.strftime('%Y-%m-%d'), amt))
+            "INSERT INTO daily_sales (branch_id, date, amount, transactions, source) "
+            "VALUES (?, ?, ?, ?, 'z_report')",
+            (126, d.strftime('%Y-%m-%d'), amt, txn))
     conn.commit()
     conn.close()
 
@@ -218,6 +209,14 @@ def _login(client, email='mgr@test.com', password='test123'):
                        follow_redirects=False)
 
 
+def _footer_cells(body):
+    """Return the stripped text of each <td> in the server-rendered tfoot."""
+    foot = re.search(r'<tfoot[^>]*>(.*?)</tfoot>', body, re.S)
+    assert foot, 'no <tfoot> in /sales response'
+    cells = re.findall(r'<td[^>]*>(.*?)</td>', foot.group(1), re.S)
+    return [re.sub(r'<[^>]+>', '', c).strip() for c in cells]
+
+
 def test_sales_page_renders_three_canvases(client):
     _login(client)
     res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
@@ -226,3 +225,25 @@ def test_sales_page_renders_three_canvases(client):
     assert '<canvas id="salesDailyChart"' in body
     assert '<canvas id="salesDowChart"' in body
     assert '<canvas id="salesCumChart"' in body
+
+
+def test_sales_footer_six_cells(client):
+    _login(client)
+    res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
+    cells = _footer_cells(res.get_data(as_text=True))
+    assert len(cells) == 6, f"expected 6 footer cells, got {len(cells)}: {cells}"
+
+
+def test_sales_footer_transactions_sum(client):
+    _login(client)
+    res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
+    cells = _footer_cells(res.get_data(as_text=True))
+    assert int(cells[2]) == TOTAL_TXN
+
+
+def test_sales_footer_avg_basket(client):
+    _login(client)
+    res = client.get(f"/sales?month={SAT.strftime('%Y-%m')}")
+    cells = _footer_cells(res.get_data(as_text=True))
+    basket = int(cells[3].replace('₪', '').replace(',', '').strip())
+    assert basket == AVG_BASKET
