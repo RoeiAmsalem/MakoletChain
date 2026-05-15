@@ -479,10 +479,113 @@ def index():
     return render_template('index.html', **ctx)
 
 
+# ── Sales charts ─────────────────────────────────────────────
+# datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+_HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
+               3: 'חמישי', 4: 'שישי', 5: 'שבת'}
+
+
+def _parse_z_rows(z_reports):
+    """[{date,'amount'}, ...] → sorted [(date, amount)] ascending by date."""
+    out = []
+    for z in z_reports:
+        d = z['date']
+        if isinstance(d, str):
+            d = datetime.strptime(d, '%Y-%m-%d').date()
+        out.append((d, float(z['amount'] or 0)))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def _has_saturday_z(z_reports):
+    return any(d.weekday() == 5 for d, _ in _parse_z_rows(z_reports))
+
+
+def _build_daily_chart_data(z_reports):
+    """One bar per Z-report date. Friday is ALWAYS blue (not the weekend)."""
+    rows = _parse_z_rows(z_reports)
+    date_set = {d for d, _ in rows}
+    has_sat = any(d.weekday() == 5 for d in date_set)
+    out = []
+    for d, amt in rows:
+        wd = d.weekday()
+        secondary, color = None, 'blue'
+        if wd == 5:                       # Saturday
+            secondary, color = 'שבת', 'red'
+        elif wd == 4:                     # Friday — always blue
+            secondary = 'שישי'
+        elif wd == 6:                     # Sunday
+            secondary = 'ראשון'
+            if has_sat:
+                # CASE A: red only if the preceding Saturday also has a Z.
+                if (d - timedelta(days=1)) in date_set:
+                    color = 'red'
+            else:
+                # CASE B: merged weekend bar only when the Sunday has other
+                # Z-report days in its week; a lone isolated Sunday stays blue.
+                week = {d + timedelta(days=i) for i in range(7)}  # Sun..Sat
+                if any(od != d and od in week for od, _ in rows):
+                    secondary, color = 'שבת+ראשון', 'red'
+        out.append({'date': d.strftime('%d/%m'),
+                    'label_secondary': secondary,
+                    'value': round(amt, 2), 'color': color})
+    return out
+
+
+def _build_dow_chart_data(z_reports):
+    """Average revenue per weekday. Friday is ALWAYS blue."""
+    rows = _parse_z_rows(z_reports)
+    has_sat = any(d.weekday() == 5 for d, _ in rows)
+    buckets = {}
+    for d, amt in rows:
+        buckets.setdefault(d.weekday(), []).append(amt)
+
+    def avg(wd):
+        vals = buckets.get(wd, [])
+        return round(sum(vals) / len(vals), 2) if vals else 0
+
+    if has_sat:
+        # 7 bars: ראשון … שבת. Sat & Sun red, Friday blue.
+        return [{'label': _HE_WEEKDAY[wd], 'value': avg(wd),
+                 'color': 'red' if wd in (5, 6) else 'blue'}
+                for wd in (6, 0, 1, 2, 3, 4, 5)]
+    # CASE B: 6 bars — combined שבת+ראשון first (all Sundays), then Mon..Fri.
+    sun = buckets.get(6, [])
+    combined = round(sum(sun) / len(sun), 2) if sun else 0
+    out = [{'label': 'שבת+ראשון', 'value': combined, 'color': 'red'}]
+    out += [{'label': _HE_WEEKDAY[wd], 'value': avg(wd), 'color': 'blue'}
+            for wd in (0, 1, 2, 3, 4)]
+    return out
+
+
+def _build_cumulative_chart_data(z_reports):
+    out, running = [], 0.0
+    for d, amt in _parse_z_rows(z_reports):
+        running += amt
+        out.append({'date': d.strftime('%d/%m'), 'value': round(running, 2)})
+    return out
+
+
+def _sales_charts_data(z_reports):
+    return {
+        'daily': _build_daily_chart_data(z_reports),
+        'dow': _build_dow_chart_data(z_reports),
+        'cumulative': _build_cumulative_chart_data(z_reports),
+        'has_saturday_z': _has_saturday_z(z_reports),
+    }
+
+
 @app.route('/sales')
 @login_required
 def sales():
     ctx = _page_context('sales')
+    db = get_db()
+    rows = db.execute(
+        "SELECT date, amount FROM daily_sales "
+        "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date ASC",
+        (ctx['branch_id'], ctx['selected_month'])
+    ).fetchall()
+    ctx['charts_data'] = _sales_charts_data([dict(r) for r in rows])
     return render_template('sales.html', **ctx)
 
 
