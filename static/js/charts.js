@@ -200,6 +200,7 @@ function initSalesDailyChart(canvasId, payload) {
                     border: { color: PALETTE.border },
                 },
                 y: {
+                    position: 'right',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },
@@ -241,6 +242,7 @@ function initSalesDowChart(canvasId, payload) {
             },
             scales: {
                 x: {
+                    position: 'top',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },
@@ -250,6 +252,7 @@ function initSalesDowChart(canvasId, payload) {
                     },
                 },
                 y: {
+                    position: 'right',
                     grid: { display: false },
                     border: { color: PALETTE.border },
                     ticks: { color: PALETTE.tickText, font: { size: 12 } },
@@ -295,6 +298,7 @@ function initSalesCumulativeChart(canvasId, payload) {
                     border: { color: PALETTE.border },
                 },
                 y: {
+                    position: 'right',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },

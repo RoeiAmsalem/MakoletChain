@@ -428,6 +428,7 @@ body {
 .data-table td.salary { color: #93c5fd; font-weight: 600; }
 
 .data-table tfoot td {
+    padding: 0.65rem 0.75rem;
     font-weight: 700;
     border-top: 2px solid var(--card-border);
     background: var(--bg) !important;
