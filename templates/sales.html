@@ -71,23 +71,6 @@
     <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
 </section>
 
-<!-- Sales Charts -->
-<section class="card" style="margin-bottom:1.25rem;">
-    <h2 class="section-title" style="margin-bottom:0.15rem;">📊 הכנסות יומיות</h2>
-    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">הכנסה בכל יום של החודש</div>
-    <div style="position:relative;height:240px;"><canvas id="salesDailyChart"></canvas></div>
-</section>
-<section class="card" style="margin-bottom:1.25rem;">
-    <h2 class="section-title" style="margin-bottom:0.15rem;">📅 ממוצע לפי יום בשבוע</h2>
-    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">ממוצע הכנסה לכל יום בשבוע — איזה יום באמת חזק</div>
-    <div style="position:relative;height:200px;"><canvas id="salesDowChart"></canvas></div>
-</section>
-<section class="card" style="margin-bottom:1.25rem;">
-    <h2 class="section-title" style="margin-bottom:0.15rem;">📈 הכנסה מצטברת</h2>
-    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">סיכום מצטבר מתחילת החודש</div>
-    <div style="position:relative;height:200px;"><canvas id="salesCumChart"></canvas></div>
-</section>
-
 <!-- Sales Table -->
 <section class="card">
     <h2 class="section-title">דוחות Z יומיים – <span id="month-label"></span></h2>
@@ -117,6 +100,23 @@
                 </tr>{% endif %}</tfoot>
         </table>
     </div>
+</section>
+
+<!-- Sales Charts -->
+<section class="card" style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📊 הכנסות יומיות</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">הכנסה בכל יום של החודש</div>
+    <div style="position:relative;height:240px;"><canvas id="salesDailyChart"></canvas></div>
+</section>
+<section class="card" style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📅 ממוצע לפי יום בשבוע</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">ממוצע הכנסה לכל יום בשבוע — איזה יום באמת חזק</div>
+    <div style="position:relative;height:200px;"><canvas id="salesDowChart"></canvas></div>
+</section>
+<section class="card" style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📈 הכנסה מצטברת</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">סיכום מצטבר מתחילת החודש</div>
+    <div style="position:relative;height:200px;"><canvas id="salesCumChart"></canvas></div>
 </section>
 
 <!-- PDF Preview Modal -->
