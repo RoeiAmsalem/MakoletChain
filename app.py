@@ -479,10 +479,137 @@ def index():
     return render_template('index.html', **ctx)
 
 
+# ── Sales charts ─────────────────────────────────────────────
+# datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+_HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
+               3: 'חמישי', 4: 'שישי', 5: 'שבת'}
+
+
+def _parse_z_rows(z_reports):
+    """[{date,'amount'}, ...] → sorted [(date, amount)] ascending by date."""
+    out = []
+    for z in z_reports:
+        d = z['date']
+        if isinstance(d, str):
+            d = datetime.strptime(d, '%Y-%m-%d').date()
+        out.append((d, float(z['amount'] or 0)))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def _has_saturday_z(z_reports):
+    return any(d.weekday() == 5 for d, _ in _parse_z_rows(z_reports))
+
+
+def _build_daily_chart_data(z_reports):
+    """One bar per Z-report date.
+
+    Red = a bar that represents COMBINED Saturday+Sunday revenue.
+    Any single-day bar (Saturday alone, Sunday alone, anything else) is
+    blue. Friday is always blue.
+
+    - has_saturday_z True (branch runs Saturday Zs): every bar is its own
+      day, all blue, no secondary day-name label.
+    - has_saturday_z False: a Sunday with no preceding Saturday Z is the
+      combined שבת+ראשון bar → red + secondary label. (A Sunday that does
+      have a preceding Saturday Z stays blue — unreachable while
+      has_saturday_z is False, but coded defensively.)
+    """
+    rows = _parse_z_rows(z_reports)
+    date_set = {d for d, _ in rows}
+    has_sat = any(d.weekday() == 5 for d in date_set)
+    out = []
+    for d, amt in rows:
+        secondary, color = None, 'blue'
+        if not has_sat and d.weekday() == 6:          # Sunday, CASE B
+            if (d - timedelta(days=1)) not in date_set:  # no preceding Sat Z
+                secondary, color = 'שבת+ראשון', 'red'
+        out.append({'date': d.strftime('%d/%m'),
+                    'label_secondary': secondary,
+                    'value': round(amt, 2), 'color': color})
+    return out
+
+
+def _build_dow_chart_data(z_reports):
+    """Average revenue per weekday.
+
+    Red = the combined שבת+ראשון bar only. Friday is always blue.
+
+    - has_saturday_z True: 7 separate bars ראשון…שבת, ALL blue.
+    - has_saturday_z False: 6 bars — combined שבת+ראשון first (= average
+      of all Sunday revenues, since no Saturday data exists), red; then
+      שני…שישי, all blue.
+    """
+    rows = _parse_z_rows(z_reports)
+    has_sat = any(d.weekday() == 5 for d, _ in rows)
+    buckets = {}
+    for d, amt in rows:
+        buckets.setdefault(d.weekday(), []).append(amt)
+
+    def avg(wd):
+        vals = buckets.get(wd, [])
+        return round(sum(vals) / len(vals), 2) if vals else 0
+
+    if has_sat:
+        # 7 bars: ראשון … שבת — all blue (no combined-weekend bar).
+        return [{'label': _HE_WEEKDAY[wd], 'value': avg(wd), 'color': 'blue'}
+                for wd in (6, 0, 1, 2, 3, 4, 5)]
+    # CASE B: 6 bars — combined שבת+ראשון first (all Sundays), then Mon..Fri.
+    sun = buckets.get(6, [])
+    combined = round(sum(sun) / len(sun), 2) if sun else 0
+    out = [{'label': 'שבת+ראשון', 'value': combined, 'color': 'red'}]
+    out += [{'label': _HE_WEEKDAY[wd], 'value': avg(wd), 'color': 'blue'}
+            for wd in (0, 1, 2, 3, 4)]
+    return out
+
+
+def _build_cumulative_chart_data(z_reports):
+    out, running = [], 0.0
+    for d, amt in _parse_z_rows(z_reports):
+        running += amt
+        out.append({'date': d.strftime('%d/%m'), 'value': round(running, 2)})
+    return out
+
+
+def _sales_charts_data(z_reports):
+    return {
+        'daily': _build_daily_chart_data(z_reports),
+        'dow': _build_dow_chart_data(z_reports),
+        'cumulative': _build_cumulative_chart_data(z_reports),
+        'has_saturday_z': _has_saturday_z(z_reports),
+    }
+
+
+def _build_sales_footer(z_reports):
+    """Server-rendered table-footer totals (one cell per data column).
+    Returns None when there are no rows."""
+    if not z_reports:
+        return None
+    total_rev = 0.0
+    total_txn = 0
+    for z in z_reports:
+        total_rev += float(z.get('amount') or 0)
+        total_txn += int(z.get('transactions') or 0)
+    return {
+        'total_revenue': round(total_rev, 2),
+        'total_transactions': total_txn,
+        'avg_basket': round(total_rev / total_txn) if total_txn else 0,
+    }
+
+
 @app.route('/sales')
 @login_required
 def sales():
     ctx = _page_context('sales')
+    db = get_db()
+    rows = db.execute(
+        "SELECT date, amount, transactions FROM daily_sales "
+        "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date ASC",
+        (ctx['branch_id'], ctx['selected_month'])
+    ).fetchall()
+    z_reports = [dict(r) for r in rows]
+    ctx['charts_data'] = _sales_charts_data(z_reports)
+    ctx['sales_footer'] = _build_sales_footer(z_reports)
     return render_template('sales.html', **ctx)
 
 

@@ -149,6 +149,165 @@ function initDailyActivityChart(canvasId, payload) {
     });
 }
 
+/* ── /sales charts ───────────────────────────────────────────
+ * Red/blue decision lives 100% in the backend helpers; the
+ * frontend only maps the "red"/"blue" string to a hex.
+ */
+const SALES_COLOR = { red: '#D85A30', blue: '#378ADD' };
+
+function salesShekel(v) {
+    return '₪ ' + Number(v).toLocaleString('he-IL', {
+        maximumFractionDigits: 0,
+    });
+}
+
+function salesAxisK(v) {
+    v = Number(v);
+    return Math.abs(v) >= 1000
+        ? '₪' + Math.round(v / 1000) + 'K'
+        : '₪' + v;
+}
+
+function initSalesDailyChart(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload || !payload.length) return null;
+    const labels = payload.map(p =>
+        p.label_secondary ? [p.date, p.label_secondary] : p.date
+    );
+    const values = payload.map(p => p.value);
+    const bg = payload.map(p => hexToRgba(SALES_COLOR[p.color] || SALES_COLOR.blue, 0.85));
+    const border = payload.map(p => SALES_COLOR[p.color] || SALES_COLOR.blue);
+    return new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{
+            data: values, backgroundColor: bg, borderColor: border,
+            borderWidth: 1, borderRadius: 4,
+        }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: { label: c => ' ' + salesShekel(c.parsed.y) },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 } },
+                    border: { color: PALETTE.border },
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        precision: 0, callback: salesAxisK,
+                    },
+                },
+            },
+        },
+    });
+}
+
+function initSalesDowChart(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload || !payload.length) return null;
+    const labels = payload.map(p => p.label);
+    const values = payload.map(p => p.value);
+    const bg = payload.map(p => hexToRgba(SALES_COLOR[p.color] || SALES_COLOR.blue, 0.85));
+    const border = payload.map(p => SALES_COLOR[p.color] || SALES_COLOR.blue);
+    return new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{
+            data: values, backgroundColor: bg, borderColor: border,
+            borderWidth: 1, borderRadius: 4,
+        }] },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: c => ' ' + salesShekel(c.parsed.x) + ' ממוצע',
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        precision: 0, callback: salesAxisK,
+                    },
+                },
+                y: {
+                    grid: { display: false },
+                    border: { color: PALETTE.border },
+                    ticks: { color: PALETTE.tickText, font: { size: 12 } },
+                },
+            },
+        },
+    });
+}
+
+function initSalesCumulativeChart(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload || !payload.length) return null;
+    const labels = payload.map(p => p.date);
+    const values = payload.map(p => p.value);
+    return new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: { labels, datasets: [{
+            data: values,
+            borderColor: '#378ADD',
+            backgroundColor: 'rgba(55,138,221,0.12)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+            pointHoverRadius: 4,
+        }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: c => ' ' + salesShekel(c.parsed.y) + ' מצטבר',
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 } },
+                    border: { color: PALETTE.border },
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        precision: 0, callback: salesAxisK,
+                    },
+                },
+            },
+        },
+    });
+}
+
 function loadLiveSales() {
     fetch('/api/live-sales')
         .then(r => r.json())
