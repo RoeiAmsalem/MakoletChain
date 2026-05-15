@@ -303,3 +303,98 @@ def test_sales_footer_browser_equivalent_six_distinct_cells(client):
     assert all(s == 1 for s in spans), \
         f"footer has a spanning cell (old 3-cell layout): colspans={spans}"
     assert sum(spans) == 6
+
+
+# ── RTL polish: Y-axis on the right + footer padding ──────────
+
+_ROOT = os.path.join(os.path.dirname(__file__), '..')
+
+
+def test_y_axis_position_right_in_charts():
+    """All three sales charts must place their value axis on the RIGHT
+    (RTL convention). The chart config lives in the external
+    static/js/charts.js (loaded via <script src>, NOT inlined into the
+    /sales response), so we assert against that file. The cumulative
+    chart is the one Roei flagged.
+    """
+    js = open(os.path.join(_ROOT, 'static/js/charts.js'),
+              encoding='utf-8').read()
+
+    def fn_body(name):
+        i = js.index(f'function {name}(')
+        return js[i:js.index('\nfunction ', i + 1)]
+
+    # Cumulative (line chart) — Roei's flag: y-axis must be on the right.
+    cum = fn_body('initSalesCumulativeChart')
+    assert re.search(r"y:\s*{\s*position:\s*'right'", cum), \
+        "cumulative chart y-axis is not position:'right'"
+
+    # Daily (vertical bar) — y value-axis on the right too.
+    daily = fn_body('initSalesDailyChart')
+    assert re.search(r"y:\s*{\s*position:\s*'right'", daily), \
+        "daily chart y-axis is not position:'right'"
+
+    # Day-of-week (horizontal bar, indexAxis:'y'): value axis is X →
+    # value-axis on top, category (y) labels on the right.
+    dow = fn_body('initSalesDowChart')
+    assert "position: 'top'" in dow, "dow value (x) axis not on top"
+    assert "position: 'right'" in dow, "dow category (y) axis not on right"
+
+
+def test_footer_padding_not_zero():
+    """The footer cells must carry the same padding as body cells so the
+    סה"כ row isn't crammed.
+
+    NOTE: padding is applied via external CSS (.data-table tfoot td in
+    static/css/style.css), NOT via an inline style on the <td>. A scan of
+    the rendered HTML therefore cannot see it — we assert the inline
+    styles don't *force* padding:0 AND that the CSS rule sets a non-zero
+    padding (the real fix lives there).
+    """
+    # 1) No inline style on a tfoot <td> forces zero padding.
+    app.config['TESTING'] = True
+    import app as app_module
+    import sqlite3 as _sql
+    tdb = os.path.join(os.path.dirname(__file__), 'test_footpad.db')
+    orig = app_module.DB_PATH
+    if os.path.exists(tdb):
+        os.remove(tdb)
+    app_module.DB_PATH = tdb
+    app_module.init_db()
+    conn = _sql.connect(tdb, timeout=30)
+    conn.execute("INSERT OR REPLACE INTO branches (id,name,city,active) "
+                 "VALUES (126,'b','c',1)")
+    conn.execute("INSERT INTO users (id,name,email,password_hash,role,active)"
+                 " VALUES (2,'M','m@t.com',?,'manager',1)",
+                 (generate_password_hash('test123'),))
+    conn.execute("INSERT INTO user_branches (user_id,branch_id) VALUES (2,126)")
+    for d, amt, txn in SEED:
+        conn.execute("INSERT INTO daily_sales "
+                     "(branch_id,date,amount,transactions,source) "
+                     "VALUES (?,?,?,?,'z_report')",
+                     (126, d.strftime('%Y-%m-%d'), amt, txn))
+    conn.commit()
+    conn.close()
+    try:
+        with app.test_client() as c:
+            c.post('/login', data={'email': 'm@t.com', 'password': 'test123'})
+            body = c.get(f"/sales?month={SAT.strftime('%Y-%m')}").get_data(
+                as_text=True)
+    finally:
+        app_module.DB_PATH = orig
+        if os.path.exists(tdb):
+            os.remove(tdb)
+
+    foot = re.search(r'<tfoot[^>]*>(.*?)</tfoot>', body, re.S).group(1)
+    for attrs in re.findall(r'<td([^>]*)>', foot):
+        m = re.search(r'padding\s*:\s*0(px)?\b', attrs)
+        assert not m, f"a tfoot <td> inline-forces zero padding: {attrs!r}"
+
+    # 2) The external CSS rule sets a real, non-zero padding.
+    css = open(os.path.join(_ROOT, 'static/css/style.css'),
+               encoding='utf-8').read()
+    rule = re.search(r'\.data-table tfoot td\s*{([^}]*)}', css).group(1)
+    pad = re.search(r'padding:\s*([^;]+);', rule)
+    assert pad, ".data-table tfoot td has no padding declaration"
+    assert not re.fullmatch(r'\s*0(px)?\s*', pad.group(1)), \
+        f"tfoot padding is zero: {pad.group(1)!r}"
