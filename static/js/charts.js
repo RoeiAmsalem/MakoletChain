@@ -312,6 +312,65 @@ function initSalesCumulativeChart(canvasId, payload) {
     });
 }
 
+function initBranchComparisonChart(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload || !payload.length) return null;
+    const labels = payload.map(p => p.branch_name);
+    const mk = (label, key, color) => ({
+        label,
+        data: payload.map(p => p[key]),
+        backgroundColor: hexToRgba(color, 0.85),
+        borderColor: color,
+        borderWidth: 1,
+        borderRadius: 4,
+    });
+    return new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                mk('הכנסות', 'revenue', PALETTE.profit),
+                mk('סחורה', 'goods', PALETTE.loss),
+                mk('שכר', 'salary', PALETTE.accent),
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    rtl: true,
+                    labels: { color: PALETTE.tickText, font: { size: 12 } },
+                },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: c => ' ' + c.dataset.label + ': ' + salesShekel(c.parsed.y),
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 } },
+                    border: { color: PALETTE.border },
+                },
+                y: {
+                    position: 'right',
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        precision: 0, callback: salesAxisK,
+                    },
+                },
+            },
+        },
+    });
+}
+
 function loadLiveSales() {
     fetch('/api/live-sales')
         .then(r => r.json())

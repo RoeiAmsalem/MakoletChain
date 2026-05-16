@@ -40,6 +40,12 @@
 
 {% block content %}
 
+{% if is_aggregate_view %}
+<div style="display:inline-flex; align-items:center; gap:6px; background:rgba(99,102,241,0.12); border:1px solid rgba(99,102,241,0.35); color:#a5b4fc; font-size:0.82rem; font-weight:600; padding:0.3rem 0.8rem; border-radius:999px; margin-bottom:0.75rem;">
+    🏬 תצוגת רשת — {{ visible_branch_count }} סניפים
+</div>
+{% endif %}
+
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
     <div class="kpi-card kpi-card--live" id="live-tile">
@@ -102,6 +108,15 @@
         <span class="kpi-value salary" id="salary-value">₪ 0.00</span>
     </div>
 </section>
+
+{% if is_aggregate_view %}
+<!-- Branch comparison (aggregate view only) -->
+<section class="card chart-card">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📊 השוואה בין סניפים — החודש</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">הכנסות, סחורה, ושכר עובדים לכל סניף</div>
+    <div style="position:relative;height:280px;"><canvas id="branch-comparison-chart"></canvas></div>
+</section>
+{% endif %}
 
 <!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
 <div id="elec-hourly-cluster" style="display:flex; flex-direction:column; gap:6px;">
@@ -228,7 +243,21 @@
 'use strict';
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
+const IS_AGGREGATE = {{ is_aggregate_view | tojson }};
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+async function loadBranchComparison() {
+    try {
+        const res = await fetch(`/api/branch-comparison?month=${SELECTED_MONTH}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        if (d.branches && d.branches.length) {
+            initBranchComparisonChart('branch-comparison-chart', d.branches);
+        }
+    } catch (err) {
+        console.error('branch-comparison:', err);
+    }
+}
 
 async function loadSummary() {
     try {
@@ -556,6 +585,7 @@ async function saveManualElectricity() {
 loadSummary();
 loadHistory();
 loadHourlyChart();
+if (IS_AGGREGATE) loadBranchComparison();
 if (typeof loadLiveSales === 'function') loadLiveSales();
 </script>
 {% endblock %}

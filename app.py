@@ -472,10 +472,44 @@ def _page_context(active_page):
 
 # ── Page Routes ──────────────────────────────────────────────
 
+def _current_user():
+    """Lightweight user dict from session. Helpers take this so they stay
+    unit-testable without Flask request access (tests pass a plain dict)."""
+    return {'id': session.get('user_id'), 'role': session.get('user_role')}
+
+
+def _is_aggregate_view(user):
+    """Single source of truth: admin/ceo see an all-branch aggregate;
+    managers (incl. multi-branch) keep their existing single-branch view."""
+    return bool(user) and user.get('role') in ROLES_ALL_BRANCHES
+
+
+def _list_visible_branches(user):
+    """[{'id','name'}, ...] visible to this user.
+    admin/ceo -> all active branches; manager -> assigned active branches.
+    N-ready: callers loop this list, never a hardcoded branch id."""
+    db = get_db()
+    if user and user.get('role') in ROLES_ALL_BRANCHES:
+        rows = db.execute(
+            'SELECT id, name FROM branches WHERE active = 1 ORDER BY id'
+        ).fetchall()
+    else:
+        rows = db.execute(
+            'SELECT b.id, b.name FROM branches b '
+            'JOIN user_branches ub ON ub.branch_id = b.id '
+            'WHERE ub.user_id = ? AND b.active = 1 ORDER BY b.id',
+            (user.get('id') if user else None,)
+        ).fetchall()
+    return [{'id': r['id'], 'name': r['name']} for r in rows]
+
+
 @app.route('/')
 @login_required
 def index():
     ctx = _page_context('home')
+    user = _current_user()
+    ctx['is_aggregate_view'] = _is_aggregate_view(user)
+    ctx['visible_branch_count'] = len(_list_visible_branches(user))
     return render_template('index.html', **ctx)
 
 
@@ -577,6 +611,59 @@ def _sales_charts_data(z_reports):
         'dow': _build_dow_chart_data(z_reports),
         'cumulative': _build_cumulative_chart_data(z_reports),
         'has_saturday_z': _has_saturday_z(z_reports),
+    }
+
+
+def _aggregate_home_data(branch_ids, year_month):
+    """Sum the single-branch home figures across branch_ids for one month.
+    N-ready: pure loop, no hardcoded branch ids. profit_pct is recomputed
+    from summed profit/revenue (never an average of per-branch percentages).
+    Reuses _compute_summary (which reuses _calculate_salary_cost)."""
+    db = get_db()
+    tot = {'revenue': 0.0, 'goods': 0.0, 'fixed_expenses': 0.0,
+           'salary': 0.0, 'profit': 0.0}
+    per_branch, cumulative_by_branch, cum_total = [], [], {}
+    for bid in branch_ids:
+        s = _compute_summary(bid, year_month, db)
+        name = _branch_name(bid)
+        rev, gds = s['income'], s['goods']
+        fx, sal, pr = s['fixed'], s['salary'], s['profit']
+        tot['revenue'] += rev
+        tot['goods'] += gds
+        tot['fixed_expenses'] += fx
+        tot['salary'] += sal
+        tot['profit'] += pr
+        per_branch.append({
+            'branch_id': bid, 'branch_name': name,
+            'revenue': round(rev, 2), 'goods': round(gds, 2),
+            'fixed_expenses': round(fx, 2), 'salary': round(sal, 2),
+            'profit': round(pr, 2),
+        })
+        zr = db.execute(
+            "SELECT date, amount FROM daily_sales "
+            "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? "
+            "ORDER BY date ASC", (bid, year_month)
+        ).fetchall()
+        cum = _build_cumulative_chart_data([dict(r) for r in zr])
+        cumulative_by_branch.append(
+            {'branch_id': bid, 'branch_name': name, 'data': cum})
+        for pt in cum:
+            cum_total[pt['date']] = round(
+                cum_total.get(pt['date'], 0) + pt['value'], 2)
+    for k in tot:
+        tot[k] = round(tot[k], 2)
+    tot['profit_pct'] = (round(tot['profit'] / tot['revenue'] * 100, 2)
+                         if tot['revenue'] else 0.0)
+    cumulative_total = [
+        {'date': d, 'value': cum_total[d]}
+        for d in sorted(cum_total,
+                        key=lambda x: (x.split('/')[1], x.split('/')[0]))
+    ]
+    return {
+        'totals': tot,
+        'per_branch': per_branch,
+        'cumulative_by_branch': cumulative_by_branch,
+        'cumulative_total': cumulative_total,
     }
 
 
@@ -843,14 +930,9 @@ def api_branches():
     return jsonify([dict(r) for r in rows])
 
 
-@app.route('/api/summary')
-@login_required
-def api_summary():
-    """Return KPI summary for a branch + month."""
-    branch_id = get_branch_id()
-    month = request.args.get('month', _now_il().strftime('%Y-%m'))
-
-    db = get_db()
+def _compute_summary(branch_id, month, db):
+    """Single-branch KPI summary dict. Extracted verbatim from the original
+    api_summary so the manager (single-branch) path is byte-identical."""
     # Income from daily_sales
     income = db.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM daily_sales "
@@ -936,7 +1018,7 @@ def api_summary():
         "SELECT iec_last_sync_at, electricity_source FROM branches WHERE id = ?", (branch_id,)
     ).fetchone()
 
-    return jsonify({
+    return {
         'income': income,
         'goods': goods,
         'fixed': fixed,
@@ -962,20 +1044,71 @@ def api_summary():
         } if latest_elec else None,
         'iec_last_sync_at': branch_elec['iec_last_sync_at'] if branch_elec and branch_elec['iec_last_sync_at'] else None,
         'electricity_source': branch_elec['electricity_source'] if branch_elec else None,
+    }
+
+
+def _aggregate_summary_parts(parts, month, n):
+    """Sum N single-branch summary dicts into the SAME JSON shape.
+    Non-summable per-branch fields collapse to an 'aggregate' marker so the
+    frontend needs zero changes."""
+    SUM = ['income', 'goods', 'fixed', 'fixed_only', 'salary', 'profit',
+           'live_amount_today', 'cancellation_total', 'discount_total',
+           'running_total', 'running_count']
+    agg = {k: 0 for k in SUM}
+    for p in parts:
+        for k in SUM:
+            agg[k] += p.get(k) or 0
+    for k in SUM:
+        agg[k] = round(agg[k], 2)
+    agg['running_count'] = int(agg['running_count'])
+    elec_amt = round(sum((p.get('electricity') or {}).get('amount', 0)
+                         for p in parts), 2)
+    lives = [p['live'] for p in parts if p.get('live')]
+    live = None
+    if lives:
+        ts = [l.get('last_updated') for l in lives if l.get('last_updated')]
+        live = {
+            'amount': round(sum(l.get('amount') or 0 for l in lives), 2),
+            'transactions': sum(int(l.get('transactions') or 0) for l in lives),
+            'last_updated': max(ts) if ts else None,
+        }
+    agg.update({
+        'electricity': {'amount': elec_amt, 'source': 'aggregate',
+                        'estimate_basis': None},
+        'salary_source': 'aggregate',
+        'salary_label': f'{n} סניפים',
+        'live': live,
+        'has_z': False,
+        'branch_id': None,
+        'month': month,
+        'latest_electricity': None,
+        'iec_last_sync_at': None,
+        'electricity_source': 'aggregate',
     })
+    return agg
 
 
-@app.route('/api/history')
+@app.route('/api/summary')
 @login_required
-def api_history():
-    """Return monthly data from first month with real data to selected month."""
-    branch_id = get_branch_id()
+def api_summary():
+    """KPI summary. Manager: their branch (unchanged). Admin/CEO: summed
+    across all visible branches, same JSON shape."""
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
-
     db = get_db()
+    user = _current_user()
+    if _is_aggregate_view(user):
+        branches = _list_visible_branches(user)
+        parts = [_compute_summary(b['id'], month, db) for b in branches]
+        return jsonify(_aggregate_summary_parts(parts, month, len(branches)))
+    return jsonify(_compute_summary(get_branch_id(), month, db))
+
+
+def _compute_history(branch_id, month, db):
+    """Single-branch monthly history list. Extracted verbatim from the
+    original api_history so the manager path is byte-identical."""
     start = get_branch_start_month(branch_id, db)
     if not start:
-        return jsonify([])
+        return []
 
     start_y, start_m = start
     end_y, end_m = map(int, month.split('-'))
@@ -1019,7 +1152,49 @@ def api_history():
             'salary_source': sal_source,
             'profit': profit,
         })
-    return jsonify(result)
+    return result
+
+
+def _aggregate_history(branch_ids, end_month, db):
+    """Merge N single-branch history lists by month, summing money columns.
+    Month axis is the union across branches (each branch has its own start)."""
+    by_month = {}
+    for bid in branch_ids:
+        for row in _compute_history(bid, end_month, db):
+            ms = row['month']
+            agg = by_month.get(ms)
+            if agg is None:
+                agg = by_month[ms] = {
+                    'label': row['label'], 'month': ms,
+                    'income': 0, 'goods': 0, 'fixed': 0, 'fixed_only': 0,
+                    'salary': 0, 'profit': 0,
+                    'electricity_source': 'aggregate',
+                    'salary_source': 'aggregate',
+                }
+            for k in ('income', 'goods', 'fixed', 'fixed_only',
+                      'salary', 'profit'):
+                agg[k] += row.get(k) or 0
+    out = [by_month[m] for m in sorted(by_month)]
+    for r in out:
+        for k in ('income', 'goods', 'fixed', 'fixed_only',
+                  'salary', 'profit'):
+            r[k] = round(r[k], 2)
+    return out
+
+
+@app.route('/api/history')
+@login_required
+def api_history():
+    """Monthly history. Manager: their branch (unchanged). Admin/CEO:
+    summed across visible branches, same JSON shape."""
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    user = _current_user()
+    if _is_aggregate_view(user):
+        branches = _list_visible_branches(user)
+        return jsonify(
+            _aggregate_history([b['id'] for b in branches], month, db))
+    return jsonify(_compute_history(get_branch_id(), month, db))
 
 
 @app.route('/api/live-sales')
@@ -1042,14 +1217,8 @@ def api_live_sales():
     return jsonify({'amount': None, 'transactions': None, 'last_updated': None})
 
 
-@app.route('/api/sales-by-hour')
-@login_required
-def api_sales_by_hour():
-    """Return revenue breakdown by hour + 2-hour buckets from hourly_sales table."""
-    branch_id = get_branch_id()
-    month = request.args.get('month', _now_il().strftime('%Y-%m'))
-    db = get_db()
-
+def _hourly_rows(branch_id, month, db):
+    """24-length [{hour,total,count}] for one branch+month (0 for empty hours)."""
     rows = db.execute(
         '''SELECT hour, SUM(amount) as total, SUM(transactions) as count
            FROM hourly_sales
@@ -1057,17 +1226,29 @@ def api_sales_by_hour():
            GROUP BY hour ORDER BY hour''',
         (branch_id, month)
     ).fetchall()
-
-    rows_by_hour = {r['hour']: r for r in rows}
-    hourly = []
+    by = {r['hour']: r for r in rows}
+    out = []
     for h in range(24):
-        row = rows_by_hour.get(h)
-        hourly.append({
+        row = by.get(h)
+        out.append({
             'hour': h,
-            'total': round(float(row['total']), 2) if row else 0,
-            'count': int(row['count']) if row else 0,
+            'total': round(float(row['total']), 2) if row and row['total'] is not None else 0,
+            'count': int(row['count']) if row and row['count'] is not None else 0,
         })
+    return out
 
+
+def _days_with_hourly(branch_id, month, db):
+    return db.execute(
+        '''SELECT COUNT(DISTINCT date) FROM hourly_sales
+           WHERE branch_id = ? AND strftime('%Y-%m', date) = ?''',
+        (branch_id, month)
+    ).fetchone()[0]
+
+
+def _hour_payload(hourly, days_with_data):
+    """Build {hourly,buckets,stats} from a 24-length hourly list. Shared by
+    the single-branch and aggregate (summed hourly) paths."""
     # 2-hour buckets aligned to 6:30 opening
     # Map integer hours to bucket indices:
     # bucket 0 (6:30-8:30) ← hours 7,8
@@ -1109,12 +1290,6 @@ def api_sales_by_hour():
         peak = quiet = None
         hourly_avg = 0
 
-    days_with_data = db.execute(
-        '''SELECT COUNT(DISTINCT date) FROM hourly_sales
-           WHERE branch_id = ? AND strftime('%Y-%m', date) = ?''',
-        (branch_id, month)
-    ).fetchone()[0]
-
     stats = {
         'peak_bucket': peak['label'] if peak else None,
         'peak_total': peak['total'] if peak else 0,
@@ -1124,7 +1299,63 @@ def api_sales_by_hour():
         'total_days_data': days_with_data,
     }
 
-    return jsonify({'hourly': hourly, 'buckets': buckets, 'stats': stats})
+    return {'hourly': hourly, 'buckets': buckets, 'stats': stats}
+
+
+def _compute_sales_by_hour(branch_id, month, db):
+    return _hour_payload(_hourly_rows(branch_id, month, db),
+                         _days_with_hourly(branch_id, month, db))
+
+
+def _aggregate_sales_by_hour(branch_ids, month, db):
+    """Sum the per-branch hourly arrays, then build buckets/stats once."""
+    summed = [{'hour': h, 'total': 0.0, 'count': 0} for h in range(24)]
+    days = 0
+    for bid in branch_ids:
+        for i, r in enumerate(_hourly_rows(bid, month, db)):
+            summed[i]['total'] += r['total']
+            summed[i]['count'] += r['count']
+        days += _days_with_hourly(bid, month, db)
+    for s in summed:
+        s['total'] = round(s['total'], 2)
+    return _hour_payload(summed, days)
+
+
+@app.route('/api/sales-by-hour')
+@login_required
+def api_sales_by_hour():
+    """Sales-by-hour. Manager: their branch (unchanged). Admin/CEO: summed
+    across visible branches, same JSON shape."""
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+    user = _current_user()
+    if _is_aggregate_view(user):
+        branches = _list_visible_branches(user)
+        return jsonify(
+            _aggregate_sales_by_hour([b['id'] for b in branches], month, db))
+    return jsonify(_compute_sales_by_hour(get_branch_id(), month, db))
+
+
+@app.route('/api/branch-comparison')
+@login_required
+def api_branch_comparison():
+    """Per-branch revenue/goods/salary for the month. Powers the aggregate
+    home comparison chart. Scoped to visible branches: a manager gets a
+    single-branch payload (200, not 403) — the home UI only requests this
+    in aggregate view, so scoping is safer than a hard 403 here."""
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    user = _current_user()
+    branches = _list_visible_branches(user)
+    data = _aggregate_home_data([b['id'] for b in branches], month)
+    return jsonify({
+        'month': month,
+        'branches': [
+            {'branch_id': p['branch_id'], 'branch_name': p['branch_name'],
+             'revenue': p['revenue'], 'goods': p['goods'],
+             'salary': p['salary']}
+            for p in data['per_branch']
+        ],
+    })
 
 
 @app.route('/api/employees', methods=['GET'])
