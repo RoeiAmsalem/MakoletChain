@@ -476,6 +476,13 @@ def _page_context(active_page):
 @login_required
 def index():
     ctx = _page_context('home')
+    db = get_db()
+    rows = db.execute(
+        "SELECT date, amount, transactions FROM daily_sales "
+        "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date ASC",
+        (ctx['branch_id'], ctx['selected_month'])
+    ).fetchall()
+    ctx['home_cumulative_data'] = _build_cumulative_chart_data([dict(r) for r in rows])
     return render_template('index.html', **ctx)
 
 

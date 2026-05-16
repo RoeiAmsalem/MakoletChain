@@ -149,6 +149,17 @@
 </div>
 </div><!-- /elec-hourly-cluster -->
 
+<!-- Cumulative revenue: current month (reuses /sales chart) -->
+<section class="card chart-card">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📈 הכנסה מצטברת – החודש</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">סיכום מצטבר מתחילת החודש</div>
+    {% if home_cumulative_data %}
+    <div style="position:relative;height:240px;"><canvas id="home-cumulative-chart"></canvas></div>
+    {% else %}
+    <div style="height:240px;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:0.9rem;">אין נתונים עדיין החודש</div>
+    {% endif %}
+</section>
+
 <!-- Bar Chart: last 6 months -->
 <section class="card chart-card">
     <h2 class="section-title">השוואת רווח – 6 חודשים אחרונים</h2>
@@ -556,6 +567,7 @@ async function saveManualElectricity() {
 loadSummary();
 loadHistory();
 loadHourlyChart();
+initSalesCumulativeChart('home-cumulative-chart', {{ home_cumulative_data | tojson }});
 if (typeof loadLiveSales === 'function') loadLiveSales();
 </script>
 {% endblock %}
