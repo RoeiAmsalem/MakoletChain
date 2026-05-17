@@ -360,6 +360,12 @@ body {
     border: 1px solid rgba(250, 204, 21, 0.3);
 }
 
+.kpi-badge.stale {
+    background: rgba(100, 116, 139, 0.18);
+    color: #94a3b8;
+    border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
 .profit-pct-badge {
     display: inline-flex;
     align-items: center;
