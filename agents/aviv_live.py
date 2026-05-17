@@ -440,17 +440,24 @@ def handle_zero_detection(branch_id: int, conn, logger: logging.Logger):
         )
 
 
-def run_aviv_live(branch_id: int) -> dict:
+def run_aviv_live(branch_id: int, force: bool = False) -> dict:
     """
     Scrape Aviv POS live sales for a branch.
     Returns {success, amount, transactions}.
+
+    force=True bypasses the store-hours guard (manual /ops trigger — the
+    admin clicked the button on purpose). Scheduled callers omit it and
+    keep the silent outside-hours skip. force does NOT swallow Aviv API
+    errors: auth/login failures still surface as success=False.
     """
     log = _setup_logger(branch_id)
     t0 = time.time()
 
-    if not _is_store_hours():
+    if not force and not _is_store_hours():
         log.info("Outside store hours, skipping")
         return {'success': True, 'amount': 0, 'transactions': 0, 'skipped': 'outside_hours'}
+    if force and not _is_store_hours():
+        log.info("Manual force run outside store hours — bypassing guard")
 
     # Check credentials BEFORE creating agent_runs record
     branch = _get_branch_config(branch_id)

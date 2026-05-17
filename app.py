@@ -877,6 +877,8 @@ def api_summary():
     current_month = _now_il().strftime('%Y-%m')
     has_z = False
     live_amount_today = 0
+    fresh_today = False
+    stale_row = None
 
     if month == current_month:
         z_row = db.execute(
@@ -892,11 +894,26 @@ def api_summary():
             (branch_id, today)
         ).fetchone()
 
-        if live_row and live_row['amount']:
+        fresh_today = bool(live_row and live_row['amount']
+                           and live_row['last_updated'] != 'PAUSED')
+
+        if fresh_today:
+            # POLICY: live_amount_today is the FRESH today-only value. Stale
+            # (prior-day) values feed the tile via live.is_stale but are
+            # NEVER added to income — that would double-count a day whose
+            # Z-report already landed in daily_sales. Keep the two separate.
             live_amount_today = live_row['amount']
-            # If no Z-report for today, add live amount to income
             if not has_z:
                 income += live_amount_today
+        elif not has_z:
+            # No fresh pull yet today and no Z → tile falls back to the last
+            # successful pull (display-only, never into income math above).
+            stale_row = db.execute(
+                'SELECT amount, transactions, last_updated, date '
+                'FROM live_sales WHERE branch_id = ? AND amount > 0 '
+                'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+                (branch_id,)
+            ).fetchone()
     else:
         live_row = None
 
@@ -911,19 +928,31 @@ def api_summary():
     discount_total = 0
     running_total = 0
     running_count = 0
-    if live_row:
+    # Fresh today, or the has_z path (today's row shown as-is, unchanged).
+    live_src = live_row if (fresh_today or (has_z and live_row)) else None
+    if live_src is not None:
         live = {
-            'amount': live_row['amount'],
-            'transactions': live_row['transactions'],
-            'last_updated': live_row['last_updated'],
+            'amount': live_src['amount'],
+            'transactions': live_src['transactions'],
+            'last_updated': live_src['last_updated'],
+            'is_stale': False,
         }
         try:
-            cancellation_total = round(float(live_row['cancellation_total'] or 0), 2)
-            discount_total = round(float(live_row['discount_total'] or 0), 2)
-            running_total = round(float(live_row['running_total'] or 0), 2)
-            running_count = int(live_row['running_count'] or 0)
+            cancellation_total = round(float(live_src['cancellation_total'] or 0), 2)
+            discount_total = round(float(live_src['discount_total'] or 0), 2)
+            running_total = round(float(live_src['running_total'] or 0), 2)
+            running_count = int(live_src['running_count'] or 0)
         except (KeyError, TypeError):
             pass
+    elif stale_row:
+        # Display-only: last successful pull, marked stale. Not in income.
+        live = {
+            'amount': stale_row['amount'],
+            'transactions': stale_row['transactions'],
+            'last_updated': stale_row['last_updated'],
+            'is_stale': True,
+            'stale_date': stale_row['date'],
+        }
 
     # Latest electricity invoice for the strip
     latest_elec = db.execute(
@@ -1025,7 +1054,13 @@ def api_history():
 @app.route('/api/live-sales')
 @login_required
 def api_live_sales():
-    """Return today's live sales for a branch."""
+    """Return today's live sales for a branch.
+
+    Falls back to the last successful pull (any prior day) tagged
+    is_stale=true when there is no fresh pull yet today AND no Z-report
+    today — so the tile shows the last known value instead of zero.
+    Stale fallback never kicks in when a Z-report exists (Z always wins).
+    """
     branch_id = get_branch_id()
     today = _now_il().strftime('%Y-%m-%d')
     db = get_db()
@@ -1033,13 +1068,49 @@ def api_live_sales():
         'SELECT amount, transactions, last_updated FROM live_sales WHERE branch_id = ? AND date = ?',
         (branch_id, today)
     ).fetchone()
-    if row:
+
+    fresh_today = bool(row and row['amount'] and row['last_updated'] != 'PAUSED')
+    if fresh_today:
         return jsonify({
             'amount': row['amount'],
             'transactions': row['transactions'],
             'last_updated': row['last_updated'],
+            'is_stale': False,
         })
-    return jsonify({'amount': None, 'transactions': None, 'last_updated': None})
+
+    has_z = db.execute(
+        "SELECT 1 FROM daily_sales WHERE branch_id = ? AND date = ?",
+        (branch_id, today)
+    ).fetchone() is not None
+
+    if has_z:
+        # has_z path unchanged: today's row as-is if present, else empty.
+        if row:
+            return jsonify({
+                'amount': row['amount'],
+                'transactions': row['transactions'],
+                'last_updated': row['last_updated'],
+                'is_stale': False,
+            })
+        return jsonify({'amount': None, 'transactions': None,
+                        'last_updated': None, 'is_stale': False})
+
+    stale = db.execute(
+        'SELECT amount, transactions, last_updated, date '
+        'FROM live_sales WHERE branch_id = ? AND amount > 0 '
+        'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+        (branch_id,)
+    ).fetchone()
+    if stale:
+        return jsonify({
+            'amount': stale['amount'],
+            'transactions': stale['transactions'],
+            'last_updated': stale['last_updated'],
+            'is_stale': True,
+            'stale_date': stale['date'],
+        })
+    return jsonify({'amount': None, 'transactions': None,
+                    'last_updated': None, 'is_stale': False})
 
 
 @app.route('/api/sales-by-hour')
@@ -2481,7 +2552,9 @@ def ops_run_agent():
             msg = f"{result.get('new_reports', 0)} דוחות חדשים"
         elif agent == 'aviv_live':
             from agents.aviv_live import run_aviv_live
-            result = run_aviv_live(int(branch_id))
+            # Manual /ops trigger: bypass the store-hours guard (admin clicked
+            # the button on purpose). Only aviv_live takes force.
+            result = run_aviv_live(int(branch_id), force=True)
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
         elif agent == 'iec':
             # IEC API is geo-blocked outside Israel — must run on Israeli VPS via SSH
