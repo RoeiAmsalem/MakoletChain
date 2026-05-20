@@ -86,6 +86,33 @@
 
 {% block content %}
 
+{% if session.get('user_role') in ('admin', 'ceo') %}
+<section class="view-toggle" style="display:flex;justify-content:center;margin-bottom:1rem;">
+    <div style="display:inline-flex;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:999px;padding:4px;gap:4px;">
+        <button type="button" onclick="setViewMode('branch')"
+            style="background:#6366f1;color:#fff;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
+            תצוגה על סניף
+        </button>
+        <button type="button" onclick="setViewMode('network')"
+            style="background:transparent;color:#cbd5e1;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
+            תצוגה על כל הרשת
+        </button>
+    </div>
+</section>
+<script>
+async function setViewMode(mode) {
+    try {
+        const res = await fetch('/api/set-view-mode', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode}),
+        });
+        if (res.ok) window.location.reload();
+    } catch (e) { /* no-op */ }
+}
+</script>
+{% endif %}
+
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
     <div class="kpi-card kpi-card--live" id="live-tile">

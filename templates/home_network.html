@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}תצוגה על כל הרשת - MakoletChain{% endblock %}
+{% block head %}
+<style>
+    .network-section { margin-bottom: 1.25rem; }
+    .network-section .section-sub { font-size: 0.85rem; color: #94a3b8; margin-top: 0.15rem; }
+    .network-chart-wrap { position: relative; height: 320px; }
+    .leaderboard-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .leaderboard-table th, .leaderboard-table td {
+        padding: 0.6rem 0.75rem; text-align: right;
+        border-bottom: 1px solid rgba(148,163,184,0.15);
+    }
+    .leaderboard-table th { color: #94a3b8; font-weight: 600; font-size: 0.78rem; }
+    .leaderboard-table td { color: #e2e8f0; }
+    .leaderboard-table tr.rank-1 td { background: rgba(245,158,11,0.05); }
+    @media (max-width: 768px) {
+        .network-chart-wrap { height: 240px; }
+        .leaderboard-table th, .leaderboard-table td { padding: 0.4rem; font-size: 0.8rem; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{% if session.get('user_role') in ('admin', 'ceo') %}
+<section class="view-toggle" style="display:flex;justify-content:center;margin-bottom:1rem;">
+    <div style="display:inline-flex;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:999px;padding:4px;gap:4px;">
+        <button type="button" onclick="setViewMode('branch')"
+            style="background:transparent;color:#cbd5e1;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
+            תצוגה על סניף
+        </button>
+        <button type="button" onclick="setViewMode('network')"
+            style="background:#6366f1;color:#fff;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
+            תצוגה על כל הרשת
+        </button>
+    </div>
+</section>
+{% endif %}
+
+<section class="card chart-card network-section">
+    <h2 class="section-title">הכנסות לפי סניף – החודש</h2>
+    <div class="section-sub">סה״כ הכנסות בחודש הנוכחי, סניף לצד סניף</div>
+    <div class="network-chart-wrap"><canvas id="net-monthly-revenue"></canvas></div>
+</section>
+
+<section class="card chart-card network-section">
+    <h2 class="section-title">מגמת הכנסות – 6 חודשים אחרונים</h2>
+    <div class="section-sub">קו אחד לכל סניף, צבעים יציבים בין הגרפים</div>
+    <div class="network-chart-wrap"><canvas id="net-trend-6m"></canvas></div>
+</section>
+
+<section class="card chart-card network-section">
+    <h2 class="section-title">רווחיות לפי סניף – החודש</h2>
+    <div class="section-sub">פירוק הכנסות לסחורה, שכר, חשמל, הוצאות קבועות ורווח נטו</div>
+    <div class="network-chart-wrap" style="height:380px;"><canvas id="net-profitability"></canvas></div>
+</section>
+
+<section class="card chart-card network-section">
+    <h2 class="section-title">סל ממוצע לעסקה – החודש</h2>
+    <div class="section-sub">ממוצע ש״ח לעסקה לפי סניף</div>
+    <div class="network-chart-wrap"><canvas id="net-avg-basket"></canvas></div>
+</section>
+
+<section class="card chart-card network-section">
+    <h2 class="section-title">פילוח הוצאות – כל הרשת</h2>
+    <div class="section-sub">לאן הולך הכסף החודש, סכום כל הסניפים יחד</div>
+    <div class="network-chart-wrap" style="height:300px;"><canvas id="net-expense-breakdown"></canvas></div>
+</section>
+
+<section class="card network-section">
+    <h2 class="section-title">דירוג סניפים – לפי רווח החודש</h2>
+    <div class="section-sub">המוביל ברווח נטו לחודש הנוכחי</div>
+    <div style="overflow-x:auto;margin-top:0.75rem;">
+        <table class="leaderboard-table">
+            <thead>
+                <tr>
+                    <th>דירוג</th>
+                    <th>סניף</th>
+                    <th>הכנסות</th>
+                    <th>רווח</th>
+                    <th>ריווחיות</th>
+                </tr>
+            </thead>
+            <tbody id="leaderboard-tbody">
+                <tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:1.5rem;">טוען...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="{{ static_v('js/charts.js') }}"></script>
+<script>
+'use strict';
+
+async function setViewMode(mode) {
+    try {
+        const res = await fetch('/api/set-view-mode', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode}),
+        });
+        if (res.ok) window.location.reload();
+    } catch (e) { /* no-op */ }
+}
+
+function formatShekel(v) {
+    return '₪ ' + Number(v || 0).toLocaleString('he-IL', {maximumFractionDigits: 0});
+}
+
+function renderLeaderboard(rows) {
+    const tbody = document.getElementById('leaderboard-tbody');
+    if (!rows || !rows.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:1.5rem;">אין נתונים</td></tr>';
+        return;
+    }
+    tbody.innerHTML = rows.map(r => `
+        <tr class="rank-${r.rank}">
+            <td style="font-weight:700;color:${r.rank === 1 ? '#fbbf24' : '#e2e8f0'};">${r.rank}</td>
+            <td>${r.branch_name}</td>
+            <td>${formatShekel(r.revenue)}</td>
+            <td style="color:${r.profit >= 0 ? '#22c55e' : '#ef4444'};font-weight:600;">${formatShekel(r.profit)}</td>
+            <td>${r.profit_pct.toLocaleString('he-IL', {maximumFractionDigits: 1})}%</td>
+        </tr>
+    `).join('');
+}
+
+async function loadNetworkOverview() {
+    const res = await fetch('/api/network-overview');
+    if (!res.ok) return;
+    const data = await res.json();
+    initMonthlyRevenueChart('net-monthly-revenue', data.monthly_revenue, data.branches);
+    initTrend6mChart('net-trend-6m', data.trend_6m);
+    initProfitabilityChart('net-profitability', data.profitability);
+    initAvgBasketChart('net-avg-basket', data.avg_basket, data.branches);
+    initExpenseBreakdownDonut('net-expense-breakdown', data.expense_breakdown);
+    renderLeaderboard(data.leaderboard);
+}
+
+loadNetworkOverview();
+</script>
+{% endblock %}

@@ -453,6 +453,34 @@ def _branch_name(branch_id):
     return row['name'] if row else 'סניף לא ידוע'
 
 
+# Stable per-branch colors, assigned by branch_id sort order so the same branch
+# gets the same color across every chart on the network-overview page.
+BRANCH_PALETTE = ['#378ADD', '#1D9E75', '#D85A30', '#7F77DD', '#E0A82E', '#888780']
+
+
+def _list_visible_branches(user_id, role):
+    """Return [{id, name}, ...] of active branches the user can see.
+
+    admin / ceo → every active branch.
+    manager     → only branches listed in user_branches.
+
+    Sorted by branch id so colors assigned later are stable.
+    """
+    db = get_db()
+    if role in ROLES_ALL_BRANCHES:
+        rows = db.execute(
+            "SELECT id, name FROM branches WHERE active = 1 ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    rows = db.execute(
+        "SELECT b.id, b.name FROM branches b "
+        "JOIN user_branches ub ON ub.branch_id = b.id "
+        "WHERE b.active = 1 AND ub.user_id = ? ORDER BY b.id",
+        (user_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _page_context(active_page):
     selected = _parse_month()
     branch_id = _get_branch_id()
@@ -476,7 +504,30 @@ def _page_context(active_page):
 @login_required
 def index():
     ctx = _page_context('home')
+    role = session.get('user_role')
+    mode = session.get('home_view_mode', 'branch')
+    if mode == 'network' and role in ROLES_ALL_BRANCHES:
+        ctx['active_page'] = 'home'
+        ctx['view_mode'] = 'network'
+        return render_template('home_network.html', **ctx)
+    ctx['view_mode'] = 'branch'
     return render_template('index.html', **ctx)
+
+
+@app.route('/api/set-view-mode', methods=['POST'])
+@login_required
+def api_set_view_mode():
+    """Persist the home-page toggle between 'branch' and 'network'.
+    Only admin + ceo can switch into network mode."""
+    role = session.get('user_role')
+    if role not in ROLES_ALL_BRANCHES:
+        return jsonify({'error': 'forbidden'}), 403
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode')
+    if mode not in ('branch', 'network'):
+        return jsonify({'error': 'invalid mode'}), 400
+    session['home_view_mode'] = mode
+    return jsonify({'ok': True, 'mode': mode})
 
 
 # ── Sales charts ─────────────────────────────────────────────
@@ -991,6 +1042,161 @@ def api_summary():
         } if latest_elec else None,
         'iec_last_sync_at': branch_elec['iec_last_sync_at'] if branch_elec and branch_elec['iec_last_sync_at'] else None,
         'electricity_source': branch_elec['electricity_source'] if branch_elec else None,
+    })
+
+
+@app.route('/api/network-overview')
+@login_required
+def api_network_overview():
+    """Chain-wide aggregate for the CEO 'network' view.
+
+    Returns the single payload that feeds all six chart sections on
+    home_network.html (monthly revenue, 6-month trend, profitability,
+    average basket, expense breakdown, leaderboard). Reuses
+    _calculate_salary_cost and _get_fixed_total so every number on this
+    page matches the per-branch home page.
+    """
+    role = session.get('user_role')
+    if role not in ROLES_ALL_BRANCHES:
+        return jsonify({'error': 'forbidden'}), 403
+
+    db = get_db()
+    visible = _list_visible_branches(session.get('user_id'), role)
+    if not visible:
+        return jsonify({
+            'branches': [],
+            'monthly_revenue': [],
+            'trend_6m': {'months': [], 'series': []},
+            'profitability': [],
+            'avg_basket': [],
+            'expense_breakdown': {'goods': 0, 'salary': 0, 'electricity': 0, 'fixed_other': 0},
+            'leaderboard': [],
+        })
+
+    # Stable color per branch by sort order.
+    branches = []
+    for i, b in enumerate(visible):
+        branches.append({
+            'id': b['id'],
+            'name': b['name'],
+            'color': BRANCH_PALETTE[i % len(BRANCH_PALETTE)],
+        })
+
+    current_month = _now_il().strftime('%Y-%m')
+
+    # Build the trailing 6-month window (oldest → current).
+    cy, cm = map(int, current_month.split('-'))
+    trend_months = []
+    y, m = cy, cm
+    for _ in range(6):
+        trend_months.append(f'{y:04d}-{m:02d}')
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    trend_months.reverse()
+    trend_labels = [f'{int(ms.split("-")[1])}/{ms.split("-")[0]}' for ms in trend_months]
+
+    monthly_revenue = []
+    profitability = []
+    avg_basket = []
+    trend_series = []
+    total_goods = 0.0
+    total_salary = 0.0
+    total_elec = 0.0
+    total_fixed_other = 0.0
+
+    for b in branches:
+        bid = b['id']
+        bname = b['name']
+
+        # Current-month revenue + transactions
+        row = db.execute(
+            "SELECT COALESCE(SUM(amount),0) AS revenue, "
+            "COALESCE(SUM(transactions),0) AS txn "
+            "FROM daily_sales WHERE branch_id=? AND strftime('%Y-%m',date)=?",
+            (bid, current_month)
+        ).fetchone()
+        revenue = round(float(row['revenue'] or 0), 2)
+        txn = int(row['txn'] or 0)
+
+        goods = db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM goods_documents "
+            "WHERE branch_id=? AND strftime('%Y-%m',doc_date)=?",
+            (bid, current_month)
+        ).fetchone()[0]
+        goods = round(float(goods or 0), 2)
+
+        _ensure_monthly_expenses(bid, current_month, db)
+        fix_data = _get_fixed_total(bid, current_month, revenue, db)
+        fixed_only = round(float(fix_data['fixed_only']), 2)
+        electricity = round(float(fix_data['electricity']['amount']), 2)
+
+        salary = _calculate_salary_cost(bid, current_month)['amount']
+        salary = round(float(salary), 2)
+
+        profit = round(revenue - goods - salary - fixed_only - electricity, 2)
+        profit_pct = round((profit / revenue) * 100, 1) if revenue > 0 else 0
+
+        basket = round(revenue / txn, 2) if txn > 0 else 0
+
+        monthly_revenue.append({
+            'branch_id': bid, 'branch_name': bname, 'value': revenue,
+        })
+        avg_basket.append({
+            'branch_id': bid, 'branch_name': bname, 'value': basket,
+        })
+        profitability.append({
+            'branch_id': bid, 'branch_name': bname,
+            'revenue': revenue, 'goods': goods, 'salary': salary,
+            'fixed': fixed_only, 'electricity': electricity,
+            'profit': profit, 'profit_pct': profit_pct,
+        })
+
+        total_goods += goods
+        total_salary += salary
+        total_elec += electricity
+        total_fixed_other += fixed_only
+
+        # 6-month revenue trend
+        trend_data = []
+        for ms in trend_months:
+            tr = db.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
+                "WHERE branch_id=? AND strftime('%Y-%m',date)=?",
+                (bid, ms)
+            ).fetchone()[0]
+            trend_data.append(round(float(tr or 0), 2))
+        trend_series.append({
+            'branch_id': bid, 'branch_name': bname, 'color': b['color'],
+            'data': trend_data,
+        })
+
+    # Leaderboard — sorted by profit descending
+    ranked = sorted(profitability, key=lambda r: r['profit'], reverse=True)
+    leaderboard = [{
+        'rank': i + 1,
+        'branch_id': r['branch_id'],
+        'branch_name': r['branch_name'],
+        'revenue': r['revenue'],
+        'profit': r['profit'],
+        'profit_pct': r['profit_pct'],
+    } for i, r in enumerate(ranked)]
+
+    return jsonify({
+        'branches': branches,
+        'month': current_month,
+        'monthly_revenue': monthly_revenue,
+        'trend_6m': {'months': trend_labels, 'series': trend_series},
+        'profitability': profitability,
+        'avg_basket': avg_basket,
+        'expense_breakdown': {
+            'goods': round(total_goods, 2),
+            'salary': round(total_salary, 2),
+            'electricity': round(total_elec, 2),
+            'fixed_other': round(total_fixed_other, 2),
+        },
+        'leaderboard': leaderboard,
     })
 
 

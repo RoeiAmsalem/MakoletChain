@@ -312,6 +312,267 @@ function initSalesCumulativeChart(canvasId, payload) {
     });
 }
 
+/* ── Network overview (CEO view) ─────────────────────────────
+ * All five Chart.js charts on /home_network.html. Each function
+ * is called once per page load by templates/home_network.html.
+ */
+
+function _branchColor(branchId, branches) {
+    if (!branches) return PALETTE.accent;
+    const b = branches.find(x => x.id === branchId);
+    return (b && b.color) || PALETTE.accent;
+}
+
+function initMonthlyRevenueChart(canvasId, rows, branches) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !rows) return null;
+    const labels = rows.map(r => r.branch_name);
+    const values = rows.map(r => r.value);
+    const bg = rows.map(r => hexToRgba(_branchColor(r.branch_id, branches), 0.85));
+    const border = rows.map(r => _branchColor(r.branch_id, branches));
+    return new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{
+            data: values, backgroundColor: bg, borderColor: border,
+            borderWidth: 1, borderRadius: 6,
+        }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: { label: c => ' ' + salesShekel(c.parsed.y) },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 } },
+                    border: { color: PALETTE.border },
+                },
+                y: {
+                    position: 'right',
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        callback: salesAxisK,
+                    },
+                },
+            },
+        },
+    });
+}
+
+function initTrend6mChart(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload) return null;
+    const datasets = (payload.series || []).map(s => ({
+        label: s.branch_name,
+        data: s.data,
+        borderColor: s.color,
+        backgroundColor: hexToRgba(s.color, 0.15),
+        borderWidth: 2,
+        tension: 0.3,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+    }));
+    return new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: { labels: payload.months || [], datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    rtl: true,
+                    labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 8 },
+                },
+                tooltip: {
+                    rtl: true,
+                    callbacks: { label: c => ' ' + c.dataset.label + ': ' + salesShekel(c.parsed.y) },
+                },
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 } },
+                    border: { color: PALETTE.border },
+                },
+                y: {
+                    position: 'right',
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        callback: salesAxisK,
+                    },
+                },
+            },
+        },
+    });
+}
+
+function initProfitabilityChart(canvasId, rows) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !rows || !rows.length) return null;
+    const labels = rows.map(r => r.branch_name);
+    const goodsData = rows.map(r => r.goods);
+    const salaryData = rows.map(r => r.salary);
+    const fixedData = rows.map(r => r.fixed);
+    const elecData = rows.map(r => r.electricity);
+    const profitData = rows.map(r => Math.max(0, r.profit));
+
+    return new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'סחורה', data: goodsData, backgroundColor: hexToRgba('#D85A30', 0.85), borderColor: '#D85A30', borderWidth: 1 },
+                { label: 'שכר', data: salaryData, backgroundColor: hexToRgba('#7F77DD', 0.85), borderColor: '#7F77DD', borderWidth: 1 },
+                { label: 'הוצאות קבועות', data: fixedData, backgroundColor: hexToRgba('#888780', 0.85), borderColor: '#888780', borderWidth: 1 },
+                { label: 'חשמל', data: elecData, backgroundColor: hexToRgba('#E0A82E', 0.85), borderColor: '#E0A82E', borderWidth: 1 },
+                { label: 'רווח', data: profitData, backgroundColor: hexToRgba(PALETTE.profit, 0.85), borderColor: PALETTE.profit, borderWidth: 1 },
+            ],
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    rtl: true,
+                    labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 10 },
+                },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: c => ' ' + c.dataset.label + ': ' + salesShekel(c.parsed.x),
+                        afterBody: items => {
+                            if (!items.length) return '';
+                            const row = rows[items[0].dataIndex];
+                            return ['', 'הכנסות: ' + salesShekel(row.revenue),
+                                    'רווח נטו: ' + salesShekel(row.profit) + ' (' + row.profit_pct + '%)'];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    stacked: true,
+                    position: 'top',
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: { color: PALETTE.tickText, font: { size: 11 }, callback: salesAxisK },
+                },
+                y: {
+                    stacked: true,
+                    position: 'right',
+                    grid: { display: false },
+                    border: { color: PALETTE.border },
+                    ticks: { color: PALETTE.tickText, font: { size: 12 } },
+                },
+            },
+        },
+    });
+}
+
+function initAvgBasketChart(canvasId, rows, branches) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !rows) return null;
+    const labels = rows.map(r => r.branch_name);
+    const values = rows.map(r => r.value);
+    const bg = rows.map(r => hexToRgba(_branchColor(r.branch_id, branches), 0.85));
+    const border = rows.map(r => _branchColor(r.branch_id, branches));
+    return new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets: [{
+            data: values, backgroundColor: bg, borderColor: border,
+            borderWidth: 1, borderRadius: 4,
+        }] },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: { label: c => ' ₪' + Number(c.parsed.x).toLocaleString('he-IL', {maximumFractionDigits: 2}) },
+                },
+            },
+            scales: {
+                x: {
+                    position: 'top',
+                    beginAtZero: true,
+                    grid: { color: PALETTE.gridLine },
+                    border: { color: PALETTE.border },
+                    ticks: {
+                        color: PALETTE.tickText, font: { size: 11 },
+                        callback: v => '₪' + Number(v).toLocaleString('he-IL'),
+                    },
+                },
+                y: {
+                    position: 'right',
+                    grid: { display: false },
+                    border: { color: PALETTE.border },
+                    ticks: { color: PALETTE.tickText, font: { size: 12 } },
+                },
+            },
+        },
+    });
+}
+
+function initExpenseBreakdownDonut(canvasId, payload) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas || !payload) return null;
+    const labels = ['סחורה', 'שכר', 'חשמל', 'הוצאות קבועות אחרות'];
+    const values = [payload.goods || 0, payload.salary || 0, payload.electricity || 0, payload.fixed_other || 0];
+    const colors = ['#D85A30', '#7F77DD', '#E0A82E', '#888780'];
+    return new Chart(canvas.getContext('2d'), {
+        type: 'doughnut',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                backgroundColor: colors.map(c => hexToRgba(c, 0.85)),
+                borderColor: colors,
+                borderWidth: 1,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    rtl: true,
+                    labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 10 },
+                },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: c => {
+                            const total = c.dataset.data.reduce((s, v) => s + v, 0);
+                            const pct = total > 0 ? ((c.parsed / total) * 100).toFixed(1) : 0;
+                            return ' ' + c.label + ': ' + salesShekel(c.parsed) + ' (' + pct + '%)';
+                        },
+                    },
+                },
+            },
+        },
+    });
+}
+
+
 function loadLiveSales() {
     fetch('/api/live-sales')
         .then(r => r.json())
