@@ -326,19 +326,19 @@ function _branchColor(branchId, branches) {
 function initMonthlyRevenueChart(canvasId, rows, branches) {
     const canvas = document.getElementById(canvasId);
     if (!canvas || !rows) return null;
-    // RTL: reverse labels + data (keeps them paired) so the first item in
-    // the API payload renders on the RIGHT. scales.x.reverse breaks bar
-    // positioning so we don't use it.
-    const ordered = [...rows].reverse();
-    const labels = ordered.map(r => r.branch_name);
-    const values = ordered.map(r => r.value);
-    const bg = ordered.map(r => hexToRgba(_branchColor(r.branch_id, branches), 0.85));
-    const border = ordered.map(r => _branchColor(r.branch_id, branches));
+    const labels = rows.map(r => r.branch_name);
+    const values = rows.map(r => r.value);
+    const bg = rows.map(r => hexToRgba(_branchColor(r.branch_id, branches), 0.85));
+    const border = rows.map(r => _branchColor(r.branch_id, branches));
     return new Chart(canvas.getContext('2d'), {
         type: 'bar',
         data: { labels, datasets: [{
             data: values, backgroundColor: bg, borderColor: border,
             borderWidth: 1, borderRadius: 6,
+            // Constrain bar width — without this, 2 categories produce
+            // ~450px-wide bars that crowd the card edges.
+            categoryPercentage: 0.5,
+            barPercentage: 0.7,
         }] },
         options: {
             responsive: true,
@@ -357,7 +357,6 @@ function initMonthlyRevenueChart(canvasId, rows, branches) {
                     border: { color: PALETTE.border },
                 },
                 y: {
-                    position: 'right',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },
@@ -374,12 +373,10 @@ function initMonthlyRevenueChart(canvasId, rows, branches) {
 function initTrend6mChart(canvasId, payload) {
     const canvas = document.getElementById(canvasId);
     if (!canvas || !payload) return null;
-    // RTL: reverse the month labels AND every series' data array in lockstep
-    // so the newest month lands on the LEFT (Hebrew reading direction).
-    const labels = [...(payload.months || [])].reverse();
+    const labels = payload.months || [];
     const datasets = (payload.series || []).map(s => ({
         label: s.branch_name,
-        data: [...s.data].reverse(),
+        data: s.data,
         borderColor: s.color,
         backgroundColor: hexToRgba(s.color, 0.15),
         borderWidth: 2,
@@ -412,7 +409,6 @@ function initTrend6mChart(canvasId, payload) {
                     border: { color: PALETTE.border },
                 },
                 y: {
-                    position: 'right',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },
@@ -429,15 +425,12 @@ function initTrend6mChart(canvasId, payload) {
 function initProfitabilityChart(canvasId, rows) {
     const canvas = document.getElementById(canvasId);
     if (!canvas || !rows || !rows.length) return null;
-    // RTL: reverse the branch (y-axis) order. Tooltip's afterBody indexes
-    // back into this same reversed array so the totals stay paired.
-    const ordered = [...rows].reverse();
-    const labels = ordered.map(r => r.branch_name);
-    const goodsData = ordered.map(r => r.goods);
-    const salaryData = ordered.map(r => r.salary);
-    const fixedData = ordered.map(r => r.fixed);
-    const elecData = ordered.map(r => r.electricity);
-    const profitData = ordered.map(r => Math.max(0, r.profit));
+    const labels = rows.map(r => r.branch_name);
+    const goodsData = rows.map(r => r.goods);
+    const salaryData = rows.map(r => r.salary);
+    const fixedData = rows.map(r => r.fixed);
+    const elecData = rows.map(r => r.electricity);
+    const profitData = rows.map(r => Math.max(0, r.profit));
 
     return new Chart(canvas.getContext('2d'), {
         type: 'bar',
@@ -467,7 +460,7 @@ function initProfitabilityChart(canvasId, rows) {
                         label: c => ' ' + c.dataset.label + ': ' + salesShekel(c.parsed.x),
                         afterBody: items => {
                             if (!items.length) return '';
-                            const row = ordered[items[0].dataIndex];
+                            const row = rows[items[0].dataIndex];
                             return ['', 'הכנסות: ' + salesShekel(row.revenue),
                                     'רווח נטו: ' + salesShekel(row.profit) + ' (' + row.profit_pct + '%)'];
                         },
@@ -477,7 +470,6 @@ function initProfitabilityChart(canvasId, rows) {
             scales: {
                 x: {
                     stacked: true,
-                    position: 'top',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },
@@ -485,7 +477,6 @@ function initProfitabilityChart(canvasId, rows) {
                 },
                 y: {
                     stacked: true,
-                    position: 'right',
                     grid: { display: false },
                     border: { color: PALETTE.border },
                     ticks: { color: PALETTE.tickText, font: { size: 12 } },
@@ -498,13 +489,10 @@ function initProfitabilityChart(canvasId, rows) {
 function initAvgBasketChart(canvasId, rows, branches) {
     const canvas = document.getElementById(canvasId);
     if (!canvas || !rows) return null;
-    // RTL: reverse labels + data so the first payload entry sits on top
-    // (Hebrew reading order). Don't reverse the x-axis — it breaks bar widths.
-    const ordered = [...rows].reverse();
-    const labels = ordered.map(r => r.branch_name);
-    const values = ordered.map(r => r.value);
-    const bg = ordered.map(r => hexToRgba(_branchColor(r.branch_id, branches), 0.85));
-    const border = ordered.map(r => _branchColor(r.branch_id, branches));
+    const labels = rows.map(r => r.branch_name);
+    const values = rows.map(r => r.value);
+    const bg = rows.map(r => hexToRgba(_branchColor(r.branch_id, branches), 0.85));
+    const border = rows.map(r => _branchColor(r.branch_id, branches));
     return new Chart(canvas.getContext('2d'), {
         type: 'bar',
         data: { labels, datasets: [{
@@ -524,7 +512,6 @@ function initAvgBasketChart(canvasId, rows, branches) {
             },
             scales: {
                 x: {
-                    position: 'top',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
                     border: { color: PALETTE.border },
@@ -534,7 +521,6 @@ function initAvgBasketChart(canvasId, rows, branches) {
                     },
                 },
                 y: {
-                    position: 'right',
                     grid: { display: false },
                     border: { color: PALETTE.border },
                     ticks: { color: PALETTE.tickText, font: { size: 12 } },
