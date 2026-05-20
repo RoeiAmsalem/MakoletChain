@@ -448,6 +448,10 @@ function initProfitabilityChart(canvasId, rows) {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            // RTL needs breathing room between the y-tick labels (rendered
+            // on visual-right) and the bar area, plus a side margin so the
+            // bar end never butts the card edge.
+            layout: { padding: { left: 12, right: 12 } },
             plugins: {
                 legend: {
                     position: 'bottom',
@@ -479,7 +483,7 @@ function initProfitabilityChart(canvasId, rows) {
                     stacked: true,
                     grid: { display: false },
                     border: { color: PALETTE.border },
-                    ticks: { color: PALETTE.tickText, font: { size: 12 } },
+                    ticks: { color: PALETTE.tickText, font: { size: 12 }, padding: 14 },
                 },
             },
         },
@@ -503,6 +507,8 @@ function initAvgBasketChart(canvasId, rows, branches) {
             indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
+            // RTL: same label-vs-bar gap fix as initProfitabilityChart.
+            layout: { padding: { left: 12, right: 12 } },
             plugins: {
                 legend: { display: false },
                 tooltip: {
@@ -523,7 +529,7 @@ function initAvgBasketChart(canvasId, rows, branches) {
                 y: {
                     grid: { display: false },
                     border: { color: PALETTE.border },
-                    ticks: { color: PALETTE.tickText, font: { size: 12 } },
+                    ticks: { color: PALETTE.tickText, font: { size: 12 }, padding: 14 },
                 },
             },
         },
