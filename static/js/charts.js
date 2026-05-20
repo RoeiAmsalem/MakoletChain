@@ -394,7 +394,6 @@ function initTrend6mChart(canvasId, payload) {
             plugins: {
                 legend: {
                     position: 'bottom',
-                    rtl: true,
                     labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 8 },
                 },
                 tooltip: {
@@ -455,7 +454,6 @@ function initProfitabilityChart(canvasId, rows) {
             plugins: {
                 legend: {
                     position: 'bottom',
-                    rtl: true,
                     labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 10 },
                 },
                 tooltip: {
@@ -559,8 +557,6 @@ function initExpenseBreakdownDonut(canvasId, payload) {
             plugins: {
                 legend: {
                     position: 'bottom',
-                    rtl: true,
-                    textDirection: 'rtl',
                     labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 10 },
                 },
                 tooltip: {
