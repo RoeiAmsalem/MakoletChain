@@ -178,6 +178,21 @@ class TestNetworkOverview:
         total = sum(r['value'] for r in data['monthly_revenue'])
         assert total == 14500
 
+    def test_payload_ordering_unchanged(self, client):
+        """RTL reversal happens client-side. The API payload must still list
+        branches in ascending branch_id order across every section."""
+        _seed_branch_finance(126, revenue=8000, txn=100, goods=0,
+                             salary_hours=0, hourly_rate=0)
+        _seed_branch_finance(127, revenue=4000, txn=80, goods=0,
+                             salary_hours=0, hourly_rate=0)
+        _login(client, 'ceo@test.com')
+        data = client.get('/api/network-overview').get_json()
+        assert [b['id'] for b in data['branches']] == [126, 127]
+        assert [r['branch_id'] for r in data['monthly_revenue']] == [126, 127]
+        assert [r['branch_id'] for r in data['profitability']] == [126, 127]
+        assert [r['branch_id'] for r in data['avg_basket']] == [126, 127]
+        assert [s['branch_id'] for s in data['trend_6m']['series']] == [126, 127]
+
     def test_leaderboard_sorted_by_profit_desc(self, client):
         # Branch 126: higher revenue + lower costs → higher profit
         _seed_branch_finance(126, revenue=20000, txn=400, goods=3000,
