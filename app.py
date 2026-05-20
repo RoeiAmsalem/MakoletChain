@@ -66,6 +66,11 @@ HEBREW_MONTHS = {
     9: 'ספטמבר', 10: 'אוקטובר', 11: 'נובמבר', 12: 'דצמבר'
 }
 
+# Earliest month with real operational data. Routes clamp URL/session to this
+# value (so /?month=2026-01 silently lands on April), and the month-back arrow
+# is hidden when navigating it would cross the floor.
+DATA_FLOOR_MONTH = '2026-04'
+
 
 def get_db():
     if 'db' not in g:
@@ -393,13 +398,22 @@ def _now_il():
 
 
 def _parse_month():
+    """Return the active month, clamped to DATA_FLOOR_MONTH.
+
+    A URL `?month=` below the floor (or a stale session value) is silently
+    bumped up to the floor — never below it.
+    """
     month = request.args.get('month')
     if month:
+        if month < DATA_FLOOR_MONTH:
+            month = DATA_FLOOR_MONTH
         session['selected_month'] = month
     else:
         month = session.get('selected_month')
     if not month:
         month = _now_il().strftime('%Y-%m')
+    if month < DATA_FLOOR_MONTH:
+        month = DATA_FLOOR_MONTH
     return month
 
 
@@ -407,7 +421,10 @@ def _month_nav(selected):
     year, mon = map(int, selected.split('-'))
     pm = mon - 1 if mon > 1 else 12
     py = year if mon > 1 else year - 1
-    prev_month = f'{py:04d}-{pm:02d}'
+    prev_candidate = f'{py:04d}-{pm:02d}'
+    # Hide the back arrow at the data floor — there's nothing useful to show
+    # earlier than DATA_FLOOR_MONTH.
+    prev_month = prev_candidate if prev_candidate >= DATA_FLOOR_MONTH else None
     current = _now_il().strftime('%Y-%m')
     nm = mon + 1 if mon < 12 else 1
     ny = year if mon < 12 else year + 1
@@ -482,12 +499,18 @@ def _list_visible_branches(user_id, role):
 
 
 def _page_context(active_page):
+    requested = request.args.get('month')
     selected = _parse_month()
+    # True iff the URL explicitly asked for a pre-floor month — used by the
+    # template to render the "first month with data" notice.
+    floor_clamped = bool(requested and requested < DATA_FLOOR_MONTH)
     branch_id = _get_branch_id()
     prev_month, next_month, month_display, show_today, current = _month_nav(selected)
     return {
         'active_page': active_page,
         'selected_month': selected,
+        'data_floor_month': DATA_FLOOR_MONTH,
+        'floor_clamped': floor_clamped,
         'branch_id': branch_id,
         'branch_name': _branch_name(branch_id),
         'prev_month': prev_month,
@@ -1084,7 +1107,9 @@ def api_network_overview():
 
     current_month = _now_il().strftime('%Y-%m')
 
-    # Build the trailing 6-month window (oldest → current).
+    # Build the trailing 6-month window (oldest → current), then drop any
+    # months earlier than the data floor — those would render as flat zeros
+    # and look broken.
     cy, cm = map(int, current_month.split('-'))
     trend_months = []
     y, m = cy, cm
@@ -1095,6 +1120,7 @@ def api_network_overview():
             m = 12
             y -= 1
     trend_months.reverse()
+    trend_months = [ms for ms in trend_months if ms >= DATA_FLOOR_MONTH]
     trend_labels = [f'{int(ms.split("-")[1])}/{ms.split("-")[0]}' for ms in trend_months]
 
     monthly_revenue = []

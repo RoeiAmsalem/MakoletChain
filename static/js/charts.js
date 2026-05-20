@@ -348,6 +348,7 @@ function initMonthlyRevenueChart(canvasId, rows, branches) {
             },
             scales: {
                 x: {
+                    reverse: true,
                     grid: { display: false },
                     ticks: { color: PALETTE.tickText, font: { size: 11 } },
                     border: { color: PALETTE.border },
@@ -400,6 +401,7 @@ function initTrend6mChart(canvasId, payload) {
             },
             scales: {
                 x: {
+                    reverse: true,
                     grid: { display: false },
                     ticks: { color: PALETTE.tickText, font: { size: 11 } },
                     border: { color: PALETTE.border },
@@ -467,6 +469,7 @@ function initProfitabilityChart(canvasId, rows) {
             scales: {
                 x: {
                     stacked: true,
+                    reverse: true,
                     position: 'top',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
@@ -511,6 +514,7 @@ function initAvgBasketChart(canvasId, rows, branches) {
             },
             scales: {
                 x: {
+                    reverse: true,
                     position: 'top',
                     beginAtZero: true,
                     grid: { color: PALETTE.gridLine },
@@ -555,10 +559,12 @@ function initExpenseBreakdownDonut(canvasId, payload) {
                 legend: {
                     position: 'bottom',
                     rtl: true,
+                    textDirection: 'rtl',
                     labels: { color: PALETTE.tickText, font: { size: 12 }, usePointStyle: true, boxWidth: 10 },
                 },
                 tooltip: {
                     rtl: true,
+                    textDirection: 'rtl',
                     callbacks: {
                         label: c => {
                             const total = c.dataset.data.reduce((s, v) => s + v, 0);

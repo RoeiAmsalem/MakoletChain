@@ -235,6 +235,60 @@ class TestNetworkTemplate:
             assert marker not in body, f'unexpected KPI marker: {marker}'
 
 
+# ── Data floor: April 2026 ─────────────────────────────────────
+
+class TestDataFloor:
+
+    def test_trend_6m_clamped_to_april(self, client):
+        """No data exists before April 2026, so trend_6m must start at 4/2026
+        and never include earlier months even when the 6-month window would."""
+        _seed_branch_finance(126, revenue=8000, txn=100, goods=0,
+                             salary_hours=0, hourly_rate=0)
+        _login(client, 'ceo@test.com')
+        data = client.get('/api/network-overview').get_json()
+        months = data['trend_6m']['months']
+        assert months, 'trend_6m must include at least one month'
+        # First entry must be April 2026, never earlier.
+        assert months[0] == '4/2026'
+        # No month label may reference a pre-April year/month.
+        for m in months:
+            mon, year = m.split('/')
+            ym = f'{int(year):04d}-{int(mon):02d}'
+            assert ym >= '2026-04', f'pre-floor month leaked into trend: {m}'
+
+    def test_previous_month_arrow_hidden_at_floor(self, client):
+        """When viewing April 2026, the back-arrow link must not appear —
+        nothing useful exists earlier."""
+        _login(client, 'admin@test.com')
+        body = client.get('/?month=2026-04').get_data(as_text=True)
+        assert '?month=2026-03' not in body, \
+            'back-arrow to pre-floor month must be hidden'
+
+    def test_month_query_below_floor_clamped(self, client):
+        """A URL asking for a pre-floor month renders the floor month
+        instead — session is clamped to April."""
+        # Seed April-specific data so we can confirm the clamped month
+        # actually returns April's numbers (not current-month or empty).
+        conn = sqlite3.connect(TEST_DB, timeout=30)
+        conn.execute(
+            "INSERT INTO daily_sales (branch_id, date, amount, transactions) "
+            "VALUES (126, '2026-04-15', 12345, 100)")
+        conn.commit()
+        conn.close()
+
+        _login(client, 'admin@test.com')
+        res = client.get('/?month=2026-01')
+        assert res.status_code == 200
+        with client.session_transaction() as sess:
+            assert sess.get('selected_month') == '2026-04'
+        # /api/summary respects the clamped session/url.
+        sum_res = client.get('/api/summary?month=2026-04')
+        assert sum_res.status_code == 200
+        # April revenue must match the seeded value (no live add since April
+        # is not the current month under test conditions).
+        assert sum_res.get_json()['income'] == 12345
+
+
 # ── Migration 009: demo CEO ────────────────────────────────────
 
 class TestDemoCeoMigration:
