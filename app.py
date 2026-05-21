@@ -436,7 +436,19 @@ def _month_nav(selected):
 
 
 def get_branch_id():
-    """Get branch_id from session only — never from request args/form."""
+    """Resolve branch_id for the current request.
+
+    Precedence: ?branch_id= URL param (if user is allowed to see it) →
+    session['branch_id'] → first user_branches entry → first branch in DB
+    (admin/ceo only). Never mutates session — API calls stay idempotent;
+    session writes happen only in _get_branch_id() / _page_context().
+    """
+    url_bid = request.args.get('branch_id', type=int)
+    if url_bid:
+        role = session.get('user_role')
+        allowed = session.get('user_branches', [])
+        if role in ROLES_ALL_BRANCHES or url_bid in allowed:
+            return url_bid
     bid = session.get('branch_id')
     if bid:
         return bid
@@ -982,10 +994,16 @@ def api_summary():
         elif not has_z:
             # No fresh pull yet today and no Z → tile falls back to the last
             # successful pull (display-only, never into income math above).
+            # Skip dates that already have a daily_sales row — once a day is
+            # closed (Z landed) its day-end live cumulative must not resurface.
             stale_row = db.execute(
-                'SELECT amount, transactions, last_updated, date '
-                'FROM live_sales WHERE branch_id = ? AND amount > 0 '
-                'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+                'SELECT ls.amount, ls.transactions, ls.last_updated, ls.date '
+                'FROM live_sales ls WHERE ls.branch_id = ? AND ls.amount > 0 '
+                'AND NOT EXISTS ('
+                '  SELECT 1 FROM daily_sales ds '
+                '  WHERE ds.branch_id = ls.branch_id AND ds.date = ls.date'
+                ') '
+                'ORDER BY ls.date DESC, ls.fetched_at DESC LIMIT 1',
                 (branch_id,)
             ).fetchone()
     else:
@@ -1328,9 +1346,13 @@ def api_live_sales():
                         'last_updated': None, 'is_stale': False})
 
     stale = db.execute(
-        'SELECT amount, transactions, last_updated, date '
-        'FROM live_sales WHERE branch_id = ? AND amount > 0 '
-        'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+        'SELECT ls.amount, ls.transactions, ls.last_updated, ls.date '
+        'FROM live_sales ls WHERE ls.branch_id = ? AND ls.amount > 0 '
+        'AND NOT EXISTS ('
+        '  SELECT 1 FROM daily_sales ds '
+        '  WHERE ds.branch_id = ls.branch_id AND ds.date = ls.date'
+        ') '
+        'ORDER BY ls.date DESC, ls.fetched_at DESC LIMIT 1',
         (branch_id,)
     ).fetchone()
     if stale:
