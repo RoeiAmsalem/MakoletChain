@@ -160,16 +160,25 @@ def fetch_902_filters(aviv_branch_id: int, token: str) -> dict:
     return r.json()
 
 
+_Z_LABEL_RE = re.compile(r'Z:\s*(\d+)\s*\|\s*(\d{1,2}/\d{1,2}/\d{2,4})')
+
+
 def _iter_z_entries(filters_json) -> list[dict]:
     """Walk the filters JSON and return a flat list of {z_number, date} entries.
 
-    The exact wrapping shape varies (Aviv sometimes returns {data: [...]},
-    sometimes a bare list of filter objects, each with a "value" list of
-    options). Each option looks like {"key": <Z>, "value": <date_str>} or
-    similar. We scan defensively for any dict that has a numeric key + a
-    parseable date in its value, since the field names sometimes vary.
+    Aviv's actual shape (captured live):
+      [{"id":1,"name":"ID_Z","filterType":"INTEGER","possibleValues":[
+          {"2525":"Z: 2525|20/05/2026"}, ...]}, ...]
+
+    Each Z option is a single-key dict whose key is the Z number (as a string)
+    and whose value is a "Z: <num>|DD/MM/YYYY" label.
+
+    The walk also accepts a couple of likely alternate shapes ({key,value}
+    pairs, ISO date strings) so future schema variants don't silently break
+    the agent. The label parser is what unblocks the captured shape.
     """
     entries: list[dict] = []
+    seen: set[int] = set()
 
     def _try_parse_date(s: str) -> str | None:
         s = str(s or '').strip()
@@ -180,25 +189,44 @@ def _iter_z_entries(filters_json) -> list[dict]:
                 return d.isoformat()
             except ValueError:
                 continue
-        # Try ISO leading prefix
         try:
             return datetime.fromisoformat(s[:19]).date().isoformat()
         except (ValueError, TypeError):
             return None
 
+    def _add(z: int | None, d: str | None):
+        if not z or not d or z in seen:
+            return
+        seen.add(z)
+        entries.append({'z_number': z, 'date': d})
+
     def _visit(node):
         if isinstance(node, dict):
-            # Candidate Z option: numeric "key" + stringy "value" w/ a date.
-            k = node.get('key')
-            v = node.get('value')
-            if k is not None and isinstance(v, (str, int, float)):
+            # Captured shape: single-key dict {z_str: "Z: <z>|DD/MM/YYYY"}.
+            if len(node) == 1:
+                (k, v), = node.items()
+                if isinstance(v, str):
+                    m = _Z_LABEL_RE.search(v)
+                    if m:
+                        try:
+                            _add(int(m.group(1)), _try_parse_date(m.group(2)))
+                        except ValueError:
+                            pass
+            # Alternate shape: explicit {"key": <z>, "value": <date>}.
+            k_val = node.get('key')
+            v_val = node.get('value')
+            if k_val is not None and isinstance(v_val, (str, int, float)):
                 try:
-                    z = int(k)
+                    z = int(k_val)
                 except (TypeError, ValueError):
                     z = None
-                d = _try_parse_date(str(v))
-                if z and d:
-                    entries.append({'z_number': z, 'date': d})
+                # The value might itself be a Z-label or a bare date.
+                v_str = str(v_val)
+                m = _Z_LABEL_RE.search(v_str)
+                if m:
+                    _add(int(m.group(1)), _try_parse_date(m.group(2)))
+                else:
+                    _add(z, _try_parse_date(v_str))
             for child in node.values():
                 _visit(child)
         elif isinstance(node, list):
@@ -206,15 +234,7 @@ def _iter_z_entries(filters_json) -> list[dict]:
                 _visit(item)
 
     _visit(filters_json)
-    # Dedup by z_number (keep first seen).
-    seen: set[int] = set()
-    out: list[dict] = []
-    for e in entries:
-        if e['z_number'] in seen:
-            continue
-        seen.add(e['z_number'])
-        out.append(e)
-    return out
+    return entries
 
 
 def resolve_z_for_date(filters_json, target_date: str) -> int | None:
