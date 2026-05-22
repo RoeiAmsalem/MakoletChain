@@ -992,19 +992,15 @@ def api_summary():
             if not has_z:
                 income += live_amount_today
         elif not has_z:
-            # No fresh pull yet today and no Z → tile falls back to the last
-            # successful pull (display-only, never into income math above).
-            # Skip dates that already have a daily_sales row — once a day is
-            # closed (Z landed) its day-end live cumulative must not resurface.
+            # Calendar date has rolled over and no fresh pull yet → store-
+            # closed state. Surface the most recent past-day live row only as
+            # last_amount/last_date for context (never as the live number,
+            # never into income math above).
             stale_row = db.execute(
-                'SELECT ls.amount, ls.transactions, ls.last_updated, ls.date '
-                'FROM live_sales ls WHERE ls.branch_id = ? AND ls.amount > 0 '
-                'AND NOT EXISTS ('
-                '  SELECT 1 FROM daily_sales ds '
-                '  WHERE ds.branch_id = ls.branch_id AND ds.date = ls.date'
-                ') '
-                'ORDER BY ls.date DESC, ls.fetched_at DESC LIMIT 1',
-                (branch_id,)
+                'SELECT amount, date FROM live_sales '
+                'WHERE branch_id = ? AND amount > 0 AND date < ? '
+                'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+                (branch_id, today)
             ).fetchone()
     else:
         live_row = None
@@ -1028,6 +1024,7 @@ def api_summary():
             'transactions': live_src['transactions'],
             'last_updated': live_src['last_updated'],
             'is_stale': False,
+            'is_closed': False,
         }
         try:
             cancellation_total = round(float(live_src['cancellation_total'] or 0), 2)
@@ -1037,13 +1034,17 @@ def api_summary():
         except (KeyError, TypeError):
             pass
     elif stale_row:
-        # Display-only: last successful pull, marked stale. Not in income.
+        # Calendar date has rolled to a new day, no fresh pull, no Z →
+        # store-closed state. Past-day amount surfaces as last_amount only,
+        # never as the live number. Not in income.
         live = {
-            'amount': stale_row['amount'],
-            'transactions': stale_row['transactions'],
-            'last_updated': stale_row['last_updated'],
-            'is_stale': True,
-            'stale_date': stale_row['date'],
+            'amount': None,
+            'transactions': None,
+            'last_updated': None,
+            'is_stale': False,
+            'is_closed': True,
+            'last_amount': stale_row['amount'],
+            'last_date': stale_row['date'],
         }
 
     # Latest electricity invoice for the strip
@@ -1306,10 +1307,12 @@ def api_history():
 def api_live_sales():
     """Return today's live sales for a branch.
 
-    Falls back to the last successful pull (any prior day) tagged
-    is_stale=true when there is no fresh pull yet today AND no Z-report
-    today — so the tile shows the last known value instead of zero.
-    Stale fallback never kicks in when a Z-report exists (Z always wins).
+    Read-time rule (no scheduled job, no writes): live data is shown ONLY
+    for the current calendar day (Asia/Jerusalem). When the date has rolled
+    over and no fresh pull exists for the new day yet, returns is_closed
+    with last_amount/last_date for context — the tile renders "החנות סגורה"
+    rather than resurfacing yesterday's closing number as live.
+    Z-report (daily_sales row for today) always wins.
     """
     branch_id = get_branch_id()
     today = _now_il().strftime('%Y-%m-%d')
@@ -1326,6 +1329,7 @@ def api_live_sales():
             'transactions': row['transactions'],
             'last_updated': row['last_updated'],
             'is_stale': False,
+            'is_closed': False,
         })
 
     has_z = db.execute(
@@ -1334,37 +1338,40 @@ def api_live_sales():
     ).fetchone() is not None
 
     if has_z:
-        # has_z path unchanged: today's row as-is if present, else empty.
+        # Z wins — no is_closed even if no live row for today.
         if row:
             return jsonify({
                 'amount': row['amount'],
                 'transactions': row['transactions'],
                 'last_updated': row['last_updated'],
                 'is_stale': False,
+                'is_closed': False,
             })
         return jsonify({'amount': None, 'transactions': None,
-                        'last_updated': None, 'is_stale': False})
+                        'last_updated': None, 'is_stale': False,
+                        'is_closed': False})
 
-    stale = db.execute(
-        'SELECT ls.amount, ls.transactions, ls.last_updated, ls.date '
-        'FROM live_sales ls WHERE ls.branch_id = ? AND ls.amount > 0 '
-        'AND NOT EXISTS ('
-        '  SELECT 1 FROM daily_sales ds '
-        '  WHERE ds.branch_id = ls.branch_id AND ds.date = ls.date'
-        ') '
-        'ORDER BY ls.date DESC, ls.fetched_at DESC LIMIT 1',
-        (branch_id,)
+    # Calendar date has rolled to a new day, no fresh pull yet, no Z.
+    # Look up the most recent past-day live row for is_closed context.
+    latest = db.execute(
+        'SELECT amount, date FROM live_sales '
+        'WHERE branch_id = ? AND amount > 0 AND date < ? '
+        'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+        (branch_id, today)
     ).fetchone()
-    if stale:
+    if latest:
         return jsonify({
-            'amount': stale['amount'],
-            'transactions': stale['transactions'],
-            'last_updated': stale['last_updated'],
-            'is_stale': True,
-            'stale_date': stale['date'],
+            'amount': None,
+            'transactions': None,
+            'last_updated': None,
+            'is_stale': False,
+            'is_closed': True,
+            'last_amount': latest['amount'],
+            'last_date': latest['date'],
         })
     return jsonify({'amount': None, 'transactions': None,
-                    'last_updated': None, 'is_stale': False})
+                    'last_updated': None, 'is_stale': False,
+                    'is_closed': False})
 
 
 @app.route('/api/sales-by-hour')

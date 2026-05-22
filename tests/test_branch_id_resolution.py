@@ -1,12 +1,14 @@
-"""branch_id resolution + stale-fallback closed-day filter.
+"""branch_id resolution + live tile store-closed read-time rule.
 
 get_branch_id() must honor ?branch_id= URL param only if the user is
 entitled to that branch, must not mutate session, and must fall back to
 existing precedence otherwise.
 
-Stale fallback in /api/live-sales and /api/summary must skip dates that
-already have a daily_sales row — once a day is closed, its day-end live
-cumulative must not resurface on the next morning.
+/api/live-sales and /api/summary must show live data only for the current
+calendar day (Asia/Jerusalem). When the calendar date has rolled over and
+no fresh pull exists yet for the new day, return is_closed with
+last_amount/last_date — never resurface the past day's number as live.
+Z-report (daily_sales row for today) always wins.
 """
 import json
 import os
@@ -155,73 +157,122 @@ def test_get_branch_id_no_session_mutation(client):
     assert d_plain['branch_id'] == 126
 
 
-# ── Fix 2: stale fallback skips closed days ───────────────────
+# ── Fix 2: store-closed read-time rule ────────────────────────
 
-def test_stale_skips_closed_day(client):
-    """live_sales row for May-20-equivalent + daily_sales row for same day,
-    nothing for today → /api/live-sales returns empty (not the closed day)."""
+def test_live_shows_today_when_fresh(client):
+    """live_sales row for today → normal live number, no is_closed."""
     _login_manager(client)
-    closed_day = (_today() - timedelta(days=1)).isoformat()
+    today = _today().isoformat()
     conn = _db()
     conn.execute(
         "INSERT INTO live_sales (branch_id, date, amount, transactions, "
-        "last_updated, fetched_at) VALUES (126, ?, 13721.98, 400, '23:00:00', ?)",
-        (closed_day, closed_day + 'T23:00:00'))
-    conn.execute(
-        "INSERT INTO daily_sales (branch_id, date, amount, transactions, "
-        "source) VALUES (126, ?, 13721.98, 400, 'z_report')", (closed_day,))
+        "last_updated, fetched_at) VALUES (126, ?, 8888, 250, '14:00:00', ?)",
+        (today, today + 'T14:00:00'))
     conn.commit()
     conn.close()
 
     d = json.loads(client.get('/api/live-sales').data)
-    assert d['is_stale'] is False
+    assert d['is_closed'] is False
+    assert d['amount'] == 8888
+    assert d['transactions'] == 250
+
+
+def test_live_keeps_number_same_day_evening(client):
+    """Late-night row dated today → still shows it, not is_closed."""
+    _login_manager(client)
+    today = _today().isoformat()
+    conn = _db()
+    conn.execute(
+        "INSERT INTO live_sales (branch_id, date, amount, transactions, "
+        "last_updated, fetched_at) VALUES (126, ?, 12345, 380, '23:00:00', ?)",
+        (today, today + 'T23:00:00'))
+    conn.commit()
+    conn.close()
+
+    d = json.loads(client.get('/api/live-sales').data)
+    assert d['is_closed'] is False
+    assert d['amount'] == 12345
+
+
+def test_live_closed_when_latest_is_past_day(client):
+    """Most recent live row is yesterday → is_closed=true, NOT yesterday's
+    number rendered as live. live_amount_today is 0 in /api/summary."""
+    _login_manager(client)
+    yesterday = (_today() - timedelta(days=1)).isoformat()
+    conn = _db()
+    conn.execute(
+        "INSERT INTO live_sales (branch_id, date, amount, transactions, "
+        "last_updated, fetched_at) VALUES (126, ?, 13721.98, 400, '23:00:00', ?)",
+        (yesterday, yesterday + 'T23:00:00'))
+    conn.commit()
+    conn.close()
+
+    d = json.loads(client.get('/api/live-sales').data)
+    assert d['is_closed'] is True
     assert d['amount'] is None
+    assert d['last_amount'] == 13721.98
+    assert d['last_date'] == yesterday
+
+    s = json.loads(client.get('/api/summary').data)
+    assert s['live'] is not None
+    assert s['live']['is_closed'] is True
+    assert s['live']['amount'] is None
+    assert s['live']['last_amount'] == 13721.98
+    assert s['live']['last_date'] == yesterday
+    assert s['live_amount_today'] == 0
 
 
-def test_stale_returns_open_day_only(client):
-    """live_sales row from a date with NO daily_sales row → stale fallback returns it."""
+def test_live_z_report_overrides(client):
+    """Today has a Z (daily_sales row) → Z wins, no is_closed."""
     _login_manager(client)
-    open_day = (_today() - timedelta(days=2)).isoformat()
+    today = _today().isoformat()
+    yesterday = (_today() - timedelta(days=1)).isoformat()
     conn = _db()
+    # Yesterday has a stale live row (would otherwise trigger is_closed).
     conn.execute(
         "INSERT INTO live_sales (branch_id, date, amount, transactions, "
-        "last_updated, fetched_at) VALUES (126, ?, 7777, 200, '23:00:00', ?)",
-        (open_day, open_day + 'T23:00:00'))
+        "last_updated, fetched_at) VALUES (126, ?, 9999, 300, '23:00:00', ?)",
+        (yesterday, yesterday + 'T23:00:00'))
+    # Today has a Z.
+    conn.execute(
+        "INSERT INTO daily_sales (branch_id, date, amount, transactions, "
+        "source) VALUES (126, ?, 4444, 150, 'z_report')", (today,))
     conn.commit()
     conn.close()
 
     d = json.loads(client.get('/api/live-sales').data)
-    assert d['is_stale'] is True
-    assert d['amount'] == 7777
-    assert d['stale_date'] == open_day
+    assert d['is_closed'] is False
+
+    s = json.loads(client.get('/api/summary').data)
+    # has_z true and no live row for today → live tile empty, no is_closed.
+    if s['live'] is not None:
+        assert s['live']['is_closed'] is False
 
 
-def test_stale_same_fix_in_summary(client):
-    """Same closed-day filter applies to /api/summary.live stale fallback."""
+def test_live_first_pull_clears_closed(client):
+    """After is_closed state, inserting a fresh today row → is_closed gone,
+    shows the fresh number."""
     _login_manager(client)
-    closed_day = (_today() - timedelta(days=1)).isoformat()
-    open_day = (_today() - timedelta(days=3)).isoformat()
+    yesterday = (_today() - timedelta(days=1)).isoformat()
+    today = _today().isoformat()
     conn = _db()
-    # Closed: has both live AND a daily_sales row → must be skipped.
     conn.execute(
         "INSERT INTO live_sales (branch_id, date, amount, transactions, "
         "last_updated, fetched_at) VALUES (126, ?, 13721.98, 400, '23:00:00', ?)",
-        (closed_day, closed_day + 'T23:00:00'))
-    conn.execute(
-        "INSERT INTO daily_sales (branch_id, date, amount, transactions, "
-        "source) VALUES (126, ?, 13721.98, 400, 'z_report')", (closed_day,))
-    # Older open day with only a live row → that one should surface.
+        (yesterday, yesterday + 'T23:00:00'))
+    conn.commit()
+
+    d1 = json.loads(client.get('/api/live-sales').data)
+    assert d1['is_closed'] is True
+
+    # First fresh pull of the new day.
     conn.execute(
         "INSERT INTO live_sales (branch_id, date, amount, transactions, "
-        "last_updated, fetched_at) VALUES (126, ?, 5555, 100, '23:00:00', ?)",
-        (open_day, open_day + 'T23:00:00'))
+        "last_updated, fetched_at) VALUES (126, ?, 250, 7, '07:00:00', ?)",
+        (today, today + 'T07:00:00'))
     conn.commit()
     conn.close()
 
-    d = json.loads(client.get('/api/summary').data)
-    assert d['live'] is not None
-    assert d['live']['is_stale'] is True
-    assert d['live']['amount'] == 5555
-    assert d['live']['stale_date'] == open_day
-    # Sanity: closed day must not be the one resurfaced.
-    assert d['live']['amount'] != 13721.98
+    d2 = json.loads(client.get('/api/live-sales').data)
+    assert d2['is_closed'] is False
+    assert d2['amount'] == 250

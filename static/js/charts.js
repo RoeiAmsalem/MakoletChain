@@ -582,12 +582,19 @@ function loadLiveSales() {
         .then(d => {
             const el = document.getElementById('live-amount');
             if (!el) return;
-            if (d.amount !== null && d.amount !== undefined) {
+            const subEl = document.getElementById('live-sub');
+            const basketEl = document.getElementById('live-basket');
+            const updatedEl = document.getElementById('live-updated');
+            if (d.is_closed) {
+                el.textContent = 'החנות סגורה';
+                el.className = 'kpi-value';
+                if (subEl) subEl.textContent = 'המכירות יתעדכנו עם פתיחת החנות';
+                if (basketEl) { basketEl.textContent = ''; basketEl.style.display = 'none'; }
+                if (updatedEl) updatedEl.textContent = d.last_date ? 'עדכון אחרון: ' + d.last_date : '';
+            } else if (d.amount !== null && d.amount !== undefined) {
                 el.textContent = '₪ ' + d.amount.toLocaleString('he-IL', {minimumFractionDigits: 0});
-                // Stale → no green "profit" highlight (dimmed default text).
-                el.className = d.is_stale ? 'kpi-value' : 'kpi-value profit';
-                document.getElementById('live-sub').textContent = (d.transactions || 0) + ' עסקאות';
-                const basketEl = document.getElementById('live-basket');
+                el.className = 'kpi-value profit';
+                if (subEl) subEl.textContent = (d.transactions || 0) + ' עסקאות';
                 if (basketEl) {
                     if (d.transactions && d.transactions > 0) {
                         basketEl.textContent = 'סל ממוצע: ₪' + (d.amount / d.transactions).toFixed(2);
@@ -597,26 +604,16 @@ function loadLiveSales() {
                         basketEl.style.display = 'none';
                     }
                 }
-                const updatedEl = document.getElementById('live-updated');
-                if (d.is_stale) {
-                    updatedEl.textContent = '';
-                    const pill = document.createElement('span');
-                    pill.className = 'kpi-badge stale';
-                    pill.textContent = d.stale_date
-                        ? ('מתעדכן בבוקר · עדכון אחרון: ' + d.stale_date)
-                        : 'מתעדכן בבוקר';
-                    updatedEl.appendChild(pill);
-                } else {
+                if (updatedEl) {
                     const timeOnly = d.last_updated ? d.last_updated.split(' ')[0] : '';
                     updatedEl.textContent = timeOnly ? 'עודכן: ' + timeOnly : '';
                 }
             } else {
                 el.textContent = 'אין נתונים';
                 el.className = 'kpi-value';
-                document.getElementById('live-sub').textContent = '';
-                const basketElNone = document.getElementById('live-basket');
-                if (basketElNone) { basketElNone.textContent = ''; basketElNone.style.display = 'none'; }
-                document.getElementById('live-updated').textContent = '';
+                if (subEl) subEl.textContent = '';
+                if (basketEl) { basketEl.textContent = ''; basketEl.style.display = 'none'; }
+                if (updatedEl) updatedEl.textContent = '';
             }
             // Also refresh summary tiles (income includes live data)
             if (typeof loadSummary === 'function') loadSummary();
