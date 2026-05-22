@@ -123,6 +123,33 @@ def test_date_to_z_resolution_dd_mm_yyyy():
     assert zr.resolve_z_for_date(filters_json, '2026-05-20') == 2525
 
 
+def test_date_to_z_resolution_captured_aviv_shape():
+    """Actual production shape from filters/902 (captured 2026-05-22):
+    a top-level list of filter objects with a `possibleValues` array of
+    single-key dicts {z_str: "Z: <z>|DD/MM/YYYY"}.
+    """
+    filters_json = [
+        {
+            'id': 1, 'name': 'ID_Z', 'filterType': 'INTEGER',
+            'possibleValues': [
+                {'2526': 'Z: 2526|21/05/2026'},
+                {'2525': 'Z: 2525|20/05/2026'},
+                {'2524': 'Z: 2524|19/05/2026'},
+            ],
+        },
+        {
+            'id': 2, 'name': 'TO_Z', 'filterType': 'INTEGER',
+            'possibleValues': [
+                {'2526': 'Z: 2526|21/05/2026'},
+                {'2525': 'Z: 2525|20/05/2026'},
+            ],
+        },
+    ]
+    assert zr.resolve_z_for_date(filters_json, '2026-05-20') == 2525
+    assert zr.resolve_z_for_date(filters_json, '2026-05-21') == 2526
+    assert zr.resolve_z_for_date(filters_json, '2026-04-01') is None
+
+
 # ── upsert ────────────────────────────────────────────────────────────────
 
 def test_upsert_writes_separate_table(staging_db):
