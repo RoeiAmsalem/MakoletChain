@@ -1,12 +1,13 @@
-"""/api/summary live-tile stale policy.
+"""/api/summary live-tile store-closed policy.
 
-POLICY (display-only separation):
-  - live.{amount,transactions,last_updated,is_stale,stale_date} feeds the
-    tile and MAY be a prior-day value (is_stale=true).
+POLICY (read-time, no scheduled writes):
+  - Live data shows ONLY for the current calendar day (Asia/Jerusalem).
+  - When the date has rolled over and no fresh pull exists for the new
+    day yet, live.is_closed=true with last_amount/last_date — never
+    the past day's number resurfaced as live.
   - live_amount_today feeds income math and is ONLY ever the fresh
-    today value, else 0 — a stale value is NEVER added to income (that
-    would double-count a day whose Z-report already landed).
-  - Z-report for today always wins: no stale fallback when has_z.
+    today value, else 0.
+  - Z-report for today always wins: no is_closed when has_z.
 """
 import json
 import os
@@ -85,9 +86,9 @@ def _summary(client):
     return json.loads(client.get('/api/summary').data)
 
 
-# ── stale fallback ────────────────────────────────────────────
+# ── store-closed read-time rule ───────────────────────────────
 
-def test_summary_live_stale_when_no_today_row(client):
+def test_summary_live_closed_when_no_today_row(client):
     old = (_today() - timedelta(days=2)).isoformat()
     conn = _db()
     conn.execute(
@@ -99,10 +100,11 @@ def test_summary_live_stale_when_no_today_row(client):
 
     d = _summary(client)
     assert d['live'] is not None
-    assert d['live']['is_stale'] is True
-    assert d['live']['amount'] == 2000
-    assert d['live']['stale_date'] == old
-    # Display-only: stale value must NOT enter income math.
+    assert d['live']['is_closed'] is True
+    assert d['live']['amount'] is None
+    assert d['live']['last_amount'] == 2000
+    assert d['live']['last_date'] == old
+    # Past-day value must NOT enter income math.
     assert d['live_amount_today'] == 0
     assert d['has_z'] is False
 
@@ -119,7 +121,7 @@ def test_summary_live_fresh_when_today_row_exists(client):
 
     d = _summary(client)
     assert d['live'] is not None
-    assert d['live']['is_stale'] is False
+    assert d['live']['is_closed'] is False
     assert d['live']['amount'] == 555
     assert d['live_amount_today'] == 555
 
