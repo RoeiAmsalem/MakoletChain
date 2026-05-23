@@ -80,8 +80,8 @@ body {
 }
 
 .brand-logo {
-    height: 36px;
-    width: 36px;
+    height: 44px;
+    width: 44px;
     object-fit: contain;
     flex-shrink: 0;
     display: block;
@@ -558,7 +558,7 @@ body {
         gap: 0.4rem;
     }
 
-    .brand-logo { height: 30px; width: 30px; }
+    .brand-logo { height: 36px; width: 36px; }
     .navbar-brand { margin-inline-end: auto; }
 
     /* Hamburger sits at the end of the brand row; switcher wraps to its own row */
