@@ -21,6 +21,15 @@
             <img src="{{ static_v('makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
             <span class="store-name">{{ branch_name }}</span>
         </a>
+        <button id="pwa-install-btn" type="button" aria-label="התקן את האפליקציה" title="התקן את האפליקציה"
+                style="display:none;align-items:center;justify-content:center;min-width:40px;min-height:40px;width:40px;height:40px;padding:0;background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid rgba(255,255,255,0.15);border-radius:8px;cursor:pointer;touch-action:manipulation;flex-shrink:0;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="6" y="2" width="12" height="20" rx="2.5"/>
+                <line x1="11" y1="18.5" x2="13" y2="18.5"/>
+                <path d="M12 7v6"/>
+                <path d="M9 10l3 3 3-3"/>
+            </svg>
+        </button>
         {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
         <select id="branch-select" onchange="switchBranch(this.value)" style="background:rgba(255,255,255,0.07);color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:20px;padding:4px 12px;font-size:0.8rem;cursor:pointer;outline:none;flex-shrink:0;">
         </select>
@@ -133,12 +142,6 @@ document.getElementById('hamburger').addEventListener('click', function() {
 <script src="{{ static_v('dialog.js') }}"></script>
 {% block scripts %}{% endblock %}
 
-<div id="pwa-install-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#1e293b;border-top:1px solid #334155;color:#f1f5f9;padding:12px 16px;box-shadow:0 -4px 16px rgba(0,0,0,0.4);direction:rtl;align-items:center;gap:12px;font-family:inherit;">
-  <span style="flex:1;font-size:0.9rem;line-height:1.3;">התקן את האפליקציה למסך הבית 📲</span>
-  <button id="pwa-install-btn" type="button" style="min-height:40px;padding:0 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:0.9rem;cursor:pointer;touch-action:manipulation;">התקן</button>
-  <button id="pwa-dismiss-btn" type="button" aria-label="סגור" style="min-width:40px;min-height:40px;background:transparent;color:#94a3b8;border:none;font-size:1.4rem;cursor:pointer;touch-action:manipulation;line-height:1;">×</button>
-</div>
-
 <div id="pwa-ios-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;padding:16px;direction:rtl;">
   <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;max-width:360px;width:100%;padding:20px;color:#f1f5f9;font-family:inherit;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -168,20 +171,17 @@ document.getElementById('hamburger').addEventListener('click', function() {
     });
   }
 
-  // ---- Install banner ----
-  var banner = document.getElementById('pwa-install-banner');
+  // ---- Install trigger (small navbar button) ----
+  // Show the button only when install is genuinely available: either we
+  // captured beforeinstallprompt (Android / desktop Chrome / Edge) or we're
+  // on iOS Safari (which can install via Share -> Add to Home Screen).
+  // Hide when already running standalone, or when neither path is available.
   var installBtn = document.getElementById('pwa-install-btn');
-  var dismissBtn = document.getElementById('pwa-dismiss-btn');
   var iosModal = document.getElementById('pwa-ios-modal');
   var iosClose = document.getElementById('pwa-ios-close');
   var iosOk = document.getElementById('pwa-ios-ok');
-  if (!banner) return;
+  if (!installBtn) return;
 
-  function isMobile() {
-    var ua = navigator.userAgent || '';
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)
-      || (window.matchMedia && window.matchMedia('(max-width: 768px)').matches && 'ontouchstart' in window);
-  }
   function isIOS() {
     var ua = navigator.userAgent || '';
     return /iPhone|iPad|iPod/i.test(ua) && !window.MSStream;
@@ -190,30 +190,25 @@ document.getElementById('hamburger').addEventListener('click', function() {
     return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
       || window.navigator.standalone === true;
   }
-  function isDismissed() {
-    try { return sessionStorage.getItem('pwa_banner_dismissed') === '1'; } catch (e) { return false; }
+  function showButton() {
+    if (isStandalone()) return;
+    installBtn.style.display = 'inline-flex';
   }
-  function setDismissed() {
-    try { sessionStorage.setItem('pwa_banner_dismissed', '1'); } catch (e) {}
-  }
-  function showBanner() {
-    if (!isMobile() || isStandalone() || isDismissed()) return;
-    banner.style.display = 'flex';
-  }
-  function hideBanner() {
-    banner.style.display = 'none';
+  function hideButton() {
+    installBtn.style.display = 'none';
   }
 
   var deferredPrompt = null;
   window.addEventListener('beforeinstallprompt', function(e) {
     e.preventDefault();
     deferredPrompt = e;
-    showBanner();
+    showButton();
   });
 
-  // iOS never fires beforeinstallprompt — show banner directly so user can get instructions.
-  if (isIOS() && !isStandalone() && !isDismissed()) {
-    showBanner();
+  // iOS never fires beforeinstallprompt — surface the button so the user can
+  // open the Share -> Add to Home Screen instructions modal.
+  if (isIOS() && !isStandalone()) {
+    showButton();
   }
 
   installBtn.addEventListener('click', function() {
@@ -221,30 +216,20 @@ document.getElementById('hamburger').addEventListener('click', function() {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then(function(choice) {
         deferredPrompt = null;
-        hideBanner();
-        if (choice && choice.outcome === 'accepted') setDismissed();
+        if (choice && choice.outcome === 'accepted') hideButton();
       });
     } else if (isIOS()) {
       iosModal.style.display = 'flex';
-    } else {
-      // Fallback — no native prompt available, just hide.
-      setDismissed();
-      hideBanner();
     }
-  });
-
-  dismissBtn.addEventListener('click', function() {
-    setDismissed();
-    hideBanner();
   });
 
   function closeIos() { iosModal.style.display = 'none'; }
   iosClose.addEventListener('click', closeIos);
-  iosOk.addEventListener('click', function() { closeIos(); setDismissed(); hideBanner(); });
+  iosOk.addEventListener('click', closeIos);
 
   window.addEventListener('appinstalled', function() {
-    setDismissed();
-    hideBanner();
+    deferredPrompt = null;
+    hideButton();
   });
 })();
 </script>

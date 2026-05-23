@@ -89,9 +89,38 @@ def test_base_html_has_manifest_link():
     assert '/static/icons/icon-180.png' in html
     assert 'theme-color' in html
     assert 'apple-mobile-web-app-capable' in html
-    # Install banner + SW registration scaffolding
-    assert 'pwa-install-banner' in html
     assert "navigator.serviceWorker.register('/static/sw.js'" in html
+
+
+def test_base_html_has_install_button():
+    """The install trigger is now a small navbar button — the bottom banner
+    was removed in favor of a persistent, less-intrusive UI."""
+    base = os.path.join(REPO_ROOT, 'templates', 'base.html')
+    with open(base, 'r', encoding='utf-8') as f:
+        html = f.read()
+    # New navbar button present
+    assert 'id="pwa-install-btn"' in html
+    # Old bottom banner must be gone — banner element + its dismiss button
+    assert 'pwa-install-banner' not in html
+    assert 'pwa-dismiss-btn' not in html
+    # Sanity: button sits inside the navbar block
+    nav_start = html.find('<nav class="navbar"')
+    nav_end = html.find('</nav>', nav_start)
+    assert nav_start != -1 and nav_end != -1
+    btn_pos = html.find('id="pwa-install-btn"')
+    assert nav_start < btn_pos < nav_end, 'install button must live inside .navbar'
+
+
+def test_ios_instructions_modal_present():
+    """iOS modal markup must still be in base.html — reused by the new button."""
+    base = os.path.join(REPO_ROOT, 'templates', 'base.html')
+    with open(base, 'r', encoding='utf-8') as f:
+        html = f.read()
+    assert 'id="pwa-ios-modal"' in html
+    assert 'id="pwa-ios-close"' in html
+    assert 'id="pwa-ios-ok"' in html
+    # The Hebrew step text — verifies the modal body wasn't accidentally stripped.
+    assert 'הוסף למסך הבית' in html
 
 
 def test_sw_never_caches_api():
