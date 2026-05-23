@@ -8,7 +8,7 @@
  *  - /static/* (css/js/icons/manifest)  →  cache-first (versioned via static_v).
  */
 
-const CACHE_NAME = 'makolet-shell-v2';
+const CACHE_NAME = 'makolet-shell-v3';
 
 // Static shell — only stable assets. Versioned URLs are added at runtime.
 const SHELL_ASSETS = [
