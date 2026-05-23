@@ -279,6 +279,29 @@ def login_required(f):
     return decorated
 
 
+def _serve_service_worker():
+    """Serve sw.js with Service-Worker-Allowed: / so it can control the whole
+    origin even though it lives under /static/. Browsers require this header
+    when the worker URL is not at root.
+    """
+    sw_path = os.path.join(app.static_folder, 'sw.js')
+    resp = send_file(sw_path, mimetype='application/javascript')
+    resp.headers['Service-Worker-Allowed'] = '/'
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+
+@app.route('/sw.js')
+def service_worker_root():
+    return _serve_service_worker()
+
+
+@app.route('/static/sw.js')
+def service_worker_static():
+    # Override Flask's default /static handler so the header is attached.
+    return _serve_service_worker()
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
