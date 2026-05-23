@@ -80,17 +80,11 @@ body {
 }
 
 .brand-logo {
-    height: 32px;
-    width: 32px;
+    height: 36px;
+    width: 36px;
     object-fit: contain;
     flex-shrink: 0;
-}
-
-.brand-name {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--text-light);
-    white-space: nowrap;
+    display: block;
 }
 
 .store-name {
@@ -564,9 +558,8 @@ body {
         gap: 0.4rem;
     }
 
-    .brand-logo { height: 28px; width: 28px; }
-    .brand-name { font-size: 1rem; }
-    .navbar-brand { gap: 0.4rem; margin-inline-end: auto; }
+    .brand-logo { height: 30px; width: 30px; }
+    .navbar-brand { margin-inline-end: auto; }
 
     /* Hamburger sits at the end of the brand row; switcher wraps to its own row */
     .navbar-top > .hamburger { order: 2; }

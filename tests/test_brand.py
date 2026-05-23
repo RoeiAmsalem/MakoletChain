@@ -29,9 +29,17 @@ def _read_base():
 
 
 def test_navbar_has_brand_name():
+    """Brand mark in the navbar is the logo ALONE — no visible text span next
+    to it. The product name lives in <title>, the manifest, and the img alt
+    (for accessibility). The brand-name span must be gone from base.html."""
     html = _read_base()
-    assert 'class="brand-name"' in html
-    assert BRAND_NAME in html
+    assert 'class="brand-name"' not in html, \
+        'navbar brand text span removed — logo-only brand mark'
+    # Accessibility: name still surfaces via alt + aria-label
+    assert f'alt="{BRAND_NAME}"' in html
+    assert f'aria-label="{BRAND_NAME}"' in html
+    # And <title> still uses the brand
+    assert f'{{% block title %}}{BRAND_NAME}{{% endblock %}}' in html
 
 
 def test_navbar_has_logo():
