@@ -11,6 +11,16 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="מכולת">
     <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
+    <style>
+      /* PWA install trigger: small icon button in desktop navbar; on mobile
+         it's hidden and the trigger moves into the hamburger menu instead. */
+      @media (max-width: 768px) {
+        #pwa-install-btn { display: none !important; }
+      }
+      #pwa-install-menu-item {
+        display: none;
+      }
+    </style>
     {% block head %}{% endblock %}
 </head>
 <body data-user-role="{{ session.get('user_role', '') }}">
@@ -80,6 +90,15 @@
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
         <a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">ניהול</a>
         {% endif %}
+        <a href="#" id="pwa-install-menu-item" role="button" style="min-height:40px;align-items:center;gap:8px;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;">
+                <rect x="6" y="2" width="12" height="20" rx="2.5"/>
+                <line x1="11" y1="18.5" x2="13" y2="18.5"/>
+                <path d="M12 7v6"/>
+                <path d="M9 10l3 3 3-3"/>
+            </svg>
+            <span>התקן אפליקציה</span>
+        </a>
     </div>
     <div class="month-switcher-mobile">
         {% if prev_month %}
@@ -171,16 +190,18 @@ document.getElementById('hamburger').addEventListener('click', function() {
     });
   }
 
-  // ---- Install trigger (small navbar button) ----
-  // Show the button only when install is genuinely available: either we
-  // captured beforeinstallprompt (Android / desktop Chrome / Edge) or we're
-  // on iOS Safari (which can install via Share -> Add to Home Screen).
-  // Hide when already running standalone, or when neither path is available.
+  // ---- Install trigger ----
+  // Two UI entry points, ONE handler:
+  //   - desktop navbar button (#pwa-install-btn) — hidden on mobile via CSS
+  //   - mobile hamburger menu item (#pwa-install-menu-item) — hidden on desktop
+  //     by default; shown only when install is actually available.
+  // Both call triggerInstall(). Visibility is driven by the same state.
   var installBtn = document.getElementById('pwa-install-btn');
+  var installMenuItem = document.getElementById('pwa-install-menu-item');
   var iosModal = document.getElementById('pwa-ios-modal');
   var iosClose = document.getElementById('pwa-ios-close');
   var iosOk = document.getElementById('pwa-ios-ok');
-  if (!installBtn) return;
+  if (!installBtn && !installMenuItem) return;
 
   function isIOS() {
     var ua = navigator.userAgent || '';
@@ -190,38 +211,51 @@ document.getElementById('hamburger').addEventListener('click', function() {
     return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
       || window.navigator.standalone === true;
   }
-  function showButton() {
+  function showTriggers() {
     if (isStandalone()) return;
-    installBtn.style.display = 'inline-flex';
+    if (installBtn) installBtn.style.display = 'inline-flex';
+    // The mobile menu item uses `flex` so the icon + label align. CSS media
+    // query hides the desktop button at ≤768px; the menu item is hidden on
+    // desktop by default and shown here only when install is available.
+    if (installMenuItem) installMenuItem.style.display = 'flex';
   }
-  function hideButton() {
-    installBtn.style.display = 'none';
+  function hideTriggers() {
+    if (installBtn) installBtn.style.display = 'none';
+    if (installMenuItem) installMenuItem.style.display = 'none';
   }
 
   var deferredPrompt = null;
   window.addEventListener('beforeinstallprompt', function(e) {
     e.preventDefault();
     deferredPrompt = e;
-    showButton();
+    showTriggers();
   });
 
-  // iOS never fires beforeinstallprompt — surface the button so the user can
+  // iOS never fires beforeinstallprompt — surface the triggers so the user can
   // open the Share -> Add to Home Screen instructions modal.
   if (isIOS() && !isStandalone()) {
-    showButton();
+    showTriggers();
   }
 
-  installBtn.addEventListener('click', function() {
+  function triggerInstall(ev) {
+    if (ev) ev.preventDefault();
     if (deferredPrompt) {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then(function(choice) {
         deferredPrompt = null;
-        if (choice && choice.outcome === 'accepted') hideButton();
+        if (choice && choice.outcome === 'accepted') hideTriggers();
       });
     } else if (isIOS()) {
       iosModal.style.display = 'flex';
     }
-  });
+    // Close the hamburger drawer after tapping the menu item so the modal /
+    // native prompt isn't hidden behind it.
+    var drawer = document.getElementById('mobile-nav');
+    if (drawer) drawer.classList.remove('open');
+  }
+
+  if (installBtn) installBtn.addEventListener('click', triggerInstall);
+  if (installMenuItem) installMenuItem.addEventListener('click', triggerInstall);
 
   function closeIos() { iosModal.style.display = 'none'; }
   iosClose.addEventListener('click', closeIos);
@@ -229,7 +263,7 @@ document.getElementById('hamburger').addEventListener('click', function() {
 
   window.addEventListener('appinstalled', function() {
     deferredPrompt = null;
-    hideButton();
+    hideTriggers();
   });
 })();
 </script>
