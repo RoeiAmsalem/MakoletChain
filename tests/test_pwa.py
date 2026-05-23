@@ -103,12 +103,40 @@ def test_base_html_has_install_button():
     # Old bottom banner must be gone — banner element + its dismiss button
     assert 'pwa-install-banner' not in html
     assert 'pwa-dismiss-btn' not in html
-    # Sanity: button sits inside the navbar block
+    # Sanity: button sits inside the navbar block. The navbar contains a nested
+    # <nav> for the link list, so we walk </nav> tags until depth returns to 0
+    # to find the outer .navbar's real closing tag.
     nav_start = html.find('<nav class="navbar"')
-    nav_end = html.find('</nav>', nav_start)
-    assert nav_start != -1 and nav_end != -1
+    assert nav_start != -1
+    depth = 1
+    pos = nav_start + len('<nav class="navbar"')
+    while depth > 0:
+        next_open = html.find('<nav', pos)
+        next_close = html.find('</nav>', pos)
+        assert next_close != -1
+        if next_open != -1 and next_open < next_close:
+            depth += 1
+            pos = next_open + 4
+        else:
+            depth -= 1
+            pos = next_close + 6
+    nav_end = pos
     btn_pos = html.find('id="pwa-install-btn"')
     assert nav_start < btn_pos < nav_end, 'install button must live inside .navbar'
+    # Brand lockup contiguity: nothing between <a class="navbar-brand"> and the
+    # store-name element (#branch-select or .branch-name-pill). The desktop
+    # install button must NOT sit between them.
+    brand_pos = html.find('class="navbar-brand"')
+    store_pos = min(
+        p for p in (
+            html.find('id="branch-select"'),
+            html.find('class="branch-name-pill"'),
+        ) if p != -1
+    )
+    assert brand_pos < store_pos
+    between = html[brand_pos:store_pos]
+    assert 'id="pwa-install-btn"' not in between, \
+        'install button must not sit between logo and store name'
 
 
 def test_base_html_has_mobile_install_menu_item():
