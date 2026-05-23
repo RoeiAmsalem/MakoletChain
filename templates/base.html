@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}MakoletChain{% endblock %}</title>
+    <title>{% block title %}קופה שקופה{% endblock %}</title>
+    <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
     <link rel="stylesheet" href="{{ static_v('css/style.css') }}">
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#0f172a">
@@ -28,8 +29,8 @@
 <nav class="navbar">
     <div class="navbar-top" style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
         <a href="/" class="navbar-brand" style="text-decoration:none;">
-            <img src="{{ static_v('makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
-            <span class="store-name">{{ branch_name }}</span>
+            <img src="{{ static_v('icons/icon-192.png') }}" alt="קופה שקופה" class="brand-logo">
+            <span class="brand-name">קופה שקופה</span>
         </a>
         <button id="pwa-install-btn" type="button" aria-label="התקן את האפליקציה" title="התקן את האפליקציה"
                 style="display:none;align-items:center;justify-content:center;min-width:40px;min-height:40px;width:40px;height:40px;padding:0;background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid rgba(255,255,255,0.15);border-radius:8px;cursor:pointer;touch-action:manipulation;flex-shrink:0;">
@@ -43,6 +44,8 @@
         {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
         <select id="branch-select" onchange="switchBranch(this.value)" style="background:rgba(255,255,255,0.07);color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:20px;padding:4px 12px;font-size:0.8rem;cursor:pointer;outline:none;flex-shrink:0;">
         </select>
+        {% elif branch_name %}
+        <span class="branch-name-pill">{{ branch_name }}</span>
         {% endif %}
         <button class="hamburger" id="hamburger" aria-label="תפריט">&#9776;</button>
     </div>
