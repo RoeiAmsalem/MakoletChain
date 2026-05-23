@@ -1,0 +1,79 @@
+"""Surface-level brand tests: navbar has "קופה שקופה" + ring logo, branch
+switcher element is still present in base.html, page titles use the new brand,
+favicon link is set."""
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from app import app  # noqa: E402
+
+REPO_ROOT = os.path.join(os.path.dirname(__file__), '..')
+BASE_HTML = os.path.join(REPO_ROOT, 'templates', 'base.html')
+
+BRAND_NAME = 'קופה שקופה'
+
+
+@pytest.fixture
+def client():
+    app.config['TESTING'] = True
+    with app.test_client() as c:
+        yield c
+
+
+def _read_base():
+    with open(BASE_HTML, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+def test_navbar_has_brand_name():
+    html = _read_base()
+    assert 'class="brand-name"' in html
+    assert BRAND_NAME in html
+
+
+def test_navbar_has_logo():
+    html = _read_base()
+    assert 'class="brand-logo"' in html
+    assert 'icons/icon-192.png' in html
+
+
+def test_branch_switcher_intact():
+    """The branch switcher element must still be present in base.html — it is
+    load-bearing for admin and multi-branch managers."""
+    html = _read_base()
+    assert 'id="branch-select"' in html
+    assert 'onchange="switchBranch' in html
+    assert 'loadBranchSwitcher' in html
+
+
+def test_favicon_link_present():
+    html = _read_base()
+    assert 'rel="icon"' in html
+    assert '/static/icons/icon-192.png' in html
+
+
+def test_page_title_rebranded(client):
+    """The login page renders the new brand in <title>."""
+    res = client.get('/login')
+    assert res.status_code == 200
+    body = res.data.decode('utf-8')
+    assert f'<title>התחברות - {BRAND_NAME}</title>' in body
+    assert 'MakoletChain' not in body
+
+
+def test_no_makoletchain_in_templates():
+    """Sweep all rendered templates — no leftover 'MakoletChain' brand string."""
+    tpl_dir = os.path.join(REPO_ROOT, 'templates')
+    offenders = []
+    for root, _, files in os.walk(tpl_dir):
+        for name in files:
+            if not name.endswith('.html'):
+                continue
+            path = os.path.join(root, name)
+            with open(path, 'r', encoding='utf-8') as f:
+                if 'MakoletChain' in f.read():
+                    offenders.append(path)
+    assert not offenders, f'MakoletChain still present in: {offenders}'
