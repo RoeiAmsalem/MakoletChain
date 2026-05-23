@@ -111,6 +111,28 @@ def test_base_html_has_install_button():
     assert nav_start < btn_pos < nav_end, 'install button must live inside .navbar'
 
 
+def test_base_html_has_mobile_install_menu_item():
+    """The hamburger menu must contain an install menu item — on mobile the
+    inline navbar button is hidden via CSS, so this is the install entry point.
+    Both UI entries call the same triggerInstall() handler."""
+    base = os.path.join(REPO_ROOT, 'templates', 'base.html')
+    with open(base, 'r', encoding='utf-8') as f:
+        html = f.read()
+    # Menu item exists and lives inside the mobile-nav drawer
+    assert 'id="pwa-install-menu-item"' in html
+    mobile_nav_start = html.find('class="mobile-nav"')
+    mobile_nav_end = html.find('</div>', mobile_nav_start)
+    assert mobile_nav_start != -1 and mobile_nav_end != -1
+    item_pos = html.find('id="pwa-install-menu-item"')
+    assert mobile_nav_start < item_pos < mobile_nav_end, \
+        'install menu item must live inside .mobile-nav'
+    # Desktop button hidden at ≤768px (CSS media query)
+    assert '#pwa-install-btn { display: none !important; }' in html \
+        or '#pwa-install-btn{display:none !important;}' in html.replace(' ', '')
+    # Single shared handler — not two duplicate install blocks
+    assert html.count('deferredPrompt.prompt()') == 1
+
+
 def test_ios_instructions_modal_present():
     """iOS modal markup must still be in base.html — reused by the new button."""
     base = os.path.join(REPO_ROOT, 'templates', 'base.html')
