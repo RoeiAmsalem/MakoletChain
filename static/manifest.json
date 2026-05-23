@@ -1,6 +1,6 @@
 {
-  "name": "MakoletChain",
-  "short_name": "מכולת",
+  "name": "קופה שקופה",
+  "short_name": "קופה שקופה",
   "description": "ניהול פיננסי לרשת מכולות",
   "start_url": "/?source=pwa",
   "scope": "/",
