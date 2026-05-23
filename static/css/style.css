@@ -80,8 +80,8 @@ body {
 }
 
 .brand-logo {
-    height: 44px;
-    width: 44px;
+    height: 56px;
+    width: 56px;
     object-fit: contain;
     flex-shrink: 0;
     display: block;
@@ -94,17 +94,31 @@ body {
 }
 
 .branch-name-pill {
-    background: rgba(255,255,255,0.07);
-    color: #e2e8f0;
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 0.8rem;
+    background: transparent;
+    color: var(--text-light);
+    border: none;
+    padding: 0;
+    font-size: 1.2rem;
+    font-weight: 500;
     flex-shrink: 0;
     white-space: nowrap;
-    max-width: 180px;
+    max-width: 260px;
     overflow: hidden;
     text-overflow: ellipsis;
+    letter-spacing: 0.01em;
+}
+
+#branch-select {
+    background: rgba(255,255,255,0.04) !important;
+    color: var(--text-light) !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    border-radius: 8px !important;
+    padding: 4px 10px !important;
+    font-size: 1.15rem !important;
+    font-weight: 500 !important;
+    cursor: pointer;
+    outline: none;
+    flex-shrink: 0;
 }
 
 .page-title {
@@ -558,8 +572,10 @@ body {
         gap: 0.4rem;
     }
 
-    .brand-logo { height: 36px; width: 36px; }
+    .brand-logo { height: 44px; width: 44px; }
     .navbar-brand { margin-inline-end: auto; }
+    .branch-name-pill { font-size: 1.1rem; max-width: 60vw; }
+    #branch-select { font-size: 1.05rem !important; }
 
     /* Hamburger sits at the end of the brand row; switcher wraps to its own row */
     .navbar-top > .hamburger { order: 2; }
