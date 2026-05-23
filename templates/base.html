@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}MakoletChain{% endblock %}</title>
     <link rel="stylesheet" href="{{ static_v('css/style.css') }}">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="מכולת">
+    <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
     {% block head %}{% endblock %}
 </head>
 <body data-user-role="{{ session.get('user_role', '') }}">
@@ -126,6 +132,122 @@ document.getElementById('hamburger').addEventListener('click', function() {
 
 <script src="{{ static_v('dialog.js') }}"></script>
 {% block scripts %}{% endblock %}
+
+<div id="pwa-install-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#1e293b;border-top:1px solid #334155;color:#f1f5f9;padding:12px 16px;box-shadow:0 -4px 16px rgba(0,0,0,0.4);direction:rtl;align-items:center;gap:12px;font-family:inherit;">
+  <span style="flex:1;font-size:0.9rem;line-height:1.3;">התקן את האפליקציה למסך הבית 📲</span>
+  <button id="pwa-install-btn" type="button" style="min-height:40px;padding:0 16px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:0.9rem;cursor:pointer;touch-action:manipulation;">התקן</button>
+  <button id="pwa-dismiss-btn" type="button" aria-label="סגור" style="min-width:40px;min-height:40px;background:transparent;color:#94a3b8;border:none;font-size:1.4rem;cursor:pointer;touch-action:manipulation;line-height:1;">×</button>
+</div>
+
+<div id="pwa-ios-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;padding:16px;direction:rtl;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;max-width:360px;width:100%;padding:20px;color:#f1f5f9;font-family:inherit;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h3 style="margin:0;font-size:1.05rem;color:#f1f5f9;">התקנה ל-iPhone</h3>
+      <button id="pwa-ios-close" type="button" aria-label="סגור" style="min-width:40px;min-height:40px;background:transparent;color:#94a3b8;border:none;font-size:1.4rem;cursor:pointer;touch-action:manipulation;line-height:1;">×</button>
+    </div>
+    <ol style="margin:0 1rem 0 0;padding:0;color:#cbd5e1;font-size:0.95rem;line-height:1.6;">
+      <li style="margin-bottom:8px;">
+        הקש על כפתור השיתוף
+        <svg viewBox="0 0 24 24" width="18" height="18" style="vertical-align:middle;margin:0 4px;" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><rect x="4" y="11" width="16" height="10" rx="2"/></svg>
+        בתחתית הדפדפן
+      </li>
+      <li style="margin-bottom:8px;">גלול ובחר <strong>"הוסף למסך הבית"</strong> (Add to Home Screen)</li>
+      <li>הקש <strong>"הוסף"</strong> בפינה — האייקון יופיע במסך הבית.</li>
+    </ol>
+    <button id="pwa-ios-ok" type="button" style="margin-top:16px;width:100%;min-height:44px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-weight:600;font-size:0.95rem;cursor:pointer;touch-action:manipulation;">הבנתי</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ---- Service worker registration ----
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+        .catch(function(err) { console.warn('SW registration failed:', err); });
+    });
+  }
+
+  // ---- Install banner ----
+  var banner = document.getElementById('pwa-install-banner');
+  var installBtn = document.getElementById('pwa-install-btn');
+  var dismissBtn = document.getElementById('pwa-dismiss-btn');
+  var iosModal = document.getElementById('pwa-ios-modal');
+  var iosClose = document.getElementById('pwa-ios-close');
+  var iosOk = document.getElementById('pwa-ios-ok');
+  if (!banner) return;
+
+  function isMobile() {
+    var ua = navigator.userAgent || '';
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua)
+      || (window.matchMedia && window.matchMedia('(max-width: 768px)').matches && 'ontouchstart' in window);
+  }
+  function isIOS() {
+    var ua = navigator.userAgent || '';
+    return /iPhone|iPad|iPod/i.test(ua) && !window.MSStream;
+  }
+  function isStandalone() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+      || window.navigator.standalone === true;
+  }
+  function isDismissed() {
+    try { return sessionStorage.getItem('pwa_banner_dismissed') === '1'; } catch (e) { return false; }
+  }
+  function setDismissed() {
+    try { sessionStorage.setItem('pwa_banner_dismissed', '1'); } catch (e) {}
+  }
+  function showBanner() {
+    if (!isMobile() || isStandalone() || isDismissed()) return;
+    banner.style.display = 'flex';
+  }
+  function hideBanner() {
+    banner.style.display = 'none';
+  }
+
+  var deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', function(e) {
+    e.preventDefault();
+    deferredPrompt = e;
+    showBanner();
+  });
+
+  // iOS never fires beforeinstallprompt — show banner directly so user can get instructions.
+  if (isIOS() && !isStandalone() && !isDismissed()) {
+    showBanner();
+  }
+
+  installBtn.addEventListener('click', function() {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then(function(choice) {
+        deferredPrompt = null;
+        hideBanner();
+        if (choice && choice.outcome === 'accepted') setDismissed();
+      });
+    } else if (isIOS()) {
+      iosModal.style.display = 'flex';
+    } else {
+      // Fallback — no native prompt available, just hide.
+      setDismissed();
+      hideBanner();
+    }
+  });
+
+  dismissBtn.addEventListener('click', function() {
+    setDismissed();
+    hideBanner();
+  });
+
+  function closeIos() { iosModal.style.display = 'none'; }
+  iosClose.addEventListener('click', closeIos);
+  iosOk.addEventListener('click', function() { closeIos(); setDismissed(); hideBanner(); });
+
+  window.addEventListener('appinstalled', function() {
+    setDismissed();
+    hideBanner();
+  });
+})();
+</script>
 
 <script>
 (function() {
