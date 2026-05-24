@@ -581,11 +581,11 @@ body {
     }
 
     .brand-logo { height: 40px; width: 40px; }
-    /* Auto-margin on the wordmark's inline-end (RTL: left side) absorbs
-       the leftover row space, keeping logo + wordmark glued on the right
-       and pushing the hamburger alone to the far left. */
-    .brand-wordmark { height: 24px; margin-inline-end: auto; }
-    .navbar-brand { margin-inline-end: 0; }
+    .brand-wordmark { height: 24px; }
+    /* Auto-margin on the brand anchor's inline-end (RTL: left side) absorbs
+       the leftover row space, keeping the [logo+wordmark] brand unit glued
+       on the right and pushing the hamburger alone to the far left. */
+    .navbar-brand { margin-inline-end: auto; }
     .branch-name-pill { font-size: 1.1rem; max-width: 60vw; }
     #branch-select { font-size: 1.05rem !important; }
 
