@@ -37,6 +37,11 @@ BASE = 'https://bi1.aviv-pos.co.il:8443/avivbi/v2'
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 Z_REPORT_ID = 902
 
+# Retry policy for transient Aviv failures on filters/902 (404/5xx/network).
+# Closed-day "no Z for date" is a 200 response and does NOT consume retries.
+FILTERS_MAX_ATTEMPTS = 3
+FILTERS_RETRY_BACKOFF_SEC = 2
+
 
 # ---- PDF parsing ----------------------------------------------------------
 
@@ -333,7 +338,30 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
         token, aviv_branch_id = _login(username, password)
         token = _refresh(token)
 
-        filters = fetch_902_filters(aviv_branch_id, token)
+        # Retry filters/902 on transient Aviv failures (404/5xx/network/timeout).
+        # A 200 response is treated as authoritative — closed-day "no Z for date"
+        # is the legitimate skip path and must NOT retry.
+        filters = None
+        last_err: Exception | None = None
+        for attempt in range(1, FILTERS_MAX_ATTEMPTS + 1):
+            try:
+                filters = fetch_902_filters(aviv_branch_id, token)
+                break
+            except Exception as e:
+                last_err = e
+                log.warning(
+                    'branch=%d filters/902 attempt %d/%d failed: %s',
+                    branch_id, attempt, FILTERS_MAX_ATTEMPTS, e)
+                if attempt == FILTERS_MAX_ATTEMPTS:
+                    break
+                time.sleep(FILTERS_RETRY_BACKOFF_SEC)
+                token, aviv_branch_id = _login(username, password)
+                token = _refresh(token)
+        if filters is None:
+            return {'ok': False, 'branch_id': branch_id, 'date': target_date,
+                    'error': f'filters/902 failed after {FILTERS_MAX_ATTEMPTS} '
+                             f'attempts: {str(last_err)[:160]}'}
+
         z_number = resolve_z_for_date(filters, target_date)
         if not z_number:
             return {'ok': False, 'branch_id': branch_id,

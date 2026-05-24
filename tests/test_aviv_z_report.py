@@ -221,3 +221,153 @@ def test_auth_retry_on_401(monkeypatch, staging_db, sample_pdf_bytes):
     assert result['total'] == 13721.98
     assert login_calls['n'] == 2   # first login + retry login
     assert submit_calls['n'] == 2  # first submit (401) + retry
+
+
+# ── filters/902 retry on transient Aviv failure ───────────────────────────
+
+def _good_filters():
+    return {'data': [{'value': [
+        {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]}
+
+
+def _stub_success_path(monkeypatch, sample_pdf_bytes):
+    """Stub everything downstream of fetch_902_filters so happy path runs."""
+    monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'submit_902',
+                        lambda b, z, t: 'https://example.invalid/r.pdf')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)  # don't sleep in tests
+
+
+def test_filters_902_retries_on_failure(monkeypatch, staging_db, sample_pdf_bytes):
+    """Transient filters/902 failure → agent retries → second call succeeds."""
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+
+    calls = {'n': 0}
+
+    def flaky_filters(aviv_branch_id, token):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise requests_HTTPError_404()
+        return _good_filters()
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', flaky_filters)
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is True
+    assert result['total'] == 13721.98
+    assert calls['n'] == 2  # one failure + one success
+
+
+def test_filters_902_gives_up_after_max_retries(monkeypatch, staging_db,
+                                                sample_pdf_bytes):
+    """All filters/902 attempts fail → graceful error dict, no crash."""
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+
+    calls = {'n': 0}
+
+    def always_404(aviv_branch_id, token):
+        calls['n'] += 1
+        raise requests_HTTPError_404()
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', always_404)
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is False
+    assert result['branch_id'] == 126
+    assert 'filters/902 failed' in result['error']
+    assert calls['n'] == zr.FILTERS_MAX_ATTEMPTS
+    # nothing written to z_report_902
+    assert staging_db.execute(
+        'SELECT COUNT(*) FROM z_report_902').fetchone()[0] == 0
+
+
+def test_closed_day_does_not_retry(monkeypatch, staging_db, sample_pdf_bytes):
+    """200 with no Z for target date → 'no Z for date' WITHOUT retrying."""
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+
+    calls = {'n': 0}
+
+    def filters_no_z_for_date(aviv_branch_id, token):
+        calls['n'] += 1
+        # Z list exists but not for our target date — closed day.
+        return {'data': [{'value': [
+            {'key': 2525, 'value': '2026-05-18 23:59:59'}]}]}
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', filters_no_z_for_date)
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is False
+    assert result['error'] == 'no Z for date'
+    assert calls['n'] == 1, 'closed day must not consume retries'
+
+
+def test_one_branch_failure_doesnt_block_others(monkeypatch, staging_db,
+                                                sample_pdf_bytes):
+    """Branch A fails all retries; branch B still pulls + writes its row."""
+    staging_db.execute(
+        "INSERT INTO branches (id, name, aviv_user_id, aviv_password) "
+        "VALUES (127, 'Tichon', 'tichon_user', 'tichon_pass')")
+    staging_db.commit()
+
+    monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'submit_902',
+                        lambda b, z, t: 'https://example.invalid/r.pdf')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    def filters_by_branch(aviv_branch_id, token):
+        # Branch 126 wired to fail every call; 127 wired to succeed.
+        # We can't distinguish by aviv_branch_id here (stub returns 999 for both),
+        # so use a counter on which call is which.
+        raise NotImplementedError  # replaced below
+
+    state = {'fail_next': True}  # 126 runs first; fail it. Then 127 runs; succeed.
+
+    def filters_stub(aviv_branch_id, token):
+        if state['fail_next']:
+            # Exhaust retries for branch 126 by always failing during this branch's window.
+            raise requests_HTTPError_404()
+        return _good_filters()
+
+    # Patch run_for_branch so we can flip the flag between branches.
+    real_run_for_branch = zr.run_for_branch
+    branches_seen = []
+
+    def wrapped(branch_id, target_date=None, conn=None):
+        branches_seen.append(branch_id)
+        state['fail_next'] = (branch_id == 126)
+        return real_run_for_branch(branch_id, target_date, conn=conn)
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', filters_stub)
+    monkeypatch.setattr(zr, 'run_for_branch', wrapped)
+    monkeypatch.setattr(zr, 'DB_PATH', ':memory:')  # not used; we pass conn
+
+    # run_all_branches opens its own conn from DB_PATH; bypass by calling
+    # run_for_branch directly for each branch using the in-memory db.
+    results = [
+        zr.run_for_branch(126, '2026-05-20', conn=staging_db),
+        zr.run_for_branch(127, '2026-05-20', conn=staging_db),
+    ]
+
+    assert results[0]['ok'] is False
+    assert 'filters/902 failed' in results[0]['error']
+    assert results[1]['ok'] is True
+    assert results[1]['total'] == 13721.98
+    # Only branch 127's row should be written.
+    rows = staging_db.execute(
+        'SELECT branch_id FROM z_report_902').fetchall()
+    assert [r['branch_id'] for r in rows] == [127]
+
+
+def requests_HTTPError_404():
+    """Build a realistic requests.HTTPError mimicking Aviv's 404."""
+    import requests
+    resp = requests.Response()
+    resp.status_code = 404
+    resp.url = ('https://bi1.aviv-pos.co.il:8443/avivbi/v2/'
+                'reports/filters/902?branch=3')
+    return requests.exceptions.HTTPError(
+        '404 Client Error: for url: %s' % resp.url, response=resp)
