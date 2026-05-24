@@ -48,6 +48,24 @@ def test_navbar_has_logo():
     assert 'icons/icon-192.png' in html
 
 
+def test_navbar_has_wordmark():
+    """The 'קופה שקופה' wordmark image sits between the logo and the store
+    name in the navbar brand cluster."""
+    html = _read_base()
+    assert 'class="brand-wordmark"' in html
+    assert 'icons/wordmark.png' in html
+    # Order check: logo appears before wordmark, wordmark appears before the
+    # store-name element (branch-select OR branch-name-pill).
+    logo_idx = html.find('class="brand-logo"')
+    wm_idx = html.find('class="brand-wordmark"')
+    name_idx = min(
+        html.find('id="branch-select"'),
+        html.find('class="branch-name-pill"'),
+    )
+    assert 0 < logo_idx < wm_idx < name_idx, \
+        'expected DOM order: brand-logo → brand-wordmark → store-name element'
+
+
 def test_branch_switcher_intact():
     """The branch switcher element must still be present in base.html — it is
     load-bearing for admin and multi-branch managers."""
