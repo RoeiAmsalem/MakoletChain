@@ -48,6 +48,25 @@ def test_navbar_has_logo():
     assert 'icons/icon-192.png' in html
 
 
+def test_brand_link_wraps_logo_and_wordmark():
+    """The .navbar-brand anchor must wrap BOTH the logo and the wordmark, so
+    the whole brand lockup is one tap-target to home."""
+    html = _read_base()
+    import re
+    m = re.search(
+        r'<a[^>]*href="/"[^>]*class="navbar-brand"[^>]*>(.*?)</a>',
+        html,
+        re.DOTALL,
+    )
+    assert m, 'navbar-brand anchor not found'
+    # And it must point to "/" (home) — already required by the regex above
+    inner = m.group(1)
+    assert 'class="brand-logo"' in inner, \
+        'brand-logo must live inside the navbar-brand anchor'
+    assert 'class="brand-wordmark"' in inner, \
+        'brand-wordmark must live inside the navbar-brand anchor'
+
+
 def test_navbar_has_wordmark():
     """The 'קופה שקופה' wordmark image sits between the logo and the store
     name in the navbar brand cluster."""
