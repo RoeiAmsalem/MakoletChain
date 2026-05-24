@@ -87,6 +87,14 @@ body {
     display: block;
 }
 
+.brand-wordmark {
+    height: 30px;
+    width: auto;
+    object-fit: contain;
+    flex-shrink: 0;
+    display: block;
+}
+
 .store-name {
     font-size: 1.25rem;
     font-weight: 700;
@@ -573,6 +581,7 @@ body {
     }
 
     .brand-logo { height: 40px; width: 40px; }
+    .brand-wordmark { height: 24px; }
     .navbar-brand { margin-inline-end: auto; }
     .branch-name-pill { font-size: 1.1rem; max-width: 60vw; }
     #branch-select { font-size: 1.05rem !important; }
