@@ -112,8 +112,10 @@
     }
     .chart-info:hover::after, .chart-info.open::after { display: block; }
 
-    /* Prevent horizontal scroll */
-    html, body { overflow-x: hidden; max-width: 100vw; }
+    /* Prevent horizontal scroll. Use `clip` (not `hidden`) on html so the
+       sticky navbar isn't broken by a new scroll container on the html element. */
+    html { overflow-x: clip; max-width: 100vw; }
+    body { overflow-x: clip; max-width: 100vw; }
 
     /* ── Mobile optimizations ── */
     @media (max-width: 768px) {

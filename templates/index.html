@@ -2,8 +2,10 @@
 {% block title %}מסך בית - קופה שקופה{% endblock %}
 {% block head %}
 <style>
-    /* Prevent horizontal scroll */
-    html, body { overflow-x: hidden; max-width: 100vw; }
+    /* Prevent horizontal scroll. Use `clip` (not `hidden`) on html so the
+       sticky navbar isn't broken by a new scroll container on the html element. */
+    html { overflow-x: clip; max-width: 100vw; }
+    body { overflow-x: clip; max-width: 100vw; }
 
     /* Electricity strip state styling */
     .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
