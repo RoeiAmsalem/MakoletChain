@@ -291,6 +291,20 @@ def download_pdf(file_url: str, token: str) -> bytes:
 
 # ---- DB upsert ------------------------------------------------------------
 
+def record_closed_day(conn, branch_id: int, target_date: str) -> None:
+    """Insert a sentinel row (z_number=NULL, amount=NULL) so backfill passes
+    later in the night recognize this (branch, date) as resolved-no-data and
+    don't re-probe Aviv. INSERT OR IGNORE: never overwrite a real row.
+    """
+    conn.execute('''
+        INSERT OR IGNORE INTO z_report_902
+          (branch_id, date, z_number, amount, transactions, avg_per_txn,
+           payment_breakdown, fetched_at)
+        VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, datetime('now'))
+    ''', (branch_id, target_date))
+    conn.commit()
+
+
 def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
                     parsed: dict) -> None:
     """Write to z_report_902 ONLY. Never daily_sales."""
@@ -364,6 +378,9 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
 
         z_number = resolve_z_for_date(filters, target_date)
         if not z_number:
+            # Filters call succeeded but no Z for this date → store was closed.
+            # Mark resolved so 03/04/05 backfill passes skip this branch.
+            record_closed_day(conn, branch_id, target_date)
             return {'ok': False, 'branch_id': branch_id,
                     'date': target_date, 'error': 'no Z for date'}
 
@@ -393,18 +410,46 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
             conn.close()
 
 
-def run_all_branches(target_date: str | None = None) -> list[dict]:
-    """Run every active branch sequentially. One branch's failure never aborts the loop."""
+def _branch_ids_for_date(conn, target_date: str, missing_only: bool) -> list[int]:
+    """All active branches, or only those missing a z_report_902 row for target_date.
+
+    A "row" is anything — a real Z OR a closed-day sentinel (z_number IS NULL).
+    Both count as resolved; backfill must not re-probe either.
+    """
+    all_branches = [r['id'] for r in conn.execute(
+        'SELECT id FROM branches WHERE active=1 AND aviv_user_id IS NOT NULL '
+        'ORDER BY id'
+    ).fetchall()]
+    if not missing_only:
+        return all_branches
+    done = {r['branch_id'] for r in conn.execute(
+        'SELECT branch_id FROM z_report_902 WHERE date=?',
+        (target_date,)
+    ).fetchall()}
+    return [bid for bid in all_branches if bid not in done]
+
+
+def run_all_branches(target_date: str | None = None,
+                     missing_only: bool = False,
+                     conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Run every active branch sequentially. One branch's failure never aborts the loop.
+
+    With missing_only=True, branches that already have a z_report_902 row for
+    target_date (real Z or closed-day sentinel) are skipped — used by the
+    03/04/05 IL backfill passes.
+    """
     target_date = target_date or (date.today() - timedelta(days=1)).isoformat()
     results: list[dict] = []
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
+    owns_conn = conn is None
+    if owns_conn:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            'SELECT id FROM branches WHERE active=1 AND aviv_user_id IS NOT NULL'
-        ).fetchall()
-        for row in rows:
-            bid = row['id']
+        bids = _branch_ids_for_date(conn, target_date, missing_only)
+        if missing_only:
+            log.info('backfill pass: %d branch(es) missing for %s: %s',
+                     len(bids), target_date, bids)
+        for bid in bids:
             try:
                 results.append(run_for_branch(bid, target_date, conn=conn))
             except Exception as e:
@@ -412,7 +457,8 @@ def run_all_branches(target_date: str | None = None) -> list[dict]:
                 results.append({'ok': False, 'branch_id': bid,
                                 'date': target_date, 'error': str(e)[:200]})
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
     return results
 
 
@@ -427,6 +473,9 @@ if __name__ == '__main__':
     ap.add_argument('--branch-id', type=int,
                     help='Single branch id; omit to run all active branches')
     ap.add_argument('--date', help='YYYY-MM-DD (default: yesterday)')
+    ap.add_argument('--missing-only', action='store_true',
+                    help='Only attempt branches missing a row for target_date '
+                         '(for hourly backfill passes after the primary 02:00 IL run)')
     args = ap.parse_args()
 
     if args.branch_id:
@@ -434,7 +483,7 @@ if __name__ == '__main__':
         print(out)
         sys.exit(0 if out.get('ok') else 1)
     else:
-        out = run_all_branches(args.date)
+        out = run_all_branches(args.date, missing_only=args.missing_only)
         for r in out:
             print(r)
         sys.exit(0 if all(r.get('ok') for r in out) else 1)
