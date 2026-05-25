@@ -86,8 +86,34 @@ def _check_consecutive_failures(bid):
         log.error("Failed to check consecutive failures: %s", e)
 
 
+# Switch between chain (one login + one multi-branch call) and legacy
+# per-branch loop. Flip USE_CHAIN to False to revert in one line.
+USE_CHAIN = True
+
+
 def run_aviv_all():
     """Run aviv_live for all active branches."""
+    if USE_CHAIN:
+        _run_aviv_chain()
+    else:
+        _run_aviv_per_branch()
+
+
+def _run_aviv_chain():
+    """Chain-account path: one login + one multi-branch POST."""
+    from agents.aviv_live import run_aviv_live_chain
+    log.info("Running aviv_live (chain) for all branches with aviv_branch_id")
+    try:
+        result = run_aviv_live_chain()
+        log.info("Chain result: %s", result)
+    except Exception as e:
+        log.error("aviv_live chain run failed: %s", e)
+    for bid in get_active_branches():
+        _check_consecutive_failures(bid)
+
+
+def _run_aviv_per_branch():
+    """Legacy fallback — per-branch loop. Kept intact for one-line revert."""
     from agents.aviv_live import run_aviv_live
     branches = get_active_branches()
     for bid in branches:
