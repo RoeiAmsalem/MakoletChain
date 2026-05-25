@@ -145,11 +145,13 @@ def main() -> int:
                 f"{d_amt:>+10,.2f}  {gap_min:>8.1f}  {v}"
             )
 
-            if "MATCH" in v:
-                n_match += 1
-            elif "REAL MISMATCH" in v:
+            # Order matters: check REAL MISMATCH first because the substring
+            # "MATCH" is also inside "MISMATCH".
+            if "REAL MISMATCH" in v:
                 n_real += 1
                 max_real_delta = max(max_real_delta, abs(d_amt))
+            elif "MATCH" in v:
+                n_match += 1
             elif "skew" in v:
                 n_skew += 1
             else:
