@@ -42,6 +42,15 @@ Z_REPORT_ID = 902
 FILTERS_MAX_ATTEMPTS = 3
 FILTERS_RETRY_BACKOFF_SEC = 2
 
+# Chain-account auth: when AVIV_Z_USE_CHAIN=1 in env, run_all_branches logs in
+# ONCE with chain creds (AVIV_CHAIN_USER / AVIV_CHAIN_PASS) and reuses the
+# token for every branch. The URL branch param comes from branches.aviv_branch_id.
+# Default OFF so existing per-branch behavior is preserved unless explicitly flipped.
+USE_CHAIN_AUTH = os.environ.get('AVIV_Z_USE_CHAIN', '').strip().lower() in (
+    '1', 'true', 'yes', 'on')
+CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
+CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
+
 
 # ---- PDF parsing ----------------------------------------------------------
 
@@ -144,6 +153,24 @@ def _login(username: str, password: str) -> tuple[str, int | None]:
     branches = data.get('branches', [])
     aviv_branch_id = branches[0]['id'] if branches else None
     return token, aviv_branch_id
+
+
+def _login_chain_account() -> str:
+    """Login with chain-owner creds from env. Returns token. Never logs the password."""
+    user = os.environ.get(CHAIN_USER_ENV)
+    pw = os.environ.get(CHAIN_PASS_ENV)
+    if not user or not pw:
+        raise RuntimeError(
+            f'{CHAIN_USER_ENV} / {CHAIN_PASS_ENV} not set in env')
+    r = requests.post(f'{BASE}/account/login',
+                      json={'user': user, 'password': pw},
+                      timeout=15, verify=False)
+    r.raise_for_status()
+    data = r.json() or {}
+    token = data.get('token') or data.get('value')
+    if not token:
+        raise Exception('chain login response missing token')
+    return token
 
 
 def _refresh(token: str) -> str:
@@ -331,8 +358,13 @@ def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
 # ---- Per-branch runner ----------------------------------------------------
 
 def run_for_branch(branch_id: int, target_date: str | None = None,
-                   conn: sqlite3.Connection | None = None) -> dict:
-    """Fetch + parse + upsert one branch's Z for target_date (default yesterday)."""
+                   conn: sqlite3.Connection | None = None,
+                   chain_token: str | None = None) -> dict:
+    """Fetch + parse + upsert one branch's Z for target_date (default yesterday).
+
+    If chain_token is provided, skip per-branch login and read aviv_branch_id
+    from the branches table (chain-account mode).
+    """
     target_date = target_date or (date.today() - timedelta(days=1)).isoformat()
 
     owns_conn = conn is None
@@ -343,14 +375,32 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
     try:
         branch = conn.execute('SELECT * FROM branches WHERE id=?',
                               (branch_id,)).fetchone()
-        if not branch or not branch['aviv_user_id']:
-            return {'ok': False, 'branch_id': branch_id, 'error': 'no aviv creds'}
+        if not branch:
+            return {'ok': False, 'branch_id': branch_id, 'error': 'branch not found'}
 
         username = branch['aviv_user_id']
-        password = branch['aviv_password'] or username
+        password = (branch['aviv_password'] or username) if username else None
 
-        token, aviv_branch_id = _login(username, password)
-        token = _refresh(token)
+        if chain_token is not None:
+            # Chain-account mode: token already issued; URL branch param from DB.
+            aviv_branch_id = branch['aviv_branch_id']
+            if aviv_branch_id is None:
+                return {'ok': False, 'branch_id': branch_id,
+                        'error': 'chain mode but branches.aviv_branch_id is NULL'}
+            token = chain_token
+
+            def _reauth():
+                return _login_chain_account(), aviv_branch_id
+        else:
+            # Per-branch mode (legacy / fallback).
+            if not username:
+                return {'ok': False, 'branch_id': branch_id, 'error': 'no aviv creds'}
+            token, aviv_branch_id = _login(username, password)
+            token = _refresh(token)
+
+            def _reauth():
+                tok, _ = _login(username, password)
+                return _refresh(tok), aviv_branch_id
 
         # Retry filters/902 on transient Aviv failures (404/5xx/network/timeout).
         # A 200 response is treated as authoritative — closed-day "no Z for date"
@@ -369,8 +419,7 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
                 if attempt == FILTERS_MAX_ATTEMPTS:
                     break
                 time.sleep(FILTERS_RETRY_BACKOFF_SEC)
-                token, aviv_branch_id = _login(username, password)
-                token = _refresh(token)
+                token, aviv_branch_id = _reauth()
         if filters is None:
             return {'ok': False, 'branch_id': branch_id, 'date': target_date,
                     'error': f'filters/902 failed after {FILTERS_MAX_ATTEMPTS} '
@@ -389,8 +438,7 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
             pdf_bytes = download_pdf(file_url, token)
         except AuthExpired:
             log.info('branch=%d 401 — re-login + retry', branch_id)
-            token, _ = _login(username, password)
-            token = _refresh(token)
+            token, aviv_branch_id = _reauth()
             file_url = submit_902(aviv_branch_id, z_number, token)
             pdf_bytes = download_pdf(file_url, token)
 
@@ -410,15 +458,20 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
             conn.close()
 
 
-def _branch_ids_for_date(conn, target_date: str, missing_only: bool) -> list[int]:
+def _branch_ids_for_date(conn, target_date: str, missing_only: bool,
+                         chain_mode: bool = False) -> list[int]:
     """All active branches, or only those missing a z_report_902 row for target_date.
 
     A "row" is anything — a real Z OR a closed-day sentinel (z_number IS NULL).
     Both count as resolved; backfill must not re-probe either.
+
+    chain_mode=True requires branches.aviv_branch_id NOT NULL; per-branch mode
+    requires aviv_user_id NOT NULL.
     """
+    where = ('aviv_branch_id IS NOT NULL' if chain_mode
+             else 'aviv_user_id IS NOT NULL')
     all_branches = [r['id'] for r in conn.execute(
-        'SELECT id FROM branches WHERE active=1 AND aviv_user_id IS NOT NULL '
-        'ORDER BY id'
+        f'SELECT id FROM branches WHERE active=1 AND {where} ORDER BY id'
     ).fetchall()]
     if not missing_only:
         return all_branches
@@ -445,13 +498,34 @@ def run_all_branches(target_date: str | None = None,
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.row_factory = sqlite3.Row
     try:
-        bids = _branch_ids_for_date(conn, target_date, missing_only)
+        bids = _branch_ids_for_date(conn, target_date, missing_only,
+                                    chain_mode=USE_CHAIN_AUTH)
         if missing_only:
             log.info('backfill pass: %d branch(es) missing for %s: %s',
                      len(bids), target_date, bids)
+
+        # In chain mode: one login + one refresh, reuse the token for all branches.
+        chain_token: str | None = None
+        if USE_CHAIN_AUTH:
+            if not bids:
+                log.info('chain mode: no branches with aviv_branch_id set')
+            else:
+                try:
+                    chain_token = _login_chain_account()
+                    chain_token = _refresh(chain_token)
+                    log.info('chain auth: 1 login for %d branch(es): %s',
+                             len(bids), bids)
+                except Exception as e:
+                    log.error('chain login failed; aborting run: %s', e)
+                    return [{'ok': False, 'branch_id': bid,
+                             'date': target_date,
+                             'error': f'chain login failed: {str(e)[:160]}'}
+                            for bid in bids]
+
         for bid in bids:
             try:
-                results.append(run_for_branch(bid, target_date, conn=conn))
+                results.append(run_for_branch(bid, target_date, conn=conn,
+                                              chain_token=chain_token))
             except Exception as e:
                 log.exception('aviv_z_report failed for branch %d', bid)
                 results.append({'ok': False, 'branch_id': bid,

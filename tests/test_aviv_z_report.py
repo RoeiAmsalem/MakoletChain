@@ -456,9 +456,9 @@ def _spy_run_for_branch(monkeypatch):
     """Wrap zr.run_for_branch with a list that records which branch ids it sees."""
     seen: list[int] = []
     real = zr.run_for_branch
-    def spy(bid, td=None, conn=None):
+    def spy(bid, td=None, conn=None, **kw):
         seen.append(bid)
-        return real(bid, td, conn=conn)
+        return real(bid, td, conn=conn, **kw)
     monkeypatch.setattr(zr, 'run_for_branch', spy)
     return seen
 
@@ -497,6 +497,128 @@ def test_backfill_skips_closed_day_branch(monkeypatch, sample_pdf_bytes):
 
     assert 126 not in seen, 'closed-day branch must not be re-probed in backfill'
     assert seen == [127]
+
+
+def test_902_chain_auth_uses_chain_token_and_db_aviv_branch_id(monkeypatch, staging_db, sample_pdf_bytes):
+    """Chain mode: skips per-branch login, uses chain_token + branches.aviv_branch_id."""
+    # Wire 126 with aviv_branch_id=3 in the test DB.
+    staging_db.execute("ALTER TABLE branches ADD COLUMN aviv_branch_id INTEGER")
+    staging_db.execute("UPDATE branches SET aviv_branch_id=3 WHERE id=126")
+    staging_db.commit()
+
+    # _login must NEVER be called in chain mode.
+    def boom_login(*a, **kw):
+        raise AssertionError('per-branch _login must not be called in chain mode')
+    monkeypatch.setattr(zr, '_login', boom_login)
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+
+    seen_branch_param: list = []
+    def fake_filters(aviv_branch_id, token):
+        seen_branch_param.append((aviv_branch_id, token))
+        return {'data': [{'value': [
+            {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]}
+    monkeypatch.setattr(zr, 'fetch_902_filters', fake_filters)
+    monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'https://example.invalid/r.pdf')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db,
+                               chain_token='CHAIN_TOK')
+    assert result['ok'] is True
+    assert result['total'] == 13721.98
+    # URL branch param must be 3 (from DB), not 999 (login response shape).
+    assert seen_branch_param == [(3, 'CHAIN_TOK')], \
+        f'fetch_902_filters must be called with (3, CHAIN_TOK), got {seen_branch_param}'
+
+
+def test_902_chain_mode_one_login_for_all_branches(monkeypatch, sample_pdf_bytes):
+    """USE_CHAIN_AUTH on: run_all_branches does ONE chain login, not per-branch."""
+    conn = _multi_branch_db()
+    # Both branches get aviv_branch_id.
+    conn.execute("ALTER TABLE branches ADD COLUMN aviv_branch_id INTEGER")
+    conn.execute("UPDATE branches SET aviv_branch_id=3 WHERE id=126")
+    conn.execute("UPDATE branches SET aviv_branch_id=8 WHERE id=127")
+    conn.commit()
+
+    monkeypatch.setattr(zr, 'USE_CHAIN_AUTH', True)
+
+    chain_logins = {'n': 0}
+    def fake_chain_login():
+        chain_logins['n'] += 1
+        return f'CHAIN_TOK_{chain_logins["n"]}'
+    monkeypatch.setattr(zr, '_login_chain_account', fake_chain_login)
+
+    def boom_login(*a, **kw):
+        raise AssertionError('per-branch _login must not be called in chain mode')
+    monkeypatch.setattr(zr, '_login', boom_login)
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+
+    aviv_ids_seen: list[int] = []
+    tokens_seen: list[str] = []
+    def fake_filters(aviv_branch_id, token):
+        aviv_ids_seen.append(aviv_branch_id)
+        tokens_seen.append(token)
+        return {'data': [{'value': [
+            {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]}
+    monkeypatch.setattr(zr, 'fetch_902_filters', fake_filters)
+    monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'https://example.invalid/r.pdf')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    out = zr.run_all_branches('2026-05-20', conn=conn)
+
+    assert chain_logins['n'] == 1, 'exactly 1 chain login expected'
+    assert sorted(aviv_ids_seen) == [3, 8], \
+        f'must call filters with both aviv_branch_ids, got {aviv_ids_seen}'
+    # Same token reused for both branches.
+    assert tokens_seen == ['CHAIN_TOK_1', 'CHAIN_TOK_1']
+    assert len(out) == 2
+    assert all(r['ok'] for r in out)
+
+
+def test_902_chain_skips_branches_without_aviv_branch_id(monkeypatch, sample_pdf_bytes):
+    """Chain mode: branches without aviv_branch_id are filtered out at SELECT time."""
+    conn = _multi_branch_db()
+    conn.execute("ALTER TABLE branches ADD COLUMN aviv_branch_id INTEGER")
+    conn.execute("UPDATE branches SET aviv_branch_id=3 WHERE id=126")
+    # 127 has aviv_branch_id NULL — should be skipped in chain mode.
+    conn.commit()
+
+    monkeypatch.setattr(zr, 'USE_CHAIN_AUTH', True)
+    monkeypatch.setattr(zr, '_login_chain_account', lambda: 'CHAIN')
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+    monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'u')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    seen = _spy_run_for_branch(monkeypatch)
+    zr.run_all_branches('2026-05-20', conn=conn)
+    assert seen == [126]
+
+
+def test_902_chain_login_failure_records_error_per_branch(monkeypatch):
+    """If the single chain login fails, every branch gets a graceful error dict."""
+    conn = _multi_branch_db()
+    conn.execute("ALTER TABLE branches ADD COLUMN aviv_branch_id INTEGER")
+    conn.execute("UPDATE branches SET aviv_branch_id=3 WHERE id=126")
+    conn.execute("UPDATE branches SET aviv_branch_id=8 WHERE id=127")
+    conn.commit()
+
+    monkeypatch.setattr(zr, 'USE_CHAIN_AUTH', True)
+    def boom():
+        raise Exception('chain login refused')
+    monkeypatch.setattr(zr, '_login_chain_account', boom)
+    # If we reach branch processing, this would raise — must not be called.
+    def must_not(*a, **kw):
+        raise AssertionError('branches must not be processed after chain login failure')
+    monkeypatch.setattr(zr, 'fetch_902_filters', must_not)
+
+    out = zr.run_all_branches('2026-05-20', conn=conn)
+    assert len(out) == 2
+    for r in out:
+        assert r['ok'] is False
+        assert 'chain login failed' in r['error']
 
 
 def test_primary_run_pulls_all_branches(monkeypatch, sample_pdf_bytes):
