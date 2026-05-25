@@ -51,6 +51,12 @@ USE_CHAIN_AUTH = os.environ.get('AVIV_Z_USE_CHAIN', '').strip().lower() in (
 CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
 CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
 
+# Mirror successful 902 pulls into daily_sales so the dashboard's existing
+# Z source picks them up. INSERT OR IGNORE — never overwrites a Gmail-Z row
+# or a previously-mirrored row. Closed-day sentinels do NOT mirror.
+MIRROR_TO_DAILY_SALES = os.environ.get('AVIV_Z_TO_DAILY_SALES', '').strip().lower() in (
+    '1', 'true', 'yes', 'on')
+
 
 # ---- PDF parsing ----------------------------------------------------------
 
@@ -332,6 +338,23 @@ def record_closed_day(conn, branch_id: int, target_date: str) -> None:
     conn.commit()
 
 
+def mirror_to_daily_sales(conn, branch_id: int, target_date: str,
+                          amount: float, transactions: int | None) -> bool:
+    """Bridge: surface a successful 902 pull on the dashboard via daily_sales.
+
+    Uses INSERT OR IGNORE so Gmail-Z (or any earlier writer) is never
+    overwritten. Returns True if a row was actually inserted.
+    """
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO daily_sales "
+        "(branch_id, date, amount, transactions, source) "
+        "VALUES (?, ?, ?, ?, 'z_report')",
+        (branch_id, target_date, amount, transactions or 0),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
                     parsed: dict) -> None:
     """Write to z_report_902 ONLY. Never daily_sales."""
@@ -451,6 +474,14 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
         log.info('branch=%d date=%s z=%d total=%.2f txns=%s',
                  branch_id, target_date, z_number,
                  parsed['total'], parsed['transactions'])
+
+        if MIRROR_TO_DAILY_SALES:
+            inserted = mirror_to_daily_sales(
+                conn, branch_id, target_date,
+                parsed['total'], parsed.get('transactions'))
+            log.info('daily_sales mirror branch=%d date=%s inserted=%s',
+                     branch_id, target_date, inserted)
+
         return {'ok': True, 'branch_id': branch_id, 'date': target_date,
                 'z_number': z_number, **parsed}
     finally:
