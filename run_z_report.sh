@@ -24,7 +24,7 @@ set +a
 
 {
   echo ""
-  echo "=== $(date -Iseconds) aviv_z_report run ==="
-  python3 -m agents.aviv_z_report 2>&1
+  echo "=== $(date -Iseconds) aviv_z_report run args=[$*] ==="
+  python3 -m agents.aviv_z_report "$@" 2>&1
   echo "=== exit=$? ==="
 } >> "$LOG_FILE"

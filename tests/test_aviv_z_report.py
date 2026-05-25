@@ -371,3 +371,145 @@ def requests_HTTPError_404():
                 'reports/filters/902?branch=3')
     return requests.exceptions.HTTPError(
         '404 Client Error: for url: %s' % resp.url, response=resp)
+
+
+# ── backfill mode (missing-only) ──────────────────────────────────────────
+
+def _multi_branch_db():
+    """Two active branches (126 + 127) with the migration-010 schema."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER DEFAULT 1,
+            aviv_user_id TEXT, aviv_password TEXT
+        );
+        CREATE TABLE z_report_902 (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL,
+            z_number INTEGER, amount REAL, transactions INTEGER,
+            avg_per_txn REAL, payment_breakdown TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(branch_id, date)
+        );
+    ''')
+    conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password) "
+                 "VALUES (126, 'Einstein', 'e_u', 'e_p')")
+    conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password) "
+                 "VALUES (127, 'Tichon', 't_u', 't_p')")
+    conn.commit()
+    return conn
+
+
+def test_branch_ids_for_date_full_run():
+    """Full run lists every active branch with aviv creds."""
+    conn = _multi_branch_db()
+    assert zr._branch_ids_for_date(conn, '2026-05-24', missing_only=False) == [126, 127]
+
+
+def test_branch_ids_for_date_missing_only():
+    """missing_only filters out branches that already have ANY row for the date,
+    including closed-day sentinels (z_number IS NULL)."""
+    conn = _multi_branch_db()
+    # 126 has a real row; 127 has a closed-day sentinel — both must be skipped.
+    conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
+                 "VALUES (126, '2026-05-24', 1234, 10000.00)")
+    zr.record_closed_day(conn, 127, '2026-05-24')
+    assert zr._branch_ids_for_date(conn, '2026-05-24', missing_only=True) == []
+    # Different date → both still missing
+    assert zr._branch_ids_for_date(conn, '2026-05-25', missing_only=True) == [126, 127]
+
+
+def test_record_closed_day_does_not_overwrite_real_row():
+    """If a real Z already exists, INSERT OR IGNORE must not blank it out."""
+    conn = _multi_branch_db()
+    conn.execute(
+        "INSERT INTO z_report_902 (branch_id, date, z_number, amount, transactions) "
+        "VALUES (126, '2026-05-24', 1234, 10000.00, 200)")
+    zr.record_closed_day(conn, 126, '2026-05-24')  # must be a no-op
+    row = conn.execute(
+        "SELECT z_number, amount FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-24'").fetchone()
+    assert row['z_number'] == 1234
+    assert row['amount'] == 10000.00
+
+
+def test_closed_day_writes_sentinel_row(monkeypatch, sample_pdf_bytes):
+    """run_for_branch's closed-day path writes a sentinel so later passes skip."""
+    conn = _multi_branch_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    # Filters returns 200 but no Z matching the target date → closed-day.
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: {'data': [{'value': [
+                            {'key': 2520, 'value': '2026-05-15 23:59:59'}]}]})
+    result = zr.run_for_branch(126, '2026-05-24', conn=conn)
+    assert result['ok'] is False
+    assert result['error'] == 'no Z for date'
+    row = conn.execute(
+        "SELECT z_number, amount FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-24'").fetchone()
+    assert row is not None
+    assert row['z_number'] is None
+    assert row['amount'] is None
+
+
+def _spy_run_for_branch(monkeypatch):
+    """Wrap zr.run_for_branch with a list that records which branch ids it sees."""
+    seen: list[int] = []
+    real = zr.run_for_branch
+    def spy(bid, td=None, conn=None):
+        seen.append(bid)
+        return real(bid, td, conn=conn)
+    monkeypatch.setattr(zr, 'run_for_branch', spy)
+    return seen
+
+
+def test_backfill_only_pulls_missing(monkeypatch, sample_pdf_bytes):
+    """run_all_branches(missing_only=True) attempts ONLY branches with no row."""
+    conn = _multi_branch_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    # 127 already has a row for the date → skip it.
+    conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
+                 "VALUES (127, '2026-05-20', 1318, 12401.86)")
+    conn.commit()
+
+    seen = _spy_run_for_branch(monkeypatch)
+    out = zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
+
+    assert seen == [126], f'backfill must skip 127 (already has row), got {seen}'
+    assert len(out) == 1
+    assert out[0]['ok'] is True
+    assert out[0]['branch_id'] == 126
+
+
+def test_backfill_skips_closed_day_branch(monkeypatch, sample_pdf_bytes):
+    """A branch marked closed-day on an earlier pass is skipped on later passes."""
+    conn = _multi_branch_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    # Simulate 02:00 pass having recorded 126 as closed-day for 2026-05-20.
+    zr.record_closed_day(conn, 126, '2026-05-20')
+
+    seen = _spy_run_for_branch(monkeypatch)
+    zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
+
+    assert 126 not in seen, 'closed-day branch must not be re-probed in backfill'
+    assert seen == [127]
+
+
+def test_primary_run_pulls_all_branches(monkeypatch, sample_pdf_bytes):
+    """02:00 full run attempts every active branch regardless of state."""
+    conn = _multi_branch_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    # 127 already has a row — full run still attempts it.
+    conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
+                 "VALUES (127, '2026-05-20', 1318, 12401.86)")
+    conn.commit()
+
+    seen = _spy_run_for_branch(monkeypatch)
+    zr.run_all_branches('2026-05-20', missing_only=False, conn=conn)
+    assert sorted(seen) == [126, 127]
