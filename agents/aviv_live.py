@@ -641,7 +641,224 @@ def scrape_hours_midday(branch_id: int) -> dict:
         return {'success': False, 'error': str(e)}
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# CHAIN-ACCOUNT MULTI-BRANCH PATH (staging — opt-in via run_aviv_live_chain)
+#
+# Prod still uses the per-branch run_aviv_live(bid) above. The chain path is
+# separate: one login under a chain owner account + one POST returning all
+# branches' live status, then per-branch fan-out for storage.
+# ─────────────────────────────────────────────────────────────────────────
+
+CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
+CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
+
+
+def _login_chain_account() -> str:
+    """Login with chain-owner creds from env. Returns token. Never logs the password."""
+    user = os.environ.get(CHAIN_USER_ENV)
+    pw = os.environ.get(CHAIN_PASS_ENV)
+    if not user or not pw:
+        raise RuntimeError(
+            f'{CHAIN_USER_ENV} / {CHAIN_PASS_ENV} not set in env')
+    r = requests.post(
+        f'{API_BASE}/account/login',
+        json={'user': user, 'password': pw},
+        headers={'Content-Type': 'application/json'},
+        timeout=API_TIMEOUT, verify=False,
+    )
+    if r.status_code == 401:
+        raise Exception('401 Aviv chain login failed — credentials may have changed')
+    r.raise_for_status()
+    token = (r.json() or {}).get('value') or (r.json() or {}).get('token')
+    if not token:
+        raise Exception('chain login response missing token')
+    return token
+
+
+def _fetch_multi_status(token: str, aviv_branch_ids: list[int]) -> list[dict]:
+    """POST one multi-branch status call. Returns the raw list of rows."""
+    r = requests.post(
+        f'{API_PLAIN}/raw/status/plain',
+        json={'branches': aviv_branch_ids},
+        headers={'Content-Type': 'application/json', 'Authtoken': token},
+        timeout=API_TIMEOUT, verify=False,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, list):
+        raise Exception(f'status/plain returned non-list: {type(data).__name__}')
+    return data
+
+
+def _status_row_to_data(row: dict) -> dict:
+    """Translate one /raw/status/plain row into the dict shape the storage path expects.
+    Same fields as _scrape_api's return — single source of truth for downstream writes.
+    """
+    return {
+        'date': date.today().isoformat(),
+        'amount': float(row.get('dealTotal') or 0),
+        'transactions': int(row.get('dealCount') or 0),
+        'last_updated': _fmt_last_updated(row.get('tmUpdate') or ''),
+        'fetched_at': datetime.now(IL_TZ).isoformat(),
+        'monthly_hours': float(row.get('totalEmployeeHours') or 0),
+        'shift_hours': float(row.get('currentEmployeeHours') or 0),
+        'cancellation_total': float(row.get('cancellationTotal') or 0),
+        'discount_total': float(row.get('discountTotal') or 0),
+        'running_total': float(row.get('runningDealTotal') or 0),
+        'running_count': int(row.get('runningDealCount') or 0),
+    }
+
+
+def _persist_chain_branch(conn, branch_id: int, data: dict, log: logging.Logger) -> None:
+    """Write live_sales + update branches.hours_this_month for one branch.
+
+    Same SQL shape as run_aviv_live's storage block — kept here so the chain
+    path's writes are byte-identical to the legacy per-branch path. Does NOT
+    write agent_runs; the chain caller handles that around this helper.
+    """
+    _save_hourly_snapshot(conn, branch_id, data, log)
+    conn.execute(
+        'INSERT OR REPLACE INTO live_sales '
+        '(branch_id, date, amount, transactions, last_updated, fetched_at, '
+        ' cancellation_total, discount_total, running_total, running_count) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (branch_id, data['date'], data['amount'], data['transactions'],
+         data['last_updated'], data['fetched_at'],
+         data.get('cancellation_total', 0), data.get('discount_total', 0),
+         data.get('running_total', 0), data.get('running_count', 0)),
+    )
+    if data.get('monthly_hours', 0) > 0:
+        conn.execute(
+            'UPDATE branches SET hours_this_month=?, hours_updated_at=? WHERE id=?',
+            (data['monthly_hours'], datetime.now(IL_TZ).isoformat(), branch_id),
+        )
+
+
+def run_aviv_live_chain(force: bool = False,
+                       conn: sqlite3.Connection | None = None) -> dict:
+    """ONE login + ONE multi-branch POST for every active branch with aviv_branch_id.
+
+    Mapping: response row['branch'] == branches.aviv_branch_id.
+    Per-branch failures (missing in response, persist error) alert that branch.
+    Total REST failure: one alert, no Playwright fallback (avoids 20-Chromium storm).
+    """
+    log = logging.getLogger('aviv_live_chain')
+    if not log.handlers:
+        log_dir = Path(__file__).parent.parent / 'logs'
+        log_dir.mkdir(exist_ok=True)
+        fh = logging.FileHandler(log_dir / 'aviv_live_chain.log', encoding='utf-8')
+        fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        log.addHandler(fh)
+        log.addHandler(logging.StreamHandler())
+        log.setLevel(logging.INFO)
+
+    if not force and not _is_store_hours():
+        log.info('outside store hours, skipping')
+        return {'success': True, 'skipped': 'outside_hours'}
+
+    owns_conn = conn is None
+    if owns_conn:
+        conn = _get_db()
+
+    try:
+        rows = conn.execute(
+            'SELECT id, name, aviv_branch_id FROM branches '
+            'WHERE active=1 AND aviv_branch_id IS NOT NULL ORDER BY id'
+        ).fetchall()
+        if not rows:
+            log.info('no branches with aviv_branch_id set; nothing to do')
+            return {'success': True, 'branches': 0}
+
+        # local branch_id ↔ aviv_branch_id maps
+        by_local = {r['id']: dict(r) for r in rows}
+        by_aviv = {r['aviv_branch_id']: dict(r) for r in rows}
+        aviv_ids = sorted(by_aviv.keys())
+        log.info('chain pull for %d branch(es): aviv_ids=%s', len(aviv_ids), aviv_ids)
+
+        # ── single login + single multi-branch POST ──────────────────────
+        try:
+            token = _login_chain_account()
+            response = _fetch_multi_status(token, aviv_ids)
+        except Exception as e:
+            log.error('chain REST call failed (no Playwright fallback): %s', e)
+            notify('❌ Aviv Live (chain)',
+                   f'Chain status call failed; this tick skipped. {_friendly_error(e)}')
+            return {'success': False, 'error': str(e)[:200]}
+
+        # ── per-branch fan-out ───────────────────────────────────────────
+        by_aviv_response = {row.get('branch'): row for row in response
+                            if isinstance(row, dict) and row.get('branch') is not None}
+        results: list[dict] = []
+        for aviv_id in aviv_ids:
+            branch = by_aviv[aviv_id]
+            bid = branch['id']
+            name = branch.get('name') or f'Branch {bid}'
+            run_cur = conn.execute(
+                "INSERT INTO agent_runs (branch_id, agent, started_at, status) "
+                "VALUES (?, 'aviv_live', datetime('now'), 'running')",
+                (bid,))
+            run_id = run_cur.lastrowid
+
+            raw = by_aviv_response.get(aviv_id)
+            if raw is None:
+                msg = f'branch {bid} (aviv_id={aviv_id}) missing from chain response'
+                log.warning(msg)
+                conn.execute(
+                    "UPDATE agent_runs SET finished_at=datetime('now'), "
+                    "status='error', message=? WHERE id=?",
+                    (msg[:500], run_id))
+                conn.commit()
+                notify(f'❌ Aviv Live — {name}',
+                       'Branch missing from chain status response.')
+                results.append({'branch_id': bid, 'ok': False, 'reason': 'missing'})
+                continue
+
+            try:
+                data = _status_row_to_data(raw)
+                _persist_chain_branch(conn, bid, data, log)
+                conn.execute(
+                    "UPDATE agent_runs SET finished_at=datetime('now'), "
+                    "status='success', amount=?, message=? WHERE id=?",
+                    (data['amount'],
+                     f"₪{data['amount']:,.0f} ({data['transactions']} tx)",
+                     run_id))
+                conn.commit()
+                log.info('branch=%d (aviv=%d) ₪%.2f tx=%d',
+                         bid, aviv_id, data['amount'], data['transactions'])
+                results.append({'branch_id': bid, 'ok': True,
+                                'amount': data['amount'],
+                                'transactions': data['transactions']})
+            except Exception as e:
+                log.exception('persist failed for branch %d', bid)
+                conn.execute(
+                    "UPDATE agent_runs SET finished_at=datetime('now'), "
+                    "status='error', message=? WHERE id=?",
+                    (str(e)[:500], run_id))
+                conn.commit()
+                notify(f'❌ Aviv Live — {name}', _friendly_error(e))
+                results.append({'branch_id': bid, 'ok': False, 'error': str(e)[:200]})
+
+        return {'success': True,
+                'branches': len(results),
+                'ok': sum(1 for r in results if r['ok']),
+                'failed': sum(1 for r in results if not r['ok']),
+                'results': results}
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 if __name__ == '__main__':
-    import sys
-    bid = int(sys.argv[1]) if len(sys.argv) > 1 else 126
-    print(run_aviv_live(bid))
+    import argparse
+    ap = argparse.ArgumentParser(description='Aviv live scraper')
+    ap.add_argument('--chain', action='store_true',
+                    help='Run the chain-account multi-branch path (staging)')
+    ap.add_argument('--force', action='store_true',
+                    help='Bypass the store-hours silent-skip guard')
+    ap.add_argument('branch_id', nargs='?', type=int, default=None,
+                    help='Per-branch legacy path: local branch id (default 126)')
+    args = ap.parse_args()
+    if args.chain:
+        print(run_aviv_live_chain(force=args.force))
+    else:
+        print(run_aviv_live(args.branch_id or 126, force=args.force))
