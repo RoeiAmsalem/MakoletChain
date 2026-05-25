@@ -36,6 +36,15 @@ DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db'
 REPORTS_BASE = f'{BASE}/reports'
 EMPLOYER_REPORT_ID = 301
 
+# Chain-account auth: AVIV_EMP_USE_CHAIN=1 → run_all_branches does ONE chain
+# login (AVIV_CHAIN_USER / AVIV_CHAIN_PASS) and reuses the token for every
+# branch. The per-branch URL param comes from branches.aviv_branch_id. Default
+# off so the legacy per-branch path is preserved unless explicitly flipped.
+USE_CHAIN_AUTH = os.environ.get('AVIV_EMP_USE_CHAIN', '').strip().lower() in (
+    '1', 'true', 'yes', 'on')
+CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
+CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
+
 SUBTOTAL_PREFIX = "סה''כ שורות"
 NO_CLOCKOUT = 'אין יציאה'
 
@@ -92,6 +101,23 @@ def _login(username, password):
     branches = data.get('branches', [])
     aviv_branch_id = branches[0]['id'] if branches else None
     return token, aviv_branch_id
+
+
+def _login_chain_account() -> str:
+    """Login with chain-owner creds from env. Returns token. Never logs the password."""
+    user = os.environ.get(CHAIN_USER_ENV)
+    pw = os.environ.get(CHAIN_PASS_ENV)
+    if not user or not pw:
+        raise RuntimeError(f'{CHAIN_USER_ENV} / {CHAIN_PASS_ENV} not set in env')
+    r = requests.post(f'{BASE}/account/login',
+                      json={'user': user, 'password': pw},
+                      timeout=15, verify=False)
+    r.raise_for_status()
+    data = r.json() or {}
+    token = data.get('token') or data.get('value')
+    if not token:
+        raise Exception('chain login response missing token')
+    return token
 
 
 def _refresh(token):
@@ -385,12 +411,16 @@ def _month_window(today: date, *, current: bool):
 
 
 def run_for_branch(branch_id: int, include_previous_month: bool = False,
-                   today: date | None = None) -> dict:
+                   today: date | None = None,
+                   chain_token: str | None = None) -> dict:
     """Main entry point per branch per scheduled run.
 
     Always pulls current-month-to-date. When include_previous_month=True,
     additionally re-pulls the entire previous month (used for 23:30 + Sat runs
     so late corrections to clock-outs are captured).
+
+    If chain_token is provided, skip per-branch login and read aviv_branch_id
+    from the branches table (chain-account mode).
     """
     today = today or date.today()
     t0 = time.time()
@@ -408,8 +438,8 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
         conn.commit()
 
         branch = conn.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
-        if not branch or not branch['aviv_user_id']:
-            msg = 'No Aviv credentials'
+        if not branch:
+            msg = 'branch not found'
             conn.execute(
                 "UPDATE agent_runs SET status='error', message=?, "
                 "finished_at=datetime('now'), duration_seconds=? WHERE id=?",
@@ -417,9 +447,30 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
             conn.commit()
             return {'ok': False, 'error': msg}
 
-        password = branch['aviv_password'] or branch['aviv_user_id']
-        token, aviv_branch_id = _login(branch['aviv_user_id'], password)
-        token = _refresh(token)
+        if chain_token is not None:
+            aviv_branch_id = branch['aviv_branch_id']
+            if aviv_branch_id is None:
+                msg = 'chain mode but branches.aviv_branch_id is NULL'
+                conn.execute(
+                    "UPDATE agent_runs SET status='error', message=?, "
+                    "finished_at=datetime('now'), duration_seconds=? WHERE id=?",
+                    (msg, round(time.time() - t0, 2), run_id))
+                conn.commit()
+                return {'ok': False, 'error': msg}
+            token = chain_token
+            password = None  # not used in chain mode
+        else:
+            if not branch['aviv_user_id']:
+                msg = 'No Aviv credentials'
+                conn.execute(
+                    "UPDATE agent_runs SET status='error', message=?, "
+                    "finished_at=datetime('now'), duration_seconds=? WHERE id=?",
+                    (msg, round(time.time() - t0, 2), run_id))
+                conn.commit()
+                return {'ok': False, 'error': msg}
+            password = branch['aviv_password'] or branch['aviv_user_id']
+            token, aviv_branch_id = _login(branch['aviv_user_id'], password)
+            token = _refresh(token)
 
         reports = fetch_report_list(aviv_branch_id, token)
         if not reports:
@@ -445,8 +496,11 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
             try:
                 xls_bytes = fetch_employer_report(aviv_branch_id, from_d, to_d, token)
             except AuthExpired:
-                token, _ = _login(branch['aviv_user_id'], password)
-                token = _refresh(token)
+                if chain_token is not None:
+                    token = _login_chain_account()
+                else:
+                    token, _ = _login(branch['aviv_user_id'], password)
+                    token = _refresh(token)
                 xls_bytes = fetch_employer_report(aviv_branch_id, from_d, to_d, token)
 
             parsed = parse_employer_report(xls_bytes)
@@ -499,6 +553,57 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
         conn.close()
 
 
+def run_all_branches(include_previous_month: bool = False) -> list[dict]:
+    """Run report 301 for every active branch.
+
+    When USE_CHAIN_AUTH is on, one chain login + reuse the token; only branches
+    with aviv_branch_id NOT NULL are included. Per-branch failures (Exception)
+    are caught so the loop never aborts mid-run.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        if USE_CHAIN_AUTH:
+            rows = conn.execute(
+                'SELECT id FROM branches '
+                'WHERE active=1 AND aviv_branch_id IS NOT NULL ORDER BY id'
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT id FROM branches '
+                'WHERE active=1 AND aviv_user_id IS NOT NULL ORDER BY id'
+            ).fetchall()
+        bids = [r['id'] for r in rows]
+    finally:
+        conn.close()
+
+    chain_token: str | None = None
+    if USE_CHAIN_AUTH:
+        if not bids:
+            log.info('chain mode: no branches with aviv_branch_id set')
+            return []
+        try:
+            chain_token = _login_chain_account()
+            chain_token = _refresh(chain_token)
+            log.info('chain auth: 1 login for %d branch(es): %s', len(bids), bids)
+        except Exception as e:
+            log.error('chain login failed; aborting employer-report run: %s', e)
+            return [{'ok': False, 'branch_id': bid,
+                     'error': f'chain login failed: {str(e)[:160]}'}
+                    for bid in bids]
+
+    results: list[dict] = []
+    for bid in bids:
+        try:
+            results.append(run_for_branch(
+                bid, include_previous_month=include_previous_month,
+                chain_token=chain_token))
+        except Exception as e:
+            log.exception('aviv_report failed for branch %d', bid)
+            results.append({'ok': False, 'branch_id': bid, 'error': str(e)[:200]})
+    return results
+
+
 if __name__ == '__main__':
     import argparse
     import sys
@@ -506,11 +611,19 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
     ap = argparse.ArgumentParser(description='Aviv employer report agent')
-    ap.add_argument('--branch-id', type=int, required=True)
+    ap.add_argument('--branch-id', type=int,
+                    help='Single branch id; omit to run all active branches')
     ap.add_argument('--include-previous', action='store_true',
                     help='Also re-fetch previous full month')
     args = ap.parse_args()
 
-    result = run_for_branch(args.branch_id, include_previous_month=args.include_previous)
-    print(result)
-    sys.exit(0 if result.get('ok') else 1)
+    if args.branch_id:
+        result = run_for_branch(args.branch_id,
+                                include_previous_month=args.include_previous)
+        print(result)
+        sys.exit(0 if result.get('ok') else 1)
+    else:
+        out = run_all_branches(include_previous_month=args.include_previous)
+        for r in out:
+            print(r)
+        sys.exit(0 if all(r.get('ok') for r in out) else 1)
