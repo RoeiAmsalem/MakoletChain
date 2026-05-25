@@ -36,7 +36,9 @@ def staging_db():
             aviv_user_id TEXT, aviv_password TEXT
         );
         CREATE TABLE daily_sales (
-            branch_id INTEGER, date TEXT, amount REAL, source TEXT,
+            branch_id INTEGER, date TEXT, amount REAL,
+            transactions INTEGER DEFAULT 0,
+            source TEXT,
             UNIQUE(branch_id, date)
         );
         CREATE TABLE z_report_902 (
@@ -619,6 +621,78 @@ def test_902_chain_login_failure_records_error_per_branch(monkeypatch):
     for r in out:
         assert r['ok'] is False
         assert 'chain login failed' in r['error']
+
+
+def test_bridge_mirrors_real_row_to_daily_sales(monkeypatch, staging_db, sample_pdf_bytes):
+    """Successful 902 + MIRROR_TO_DAILY_SALES=True → daily_sales gets a z_report row."""
+    monkeypatch.setattr(zr, 'MIRROR_TO_DAILY_SALES', True)
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is True
+
+    row = staging_db.execute(
+        "SELECT amount, transactions, source FROM daily_sales "
+        "WHERE branch_id=126 AND date='2026-05-20'"
+    ).fetchone()
+    assert row is not None, 'daily_sales must have a mirrored row'
+    assert row['amount'] == 13721.98
+    assert row['transactions'] == 234
+    assert row['source'] == 'z_report'
+
+
+def test_bridge_closed_day_no_daily_sales_row(monkeypatch, staging_db, sample_pdf_bytes):
+    """Closed-day sentinel must NEVER write to daily_sales."""
+    monkeypatch.setattr(zr, 'MIRROR_TO_DAILY_SALES', True)
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    # Filters return 200 but no Z for our date → closed-day path.
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: {'data': [{'value': [
+                            {'key': 2400, 'value': '2026-01-01 23:59:59'}]}]})
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is False
+    assert result['error'] == 'no Z for date'
+
+    # daily_sales must NOT have a row — no zero/NULL overwrite.
+    rows = staging_db.execute(
+        "SELECT * FROM daily_sales WHERE branch_id=126 AND date='2026-05-20'"
+    ).fetchall()
+    assert rows == [], f'closed-day must not write daily_sales, got {rows}'
+
+
+def test_bridge_insert_or_ignore_no_overwrite(monkeypatch, staging_db, sample_pdf_bytes):
+    """Pre-existing daily_sales row (e.g. Gmail-Z) survives the 902 mirror."""
+    # Seed an existing daily_sales row with a different amount.
+    staging_db.execute(
+        "INSERT INTO daily_sales (branch_id, date, amount, source) "
+        "VALUES (126, '2026-05-20', 99999.99, 'z_report')")
+    staging_db.commit()
+
+    monkeypatch.setattr(zr, 'MIRROR_TO_DAILY_SALES', True)
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is True
+
+    row = staging_db.execute(
+        "SELECT amount FROM daily_sales WHERE branch_id=126 AND date='2026-05-20'"
+    ).fetchone()
+    assert row['amount'] == 99999.99, \
+        '902 mirror must NOT overwrite an existing daily_sales row'
+
+
+def test_bridge_disabled_when_flag_off(monkeypatch, staging_db, sample_pdf_bytes):
+    """MIRROR_TO_DAILY_SALES=False → no daily_sales write even on success."""
+    monkeypatch.setattr(zr, 'MIRROR_TO_DAILY_SALES', False)
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    rows = staging_db.execute("SELECT COUNT(*) FROM daily_sales").fetchone()
+    assert rows[0] == 0, 'flag off → daily_sales must stay empty'
 
 
 def test_primary_run_pulls_all_branches(monkeypatch, sample_pdf_bytes):
