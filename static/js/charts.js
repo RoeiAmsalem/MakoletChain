@@ -577,10 +577,8 @@ function initExpenseBreakdownDonut(canvasId, payload) {
 
 
 function loadLiveSales() {
-    if (window.IS_MULTI_BRANCH) {
-        loadLiveSalesNetwork();
-        return;
-    }
+    // Multi-branch + single-branch both load the SELECTED branch's live
+    // (session-scoped via /api/live-sales). The chain total lives on /network.
     fetch('/api/live-sales')
         .then(r => r.json())
         .then(d => {
@@ -629,35 +627,3 @@ function loadLiveSales() {
 }
 
 setInterval(loadLiveSales, 300000);
-
-
-// For multi-branch accounts the home live tile shows the chain total and
-// links to /network. No inline grid; the dedicated page renders per-branch.
-function loadLiveSalesNetwork() {
-    fetch('/api/live-sales/network')
-        .then(r => r.json())
-        .then(d => {
-            const el = document.getElementById('live-amount');
-            const subEl = document.getElementById('live-sub');
-            const basketEl = document.getElementById('live-basket');
-            const updatedEl = document.getElementById('live-updated');
-            if (el) {
-                if (d.chain_total > 0) {
-                    el.textContent = '₪ ' + d.chain_total.toLocaleString('he-IL', {minimumFractionDigits: 0});
-                    el.className = 'kpi-value profit';
-                } else {
-                    el.textContent = 'אין נתונים';
-                    el.className = 'kpi-value';
-                }
-            }
-            if (subEl) subEl.textContent = (d.active_count || 0) + ' סניפים פעילים מתוך ' + (d.total_count || 0);
-            if (basketEl) { basketEl.textContent = ''; basketEl.style.display = 'none'; }
-            if (updatedEl) updatedEl.textContent = '';
-
-            if (typeof loadSummary === 'function') loadSummary();
-        })
-        .catch(() => {
-            const el = document.getElementById('live-amount');
-            if (el) el.textContent = 'שגיאה';
-        });
-}

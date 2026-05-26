@@ -249,3 +249,32 @@ def test_views_same_access(client):
     api2 = client.get('/api/live-sales/network?branch_id=128').get_json()
     ids2 = sorted(b['branch_id'] for b in api2['branches'])
     assert ids2 == [126, 127]
+
+
+def test_home_tile_shows_selected_branch_multi(client):
+    """Home live tile, multi-branch account: shows the SELECTED branch's live
+    (₪5000 for branch 126), NOT the ₪8200 chain sum. The tile still links to
+    /network so the chain total stays reachable in one click."""
+    _login(client, 'admin@test.com')
+    # /api/live-sales is session-scoped → admin's default branch (126) → 5000
+    api = client.get('/api/live-sales').get_json()
+    assert api['amount'] == 5000, \
+        f'home tile must read the selected branch, not chain sum; got {api["amount"]}'
+    body = client.get('/').data.decode('utf-8')
+    # Label no longer claims "כל הסניפים" — single-branch label even for multi
+    assert 'חי כרגע — כל הסניפים' not in body, \
+        'home tile label must reflect the selected branch, not the whole chain'
+    # Click-through to /network preserved
+    assert "location.href='/network'" in body
+    assert 'data-multi-branch="true"' in body
+    # The dead chain-total loader is gone from the JS
+    assert 'loadLiveSalesNetwork' not in body
+
+
+def test_network_page_still_chain_total(client):
+    """/network keeps the chain total — only the HOME tile changed."""
+    _login(client, 'admin@test.com')
+    api = client.get('/api/live-sales/network').get_json()
+    # Both seed branches contribute: 5000 + 3200 = 8200
+    assert api['chain_total'] == 8200, \
+        f'/network endpoint must still return chain total; got {api["chain_total"]}'
