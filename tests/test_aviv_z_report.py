@@ -25,6 +25,14 @@ def sample_pdf_bytes() -> bytes:
         return f.read()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_pdf_base(monkeypatch, tmp_path):
+    """Redirect 902-agent PDF writes to a per-test tmp dir so happy-path tests
+    don't write into <repo>/data/pdfs/. The dedicated preview test re-points
+    PDF_BASE to its own root before asserting."""
+    monkeypatch.setattr(zr, 'PDF_BASE', str(tmp_path / '_default_pdfs'))
+
+
 @pytest.fixture
 def staging_db():
     """In-memory DB with migration 010's schema + a minimal branches row."""
@@ -240,6 +248,23 @@ def _stub_success_path(monkeypatch, sample_pdf_bytes):
                         lambda b, z, t: 'https://example.invalid/r.pdf')
     monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
     monkeypatch.setattr(zr.time, 'sleep', lambda s: None)  # don't sleep in tests
+
+
+def test_902_stores_pdf_for_preview(monkeypatch, staging_db, sample_pdf_bytes,
+                                    tmp_path):
+    """A successful 902 pull writes the PDF to <PDF_BASE>/<branch_id>/z_<date>.pdf
+    so the /sales 'צפה' preview reads it the same way it reads Gmail-Z PDFs.
+    """
+    monkeypatch.setattr(zr, 'PDF_BASE', str(tmp_path))
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is True
+
+    pdf_path = tmp_path / '126' / 'z_2026-05-20.pdf'
+    assert pdf_path.is_file(), f'expected PDF at {pdf_path}'
+    assert pdf_path.read_bytes() == sample_pdf_bytes
 
 
 def test_filters_902_retries_on_failure(monkeypatch, staging_db, sample_pdf_bytes):

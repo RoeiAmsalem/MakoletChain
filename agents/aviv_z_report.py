@@ -37,6 +37,10 @@ BASE = 'https://bi1.aviv-pos.co.il:8443/avivbi/v2'
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 Z_REPORT_ID = 902
 
+# Where /sales reads PDF previews from (mirror of app.py's PDF_BASE). Saving 902
+# PDFs here makes the "צפה" preview work on 902 rows identically to Gmail-Z rows.
+PDF_BASE = os.path.join(os.path.dirname(__file__), '..', 'data', 'pdfs')
+
 # Retry policy for transient Aviv failures on filters/902 (404/5xx/network).
 # Closed-day "no Z for date" is a 200 response and does NOT consume retries.
 FILTERS_MAX_ATTEMPTS = 3
@@ -338,6 +342,20 @@ def record_closed_day(conn, branch_id: int, target_date: str) -> None:
     conn.commit()
 
 
+def _save_z_pdf(branch_id: int, target_date: str, pdf_bytes: bytes) -> str:
+    """Save the Z PDF where /sales reads previews from.
+
+    Path: <PDF_BASE>/<branch_id>/z_<date>.pdf — identical to the Gmail-Z layout,
+    so /api/sales/pdf/* serves 902 and Gmail rows from the same files.
+    """
+    pdf_dir = os.path.join(PDF_BASE, str(branch_id))
+    os.makedirs(pdf_dir, exist_ok=True)
+    pdf_path = os.path.join(pdf_dir, f'z_{target_date}.pdf')
+    with open(pdf_path, 'wb') as f:
+        f.write(pdf_bytes)
+    return pdf_path
+
+
 def mirror_to_daily_sales(conn, branch_id: int, target_date: str,
                           amount: float, transactions: int | None) -> bool:
     """Bridge: surface a successful 902 pull on the dashboard via daily_sales.
@@ -470,6 +488,7 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
             return {'ok': False, 'branch_id': branch_id, 'date': target_date,
                     'z_number': z_number, 'error': 'parse failed (no total)'}
 
+        _save_z_pdf(branch_id, target_date, pdf_bytes)
         upsert_z_report(conn, branch_id, target_date, z_number, parsed)
         log.info('branch=%d date=%s z=%d total=%.2f txns=%s',
                  branch_id, target_date, z_number,
