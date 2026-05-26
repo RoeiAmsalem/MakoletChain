@@ -631,6 +631,8 @@ function loadLiveSales() {
 setInterval(loadLiveSales, 300000);
 
 
+// For multi-branch accounts the home live tile shows the chain total and
+// links to /network. No inline grid; the dedicated page renders per-branch.
 function loadLiveSalesNetwork() {
     fetch('/api/live-sales/network')
         .then(r => r.json())
@@ -652,67 +654,10 @@ function loadLiveSalesNetwork() {
             if (basketEl) { basketEl.textContent = ''; basketEl.style.display = 'none'; }
             if (updatedEl) updatedEl.textContent = '';
 
-            const grid = document.getElementById('live-network-grid');
-            if (!grid) return;
-            grid.innerHTML = (d.branches || []).map(b => renderBranchLiveTile(b)).join('');
-
             if (typeof loadSummary === 'function') loadSummary();
         })
         .catch(() => {
             const el = document.getElementById('live-amount');
             if (el) el.textContent = 'שגיאה';
         });
-}
-
-
-function renderBranchLiveTile(b) {
-    const name = (b.branch_name || '').replace(/</g, '&lt;');
-    if (b.is_closed) {
-        return (
-            '<div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:0.7rem; opacity:0.55;">' +
-              '<div style="font-size:0.85rem; font-weight:700; color:#cbd5e1; margin-bottom:4px;">' + name + '</div>' +
-              '<div style="display:inline-block; background:rgba(100,116,139,0.2); color:#94a3b8; font-size:0.68rem; font-weight:600; padding:2px 8px; border-radius:999px; margin-bottom:6px;">סגור</div>' +
-              '<div style="font-size:0.78rem; color:#64748b;">החנות סגורה</div>' +
-              (b.last_date ? '<div style="font-size:0.7rem; color:#475569; margin-top:4px;">עדכון אחרון: ' + b.last_date + '</div>' : '') +
-            '</div>'
-        );
-    }
-    if (b.amount === null || b.amount === undefined) {
-        return (
-            '<div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:0.7rem;">' +
-              '<div style="font-size:0.85rem; font-weight:700; color:#f1f5f9; margin-bottom:4px;">' + name + '</div>' +
-              '<div style="font-size:0.78rem; color:#94a3b8;">אין נתונים</div>' +
-            '</div>'
-        );
-    }
-    const amt = '₪ ' + Number(b.amount).toLocaleString('he-IL', {minimumFractionDigits: 0});
-    const txn = (b.transactions || 0) + ' עסקאות';
-    const timeOnly = b.last_updated ? b.last_updated.split(' ')[0] : '';
-    return (
-        '<div style="background:rgba(34,197,94,0.06); border:1px solid rgba(34,197,94,0.25); border-radius:10px; padding:0.7rem;">' +
-          '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">' +
-            '<div style="font-size:0.85rem; font-weight:700; color:#f1f5f9;">' + name + '</div>' +
-            '<span style="background:rgba(34,197,94,0.2); color:#86efac; font-size:0.65rem; font-weight:600; padding:2px 7px; border-radius:999px;">פתוח</span>' +
-          '</div>' +
-          '<div style="font-size:1.05rem; font-weight:700; color:#22c55e; direction:ltr; text-align:right;">' + amt + '</div>' +
-          '<div style="font-size:0.74rem; color:#94a3b8; margin-top:2px;">' + txn + '</div>' +
-          (timeOnly ? '<div style="font-size:0.7rem; color:#64748b; margin-top:2px;">עודכן: ' + timeOnly + '</div>' : '') +
-        '</div>'
-    );
-}
-
-
-function toggleLiveNetwork() {
-    const sec = document.getElementById('live-network-section');
-    const caret = document.getElementById('live-expand-caret');
-    if (!sec) return;
-    const open = sec.style.display !== 'none' && sec.style.display !== '';
-    if (open) {
-        sec.style.display = 'none';
-        if (caret) caret.textContent = '▼';
-    } else {
-        sec.style.display = 'block';
-        if (caret) caret.textContent = '▲';
-        sec.scrollIntoView({behavior: 'smooth', block: 'nearest'});
-    }
 }

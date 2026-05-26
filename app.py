@@ -594,6 +594,27 @@ def api_set_view_mode():
     return jsonify({'ok': True, 'mode': mode})
 
 
+@app.route('/network')
+@login_required
+def network_page():
+    """Dedicated multi-branch live network page.
+
+    Access: admin/ceo (sees all assigned branches) and managers with 2+
+    user_branches (sees only their assigned branches). Single-branch
+    accounts are redirected home — the page would be a one-tile grid.
+
+    Data is loaded client-side via /api/live-sales/network, which already
+    enforces user_branches access control (URL params can't leak).
+    """
+    role = session.get('user_role')
+    user_branches = session.get('user_branches', [])
+    is_multi_branch = role in ROLES_ALL_BRANCHES or (user_branches and len(user_branches) > 1)
+    if not is_multi_branch:
+        return redirect(url_for('index'))
+    ctx = _page_context('network')
+    return render_template('network.html', **ctx)
+
+
 # ── Sales charts ─────────────────────────────────────────────
 # datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
 _HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',

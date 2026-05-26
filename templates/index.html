@@ -118,9 +118,9 @@ async function setViewMode(mode) {
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
     <div class="kpi-card kpi-card--live" id="live-tile"
-         {% if is_multi_branch %}role="button" tabindex="0"
-         onclick="toggleLiveNetwork()"
-         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleLiveNetwork();}"
+         {% if is_multi_branch %}role="link" tabindex="0"
+         onclick="location.href='/network'"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();location.href='/network';}"
          style="cursor:pointer;"
          data-multi-branch="true"{% endif %}>
         <div class="kpi-header">
@@ -132,8 +132,8 @@ async function setViewMode(mode) {
         <div class="kpi-sub" id="live-basket" style="font-size:0.82rem; color:#94a3b8; margin-top:2px;"></div>
         <div class="kpi-sub" id="live-updated" style="font-size:0.75rem; color:#64748b; margin-top:2px;"></div>
         {% if is_multi_branch %}
-        <div class="kpi-sub" id="live-expand-hint" style="font-size:0.72rem; color:#6366f1; margin-top:6px; font-weight:600;">
-            <span id="live-expand-caret">▼</span> לחץ להרחבה לפי סניף
+        <div class="kpi-sub" id="live-network-link" style="font-size:0.72rem; color:#6366f1; margin-top:6px; font-weight:600;">
+            תצוגת רשת ←
         </div>
         {% endif %}
     </div>
@@ -188,19 +188,6 @@ async function setViewMode(mode) {
         <span class="kpi-value salary" id="salary-value">₪ 0.00</span>
     </div>
 </section>
-
-{% if is_multi_branch %}
-<section id="live-network-section" style="display:none; background:var(--card,#1e293b); border:1px solid var(--card-border,#334155); border-radius:var(--radius,12px); padding:1rem 1.25rem; margin-bottom:1rem;">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
-        <h2 style="font-size:1rem; font-weight:700; color:#f1f5f9; margin:0;">חי כרגע — כל הסניפים</h2>
-        <button type="button" onclick="toggleLiveNetwork()" aria-label="סגור"
-                style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:6px 12px; color:#cbd5e1; font-size:0.8rem; cursor:pointer; font-family:inherit; min-height:40px;">
-            סגור ▲
-        </button>
-    </div>
-    <div id="live-network-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.6rem;"></div>
-</section>
-{% endif %}
 
 {% include '_unknown_employees_banner.html' %}
 

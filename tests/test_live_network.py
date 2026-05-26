@@ -1,11 +1,13 @@
-"""Live tile → per-branch network grid for multi-branch accounts.
+"""Live tile → dedicated /network page link for multi-branch accounts.
 
 Locks the trigger logic and access control on /api/live-sales/network and the
-home-page render of the click-to-expand grid:
+home-page render of the live tile (which now navigates to /network instead of
+expanding inline):
 
   - test_single_branch_unchanged   — 1-branch manager sees the plain live tile
-  - test_multi_branch_shows_network — admin/ceo sees the click-to-expand grid
-                                       with tile-per-branch markup present
+                                       (no multi-branch attr, no link affordance)
+  - test_multi_branch_tile_links_to_network — admin/ceo sees the live tile
+                                       linking to /network (inline expand removed)
   - test_network_only_assigned_branches — a 2-branch manager sees ONLY their
                                        assigned branches via the API
   - test_closed_branch_shows_greyed — a branch with no live row today but a
@@ -111,34 +113,40 @@ def _login(client, email):
 
 def test_single_branch_unchanged(client):
     """A manager with exactly 1 assigned branch sees the normal single-tile
-    layout — no expand affordance, no network section, no multi-branch attr."""
+    layout — no link affordance, no multi-branch attr, no /network nav link."""
     _login(client, 'one@test.com')
     res = client.get('/')
     assert res.status_code == 200
     body = res.data.decode('utf-8')
     assert 'data-multi-branch="true"' not in body, \
         'single-branch user must NOT get the multi-branch attribute on the live tile'
-    assert 'id="live-network-section"' not in body, \
-        'single-branch user must NOT get the expandable network section'
-    assert 'id="live-expand-hint"' not in body, \
-        'single-branch user must NOT see the "click to expand" hint'
+    assert "location.href='/network'" not in body, \
+        'single-branch user must NOT get the /network click handler'
+    assert 'href="/network"' not in body, \
+        'single-branch user must NOT see the /network nav link'
     # Original single-tile label is preserved
     assert 'היום בזמן אמת' in body
 
 
-def test_multi_branch_shows_network(client):
-    """An admin (multi-branch) sees the click-to-expand grid: the live tile has
-    data-multi-branch="true" + click hint, and the network section + grid
-    container are rendered (hidden by default)."""
+def test_multi_branch_tile_links_to_network(client):
+    """An admin (multi-branch) sees the live tile linking to /network: it has
+    data-multi-branch="true" + an onclick redirect, and the /network nav link
+    appears. The old inline expand markup MUST be gone."""
     _login(client, 'admin@test.com')
     res = client.get('/')
     assert res.status_code == 200
     body = res.data.decode('utf-8')
     assert 'data-multi-branch="true"' in body
-    assert 'id="live-network-section"' in body
-    assert 'id="live-network-grid"' in body
-    assert 'חי כרגע — כל הסניפים' in body
-    assert 'לחץ להרחבה לפי סניף' in body
+    assert "location.href='/network'" in body, \
+        'live tile must redirect to /network on click'
+    assert 'תצוגת רשת' in body, 'navbar must surface the /network link'
+    # Inline expand artifacts MUST be removed
+    assert 'id="live-network-section"' not in body, \
+        'inline expand section must be removed (replaced by /network)'
+    assert 'id="live-network-grid"' not in body, \
+        'inline grid must be removed (replaced by /network)'
+    assert 'toggleLiveNetwork' not in body, \
+        'toggle handler must be removed (replaced by /network link)'
 
 
 def test_network_only_assigned_branches(client):
