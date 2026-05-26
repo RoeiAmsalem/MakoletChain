@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block title %}תצוגת רשת - קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    html, body { overflow-x: hidden; max-width: 100vw; }
+
+    .net-header {
+        display: flex; align-items: flex-end; justify-content: space-between;
+        flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem;
+    }
+    .net-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin: 0; }
+    .net-subtitle { font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem; }
+
+    .net-sort {
+        display: inline-flex; gap: 4px;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 999px; padding: 4px;
+    }
+    .net-sort button {
+        background: transparent; color: var(--text-secondary);
+        border: none; border-radius: 999px;
+        padding: 6px 14px; font-size: 0.8rem; font-weight: 600;
+        cursor: pointer; font-family: inherit; min-height: 36px;
+        touch-action: manipulation;
+    }
+    .net-sort button.active {
+        background: var(--accent); color: #fff;
+    }
+
+    .net-summary {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.75rem;
+        margin-bottom: 1.25rem;
+    }
+    .net-summary-card {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); padding: 0.9rem 1rem;
+    }
+    .net-summary-label {
+        font-size: 0.78rem; color: var(--text-secondary);
+        font-weight: 600; margin-bottom: 0.35rem;
+    }
+    .net-summary-value {
+        font-size: 1.35rem; font-weight: 700; color: var(--text-primary);
+        direction: ltr; text-align: right;
+    }
+    .net-summary-card.profit .net-summary-value { color: var(--profit); }
+
+    .net-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 0.7rem;
+    }
+
+    .net-tile {
+        background: rgba(34,197,94,0.06);
+        border: 1px solid rgba(34,197,94,0.25);
+        border-radius: 10px; padding: 0.8rem;
+        cursor: pointer; text-decoration: none; color: inherit;
+        display: block; min-height: 110px;
+        transition: transform 0.08s ease, background 0.12s ease;
+        touch-action: manipulation;
+    }
+    .net-tile:hover { background: rgba(34,197,94,0.12); transform: translateY(-1px); }
+    .net-tile.closed {
+        background: rgba(255,255,255,0.03);
+        border-color: rgba(255,255,255,0.08);
+        opacity: 0.55;
+    }
+    .net-tile.nodata {
+        background: rgba(255,255,255,0.03);
+        border-color: rgba(255,255,255,0.08);
+    }
+    .net-tile-head {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-bottom: 6px; gap: 6px;
+    }
+    .net-tile-name {
+        font-size: 0.9rem; font-weight: 700; color: var(--text-primary);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .net-tile.closed .net-tile-name { color: var(--text-secondary); }
+    .net-badge {
+        font-size: 0.65rem; font-weight: 600;
+        padding: 2px 8px; border-radius: 999px;
+        flex-shrink: 0;
+    }
+    .net-badge.open { background: rgba(34,197,94,0.2); color: #86efac; }
+    .net-badge.closed { background: rgba(100,116,139,0.2); color: var(--text-secondary); }
+    .net-tile-amount {
+        font-size: 1.1rem; font-weight: 700; color: var(--profit);
+        direction: ltr; text-align: right;
+    }
+    .net-tile-sub { font-size: 0.74rem; color: var(--text-secondary); margin-top: 2px; }
+    .net-tile-meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 3px; }
+
+    .net-empty {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); padding: 1.5rem;
+        text-align: center; color: var(--text-secondary);
+    }
+
+    @media (max-width: 768px) {
+        .net-title { font-size: 1.05rem; }
+        .net-summary { grid-template-columns: 1fr; }
+        .net-summary-value { font-size: 1.15rem; }
+        .net-grid {
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.5rem;
+        }
+        .net-tile { padding: 0.7rem; min-height: 100px; }
+        .net-tile-name { font-size: 0.82rem; }
+        .net-tile-amount { font-size: 1rem; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<section class="net-header">
+    <div>
+        <h1 class="net-title">תצוגת רשת</h1>
+        <div class="net-subtitle">
+            כל הסניפים בזמן אמת · עודכן <span id="net-updated">--:--</span>
+        </div>
+    </div>
+    <div class="net-sort" role="tablist" aria-label="מיון">
+        <button type="button" id="sort-revenue" class="active" onclick="setSort('revenue')">לפי הכנסות</button>
+        <button type="button" id="sort-name" onclick="setSort('name')">לפי שם</button>
+    </div>
+</section>
+
+<section class="net-summary">
+    <div class="net-summary-card profit">
+        <div class="net-summary-label">סה״כ הכנסות עכשיו</div>
+        <div class="net-summary-value" id="sum-total">₪ 0</div>
+    </div>
+    <div class="net-summary-card">
+        <div class="net-summary-label">עסקאות</div>
+        <div class="net-summary-value" id="sum-transactions">0</div>
+    </div>
+    <div class="net-summary-card">
+        <div class="net-summary-label">ממוצע לסניף</div>
+        <div class="net-summary-value" id="sum-avg">₪ 0</div>
+    </div>
+</section>
+
+<div id="net-grid" class="net-grid"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+'use strict';
+
+let CURRENT_SORT = 'revenue';
+let LAST_BRANCHES = [];
+
+function setSort(mode) {
+    CURRENT_SORT = mode;
+    document.getElementById('sort-revenue').classList.toggle('active', mode === 'revenue');
+    document.getElementById('sort-name').classList.toggle('active', mode === 'name');
+    renderGrid(LAST_BRANCHES);
+}
+
+function fmtMoney(n) {
+    return '₪ ' + Math.round(Number(n) || 0).toLocaleString('he-IL');
+}
+
+function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, function(c) {
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+}
+
+function renderTile(b) {
+    const name = escapeHtml(b.branch_name || '');
+    const href = '/?branch_id=' + encodeURIComponent(b.branch_id);
+    if (b.is_closed) {
+        const lastDate = b.last_date ? '<div class="net-tile-meta">עדכון אחרון: ' + escapeHtml(b.last_date) + '</div>' : '';
+        return (
+            '<a class="net-tile closed" href="' + href + '">' +
+              '<div class="net-tile-head">' +
+                '<div class="net-tile-name">' + name + '</div>' +
+                '<span class="net-badge closed">סגור</span>' +
+              '</div>' +
+              '<div class="net-tile-sub">החנות סגורה</div>' +
+              lastDate +
+            '</a>'
+        );
+    }
+    if (b.amount === null || b.amount === undefined) {
+        return (
+            '<a class="net-tile nodata" href="' + href + '">' +
+              '<div class="net-tile-head">' +
+                '<div class="net-tile-name">' + name + '</div>' +
+              '</div>' +
+              '<div class="net-tile-sub">אין נתונים</div>' +
+            '</a>'
+        );
+    }
+    const amt = fmtMoney(b.amount);
+    const txn = (b.transactions || 0) + ' עסקאות';
+    const timeOnly = b.last_updated ? String(b.last_updated).split(' ')[0] : '';
+    const meta = timeOnly ? '<div class="net-tile-meta">עודכן: ' + escapeHtml(timeOnly) + '</div>' : '';
+    return (
+        '<a class="net-tile" href="' + href + '">' +
+          '<div class="net-tile-head">' +
+            '<div class="net-tile-name">' + name + '</div>' +
+            '<span class="net-badge open">פתוח</span>' +
+          '</div>' +
+          '<div class="net-tile-amount">' + amt + '</div>' +
+          '<div class="net-tile-sub">' + txn + '</div>' +
+          meta +
+        '</a>'
+    );
+}
+
+function sortBranches(list) {
+    const arr = list.slice();
+    if (CURRENT_SORT === 'name') {
+        arr.sort(function(a, b) {
+            return String(a.branch_name || '').localeCompare(String(b.branch_name || ''), 'he');
+        });
+        return arr;
+    }
+    arr.sort(function(a, b) {
+        const av = (a.amount === null || a.amount === undefined) ? -1 : Number(a.amount);
+        const bv = (b.amount === null || b.amount === undefined) ? -1 : Number(b.amount);
+        return bv - av;
+    });
+    return arr;
+}
+
+function renderGrid(branches) {
+    const grid = document.getElementById('net-grid');
+    if (!grid) return;
+    if (!branches || branches.length === 0) {
+        grid.innerHTML = '<div class="net-empty">אין סניפים להצגה</div>';
+        return;
+    }
+    const sorted = sortBranches(branches);
+    grid.innerHTML = sorted.map(renderTile).join('');
+}
+
+function loadNetwork() {
+    fetch('/api/live-sales/network')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            LAST_BRANCHES = d.branches || [];
+            renderGrid(LAST_BRANCHES);
+
+            const total = d.chain_total || 0;
+            const totalCount = d.total_count || (LAST_BRANCHES.length || 0);
+            const avg = totalCount > 0 ? total / totalCount : 0;
+            const txnSum = LAST_BRANCHES.reduce(function(acc, b) {
+                return acc + (Number(b.transactions) || 0);
+            }, 0);
+
+            document.getElementById('sum-total').textContent = fmtMoney(total);
+            document.getElementById('sum-transactions').textContent =
+                Number(txnSum).toLocaleString('he-IL');
+            document.getElementById('sum-avg').textContent = fmtMoney(avg);
+
+            const now = new Date();
+            const hh = String(now.getHours()).padStart(2, '0');
+            const mm = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('net-updated').textContent = hh + ':' + mm;
+        })
+        .catch(function() {
+            const grid = document.getElementById('net-grid');
+            if (grid) grid.innerHTML = '<div class="net-empty">שגיאה בטעינת נתונים</div>';
+        });
+}
+
+loadNetwork();
+setInterval(loadNetwork, 300000);
+</script>
+{% endblock %}
