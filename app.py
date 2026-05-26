@@ -541,6 +541,11 @@ def _page_context(active_page):
     floor_clamped = bool(requested and requested < DATA_FLOOR_MONTH)
     branch_id = _get_branch_id()
     prev_month, next_month, month_display, show_today, current = _month_nav(selected)
+    role = session.get('user_role')
+    user_branches = session.get('user_branches', [])
+    # Same "multi-branch account" definition the navbar branch switcher uses
+    # (base.html:35): admin/ceo see every branch; managers with 2+ user_branches.
+    is_multi_branch = role in ROLES_ALL_BRANCHES or (user_branches and len(user_branches) > 1)
     return {
         'active_page': active_page,
         'selected_month': selected,
@@ -553,6 +558,7 @@ def _page_context(active_page):
         'month_display': month_display,
         'show_today_btn': show_today,
         'current_month': current,
+        'is_multi_branch': bool(is_multi_branch),
     }
 
 
@@ -1395,6 +1401,96 @@ def api_live_sales():
     return jsonify({'amount': None, 'transactions': None,
                     'last_updated': None, 'is_stale': False,
                     'is_closed': False})
+
+
+def _live_row_for_branch(db, branch_id, today):
+    """Per-branch live-sales read using the same read-time rule as
+    /api/live-sales (today's row, Z-wins, is_closed fallback).
+    Returns a dict matching the per-branch tile payload."""
+    row = db.execute(
+        'SELECT amount, transactions, last_updated FROM live_sales '
+        'WHERE branch_id = ? AND date = ?',
+        (branch_id, today)
+    ).fetchone()
+    fresh_today = bool(row and row['amount'] and row['last_updated'] != 'PAUSED')
+    if fresh_today:
+        return {
+            'amount': row['amount'],
+            'transactions': row['transactions'],
+            'last_updated': row['last_updated'],
+            'is_closed': False,
+        }
+    has_z = db.execute(
+        "SELECT 1 FROM daily_sales WHERE branch_id = ? AND date = ?",
+        (branch_id, today)
+    ).fetchone() is not None
+    if has_z:
+        if row:
+            return {
+                'amount': row['amount'],
+                'transactions': row['transactions'],
+                'last_updated': row['last_updated'],
+                'is_closed': False,
+            }
+        return {'amount': None, 'transactions': None,
+                'last_updated': None, 'is_closed': False}
+    latest = db.execute(
+        'SELECT amount, date FROM live_sales '
+        'WHERE branch_id = ? AND amount > 0 AND date < ? '
+        'ORDER BY date DESC, fetched_at DESC LIMIT 1',
+        (branch_id, today)
+    ).fetchone()
+    if latest:
+        return {
+            'amount': None, 'transactions': None, 'last_updated': None,
+            'is_closed': True,
+            'last_amount': latest['amount'], 'last_date': latest['date'],
+        }
+    return {'amount': None, 'transactions': None,
+            'last_updated': None, 'is_closed': False}
+
+
+@app.route('/api/live-sales/network')
+@login_required
+def api_live_sales_network():
+    """Per-branch live tile payload for multi-branch accounts.
+
+    Returns one entry per ASSIGNED branch (admin/ceo → all active branches;
+    manager → only user_branches). Each entry uses the same read-time rule
+    as /api/live-sales — today's row wins, Z wins, otherwise is_closed with
+    last_amount/last_date context.
+
+    Access control: derives the branch list from _list_visible_branches —
+    URL params are ignored, a multi-store manager cannot leak other branches.
+    """
+    db = get_db()
+    role = session.get('user_role')
+    user_id = session.get('user_id')
+    visible = _list_visible_branches(user_id, role)
+    today = _now_il().strftime('%Y-%m-%d')
+
+    branches = []
+    chain_total = 0.0
+    active_count = 0
+    for b in visible:
+        live = _live_row_for_branch(db, b['id'], today)
+        entry = {
+            'branch_id': b['id'],
+            'branch_name': b['name'],
+            **live,
+        }
+        branches.append(entry)
+        if live.get('amount') and not live.get('is_closed'):
+            chain_total += float(live['amount'])
+            active_count += 1
+
+    return jsonify({
+        'is_multi_branch': len(visible) > 1,
+        'branches': branches,
+        'chain_total': round(chain_total, 2),
+        'active_count': active_count,
+        'total_count': len(visible),
+    })
 
 
 @app.route('/api/sales-by-hour')
