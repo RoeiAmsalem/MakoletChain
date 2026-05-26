@@ -83,11 +83,12 @@
                     <th>עסקאות</th>
                     <th>ממוצע לעסקה</th>
                     <th>מקור</th>
+                    <th>שעת משיכה</th>
                     <th>PDF</th>
                 </tr>
             </thead>
             <tbody id="sales-tbody">
-                <tr><td colspan="6" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
+                <tr><td colspan="7" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
             </tbody>
             <tfoot id="sales-tfoot">{% if sales_footer %}
                 <tr class="tfoot-total" style="font-weight:700;border-top:2px solid #334155;background:#0f172a">
@@ -192,7 +193,7 @@ async function loadSales() {
 
         // Table rows
         if (!d.sales.length) {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
             return;
         }
 
@@ -212,12 +213,16 @@ async function loadSales() {
             } else {
                 srcBadge = `<span style="background:rgba(148,163,184,0.15); color:#cbd5e1; border:1px solid rgba(148,163,184,0.3); border-radius:4px; padding:2px 8px; font-size:0.75rem; font-weight:600;">${src}</span>`;
             }
+            const fetched = s.fetched_at
+                ? `<span style="font-size:0.8rem;color:#94a3b8">${s.fetched_at.slice(0,16).replace('T',' ')}</span>`
+                : '<span style="color:#64748b;font-size:0.8rem">—</span>';
             return `<tr>
                 <td>${s.date}</td>
                 <td class="money profit" style="direction:ltr;text-align:left;font-weight:600">₪ ${Number(s.amount).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
                 <td style="text-align:center">${s.transactions || '—'}</td>
                 <td style="text-align:center">${avgTxn}</td>
                 <td>${srcBadge}</td>
+                <td style="text-align:center">${fetched}</td>
                 <td>${pdfBtn}</td>
             </tr>`;
         }).join('');

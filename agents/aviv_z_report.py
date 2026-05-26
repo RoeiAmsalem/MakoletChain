@@ -365,8 +365,8 @@ def mirror_to_daily_sales(conn, branch_id: int, target_date: str,
     """
     cur = conn.execute(
         "INSERT OR IGNORE INTO daily_sales "
-        "(branch_id, date, amount, transactions, source) "
-        "VALUES (?, ?, ?, ?, 'z_report')",
+        "(branch_id, date, amount, transactions, source, fetched_at) "
+        "VALUES (?, ?, ?, ?, 'z_report', datetime('now'))",
         (branch_id, target_date, amount, transactions or 0),
     )
     conn.commit()

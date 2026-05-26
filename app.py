@@ -2636,7 +2636,7 @@ def api_sales():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
     rows = db.execute(
-        "SELECT date, amount, transactions, source FROM daily_sales "
+        "SELECT date, amount, transactions, source, fetched_at FROM daily_sales "
         "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date DESC",
         (branch_id, month)
     ).fetchall()
