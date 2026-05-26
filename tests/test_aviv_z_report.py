@@ -47,6 +47,7 @@ def staging_db():
             branch_id INTEGER, date TEXT, amount REAL,
             transactions INTEGER DEFAULT 0,
             source TEXT,
+            fetched_at TEXT,
             UNIQUE(branch_id, date)
         );
         CREATE TABLE z_report_902 (
@@ -658,13 +659,16 @@ def test_bridge_mirrors_real_row_to_daily_sales(monkeypatch, staging_db, sample_
     assert result['ok'] is True
 
     row = staging_db.execute(
-        "SELECT amount, transactions, source FROM daily_sales "
+        "SELECT amount, transactions, source, fetched_at FROM daily_sales "
         "WHERE branch_id=126 AND date='2026-05-20'"
     ).fetchone()
     assert row is not None, 'daily_sales must have a mirrored row'
     assert row['amount'] == 13721.98
     assert row['transactions'] == 234
     assert row['source'] == 'z_report'
+    # /sales surfaces this in the "שעת משיכה" column. ISO-ish "YYYY-MM-DD HH:MM:SS".
+    assert row['fetched_at'] and len(row['fetched_at']) >= 16, \
+        f'fetched_at not populated: {row["fetched_at"]!r}'
 
 
 def test_bridge_closed_day_no_daily_sales_row(monkeypatch, staging_db, sample_pdf_bytes):
