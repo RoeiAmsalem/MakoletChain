@@ -10,24 +10,24 @@
     }
     .net-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin: 0; }
     .net-subtitle { font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem; }
+    .net-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
-    .net-sort {
+    .net-pill {
         display: inline-flex; gap: 4px;
         background: rgba(255,255,255,0.05);
         border: 1px solid rgba(255,255,255,0.1);
         border-radius: 999px; padding: 4px;
     }
-    .net-sort button {
+    .net-pill button {
         background: transparent; color: var(--text-secondary);
         border: none; border-radius: 999px;
         padding: 6px 14px; font-size: 0.8rem; font-weight: 600;
         cursor: pointer; font-family: inherit; min-height: 36px;
         touch-action: manipulation;
     }
-    .net-sort button.active {
-        background: var(--accent); color: #fff;
-    }
+    .net-pill button.active { background: var(--accent); color: #fff; }
 
+    /* Summary bar */
     .net-summary {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -48,53 +48,108 @@
     }
     .net-summary-card.profit .net-summary-value { color: var(--profit); }
 
+    /* ─── Tile view ──────────────────────────────────────────── */
     .net-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 0.7rem;
     }
-
     .net-tile {
-        background: rgba(34,197,94,0.06);
-        border: 1px solid rgba(34,197,94,0.25);
-        border-radius: 10px; padding: 0.8rem;
+        position: relative; overflow: hidden;
+        background: var(--card);
+        border: 1px solid var(--card-border);
+        border-radius: 10px; padding: 0.85rem 0.85rem 0.75rem;
+        padding-top: 1rem; /* room for the top strip */
         cursor: pointer; text-decoration: none; color: inherit;
-        display: block; min-height: 110px;
-        transition: transform 0.08s ease, background 0.12s ease;
+        display: block; min-height: 118px;
+        transition: transform 0.08s ease, background 0.12s ease, border-color 0.12s ease;
         touch-action: manipulation;
     }
-    .net-tile:hover { background: rgba(34,197,94,0.12); transform: translateY(-1px); }
-    .net-tile.closed {
-        background: rgba(255,255,255,0.03);
-        border-color: rgba(255,255,255,0.08);
-        opacity: 0.55;
+    .net-tile::before {
+        /* top status strip */
+        content: ''; position: absolute; top: 0; left: 0; right: 0;
+        height: 4px; background: var(--profit);
     }
-    .net-tile.nodata {
-        background: rgba(255,255,255,0.03);
-        border-color: rgba(255,255,255,0.08);
+    .net-tile.closed::before { background: var(--text-muted); }
+    .net-tile:hover {
+        background: rgba(255,255,255,0.04);
+        border-color: rgba(34,197,94,0.4);
+        transform: translateY(-1px);
     }
-    .net-tile-head {
-        display: flex; justify-content: space-between; align-items: center;
-        margin-bottom: 6px; gap: 6px;
-    }
+    .net-tile.closed { opacity: 0.55; }
+    .net-tile.closed:hover { border-color: var(--card-border); transform: none; }
+
     .net-tile-name {
-        font-size: 0.9rem; font-weight: 700; color: var(--text-primary);
+        font-size: 1rem; /* ~16px */
+        font-weight: 500;
+        color: var(--text-primary);
+        margin-bottom: 0.5rem;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .net-tile.closed .net-tile-name { color: var(--text-secondary); }
-    .net-badge {
-        font-size: 0.65rem; font-weight: 600;
-        padding: 2px 8px; border-radius: 999px;
-        flex-shrink: 0;
-    }
-    .net-badge.open { background: rgba(34,197,94,0.2); color: #86efac; }
-    .net-badge.closed { background: rgba(100,116,139,0.2); color: var(--text-secondary); }
     .net-tile-amount {
-        font-size: 1.1rem; font-weight: 700; color: var(--profit);
+        font-size: 1.15rem; /* ~18px */
+        font-weight: 700;
+        color: var(--profit);
         direction: ltr; text-align: right;
     }
-    .net-tile-sub { font-size: 0.74rem; color: var(--text-secondary); margin-top: 2px; }
+    .net-tile-sub { font-size: 0.74rem; color: var(--text-secondary); margin-top: 3px; }
     .net-tile-meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 3px; }
+    .net-tile.closed .net-tile-name { color: var(--text-secondary); }
+
+    /* ─── List view ──────────────────────────────────────────── */
+    .net-list {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); overflow: hidden;
+    }
+    .net-row {
+        display: grid;
+        /* RTL row: rightmost → leftmost = dot | name | transactions | revenue */
+        grid-template-columns: 16px 1fr minmax(90px, auto) minmax(120px, auto);
+        align-items: center; gap: 0.75rem;
+        padding: 0.7rem 1rem;
+        border-bottom: 1px solid rgba(148,163,184,0.1);
+        text-decoration: none; color: inherit;
+        cursor: pointer;
+        touch-action: manipulation;
+        min-height: 48px;
+        transition: background 0.1s ease;
+    }
+    .net-row:last-child { border-bottom: none; }
+    .net-row:hover { background: rgba(255,255,255,0.03); }
+    .net-row.closed { opacity: 0.55; }
+
+    .net-dot {
+        width: 10px; height: 10px; border-radius: 50%;
+        background: var(--profit); justify-self: center;
+        box-shadow: 0 0 0 3px rgba(34,197,94,0.15);
+    }
+    .net-row.closed .net-dot {
+        background: var(--text-muted);
+        box-shadow: 0 0 0 3px rgba(100,116,139,0.15);
+    }
+    .net-row-name {
+        font-size: 1rem; /* ~16px */
+        font-weight: 700;
+        color: var(--text-primary);
+        text-align: right;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .net-row.closed .net-row-name { color: var(--text-secondary); }
+    .net-row-txn {
+        font-size: 0.82rem;
+        color: var(--text-secondary);
+        text-align: left;
+        direction: ltr;
+        white-space: nowrap;
+    }
+    .net-row-amount {
+        font-size: 1.05rem; /* ~17px */
+        font-weight: 700;
+        color: var(--profit);
+        direction: ltr; text-align: left;
+        white-space: nowrap;
+    }
+    .net-row.closed .net-row-amount { color: var(--text-muted); }
 
     .net-empty {
         background: var(--card); border: 1px solid var(--card-border);
@@ -106,13 +161,24 @@
         .net-title { font-size: 1.05rem; }
         .net-summary { grid-template-columns: 1fr; }
         .net-summary-value { font-size: 1.15rem; }
+
+        /* Tiles */
         .net-grid {
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 0.5rem;
         }
-        .net-tile { padding: 0.7rem; min-height: 100px; }
-        .net-tile-name { font-size: 0.82rem; }
+        .net-tile { padding: 0.85rem 0.7rem 0.65rem; min-height: 108px; }
+        .net-tile-name { font-size: 0.92rem; }
         .net-tile-amount { font-size: 1rem; }
+
+        /* List rows tighten — keep name + revenue clear, drop txn column width */
+        .net-row {
+            grid-template-columns: 14px 1fr minmax(60px, auto) minmax(95px, auto);
+            gap: 0.5rem; padding: 0.65rem 0.75rem;
+        }
+        .net-row-name { font-size: 0.92rem; }
+        .net-row-txn { font-size: 0.75rem; }
+        .net-row-amount { font-size: 0.95rem; }
     }
 </style>
 {% endblock %}
@@ -126,9 +192,15 @@
             כל הסניפים בזמן אמת · עודכן <span id="net-updated">--:--</span>
         </div>
     </div>
-    <div class="net-sort" role="tablist" aria-label="מיון">
-        <button type="button" id="sort-revenue" class="active" onclick="setSort('revenue')">לפי הכנסות</button>
-        <button type="button" id="sort-name" onclick="setSort('name')">לפי שם</button>
+    <div class="net-controls">
+        <div class="net-pill" role="tablist" aria-label="תצוגה">
+            <button type="button" id="view-tiles" class="active" onclick="setView('tiles')">אריחים</button>
+            <button type="button" id="view-list" onclick="setView('list')">רשימה</button>
+        </div>
+        <div class="net-pill" role="tablist" aria-label="מיון">
+            <button type="button" id="sort-revenue" class="active" onclick="setSort('revenue')">לפי הכנסות</button>
+            <button type="button" id="sort-name" onclick="setSort('name')">לפי שם</button>
+        </div>
     </div>
 </section>
 
@@ -147,7 +219,11 @@
     </div>
 </section>
 
+<!-- Tiles container -->
 <div id="net-grid" class="net-grid"></div>
+
+<!-- List container (hidden by default; same data) -->
+<div id="net-list" class="net-list" style="display:none;"></div>
 
 {% endblock %}
 
@@ -156,13 +232,23 @@
 'use strict';
 
 let CURRENT_SORT = 'revenue';
+let CURRENT_VIEW = 'tiles';  // session-local; no localStorage (blocked).
 let LAST_BRANCHES = [];
 
 function setSort(mode) {
     CURRENT_SORT = mode;
     document.getElementById('sort-revenue').classList.toggle('active', mode === 'revenue');
     document.getElementById('sort-name').classList.toggle('active', mode === 'name');
-    renderGrid(LAST_BRANCHES);
+    render(LAST_BRANCHES);
+}
+
+function setView(mode) {
+    CURRENT_VIEW = mode;
+    document.getElementById('view-tiles').classList.toggle('active', mode === 'tiles');
+    document.getElementById('view-list').classList.toggle('active', mode === 'list');
+    document.getElementById('net-grid').style.display = (mode === 'tiles') ? '' : 'none';
+    document.getElementById('net-list').style.display = (mode === 'list') ? '' : 'none';
+    render(LAST_BRANCHES);
 }
 
 function fmtMoney(n) {
@@ -175,6 +261,10 @@ function escapeHtml(s) {
     });
 }
 
+function isClosedOrNoData(b) {
+    return b.is_closed || b.amount === null || b.amount === undefined;
+}
+
 function renderTile(b) {
     const name = escapeHtml(b.branch_name || '');
     const href = '/?branch_id=' + encodeURIComponent(b.branch_id);
@@ -182,38 +272,46 @@ function renderTile(b) {
         const lastDate = b.last_date ? '<div class="net-tile-meta">עדכון אחרון: ' + escapeHtml(b.last_date) + '</div>' : '';
         return (
             '<a class="net-tile closed" href="' + href + '">' +
-              '<div class="net-tile-head">' +
-                '<div class="net-tile-name">' + name + '</div>' +
-                '<span class="net-badge closed">סגור</span>' +
-              '</div>' +
-              '<div class="net-tile-sub">החנות סגורה</div>' +
+              '<div class="net-tile-name">' + name + '</div>' +
+              '<div class="net-tile-sub">סגור · החנות סגורה</div>' +
               lastDate +
             '</a>'
         );
     }
     if (b.amount === null || b.amount === undefined) {
         return (
-            '<a class="net-tile nodata" href="' + href + '">' +
-              '<div class="net-tile-head">' +
-                '<div class="net-tile-name">' + name + '</div>' +
-              '</div>' +
+            '<a class="net-tile closed" href="' + href + '">' +
+              '<div class="net-tile-name">' + name + '</div>' +
               '<div class="net-tile-sub">אין נתונים</div>' +
             '</a>'
         );
     }
-    const amt = fmtMoney(b.amount);
     const txn = (b.transactions || 0) + ' עסקאות';
     const timeOnly = b.last_updated ? String(b.last_updated).split(' ')[0] : '';
     const meta = timeOnly ? '<div class="net-tile-meta">עודכן: ' + escapeHtml(timeOnly) + '</div>' : '';
     return (
         '<a class="net-tile" href="' + href + '">' +
-          '<div class="net-tile-head">' +
-            '<div class="net-tile-name">' + name + '</div>' +
-            '<span class="net-badge open">פתוח</span>' +
-          '</div>' +
-          '<div class="net-tile-amount">' + amt + '</div>' +
+          '<div class="net-tile-name">' + name + '</div>' +
+          '<div class="net-tile-amount">' + fmtMoney(b.amount) + '</div>' +
           '<div class="net-tile-sub">' + txn + '</div>' +
           meta +
+        '</a>'
+    );
+}
+
+function renderRow(b) {
+    const name = escapeHtml(b.branch_name || '');
+    const href = '/?branch_id=' + encodeURIComponent(b.branch_id);
+    const closed = isClosedOrNoData(b);
+    const cls = 'net-row' + (closed ? ' closed' : '');
+    const txn = closed ? '—' : ((b.transactions || 0).toLocaleString('he-IL') + ' עסקאות');
+    const amt = (b.amount === null || b.amount === undefined) ? '—' : fmtMoney(b.amount);
+    return (
+        '<a class="' + cls + '" href="' + href + '">' +
+          '<span class="net-dot" aria-hidden="true"></span>' +
+          '<span class="net-row-name">' + name + '</span>' +
+          '<span class="net-row-txn">' + txn + '</span>' +
+          '<span class="net-row-amount">' + amt + '</span>' +
         '</a>'
     );
 }
@@ -234,15 +332,21 @@ function sortBranches(list) {
     return arr;
 }
 
-function renderGrid(branches) {
+function render(branches) {
     const grid = document.getElementById('net-grid');
-    if (!grid) return;
+    const list = document.getElementById('net-list');
     if (!branches || branches.length === 0) {
-        grid.innerHTML = '<div class="net-empty">אין סניפים להצגה</div>';
+        const empty = '<div class="net-empty">אין סניפים להצגה</div>';
+        if (grid) grid.innerHTML = empty;
+        if (list) list.innerHTML = empty;
         return;
     }
     const sorted = sortBranches(branches);
-    grid.innerHTML = sorted.map(renderTile).join('');
+    if (CURRENT_VIEW === 'tiles' && grid) {
+        grid.innerHTML = sorted.map(renderTile).join('');
+    } else if (CURRENT_VIEW === 'list' && list) {
+        list.innerHTML = sorted.map(renderRow).join('');
+    }
 }
 
 function loadNetwork() {
@@ -250,7 +354,7 @@ function loadNetwork() {
         .then(function(r) { return r.json(); })
         .then(function(d) {
             LAST_BRANCHES = d.branches || [];
-            renderGrid(LAST_BRANCHES);
+            render(LAST_BRANCHES);
 
             const total = d.chain_total || 0;
             const totalCount = d.total_count || (LAST_BRANCHES.length || 0);
@@ -270,8 +374,11 @@ function loadNetwork() {
             document.getElementById('net-updated').textContent = hh + ':' + mm;
         })
         .catch(function() {
+            const err = '<div class="net-empty">שגיאה בטעינת נתונים</div>';
             const grid = document.getElementById('net-grid');
-            if (grid) grid.innerHTML = '<div class="net-empty">שגיאה בטעינת נתונים</div>';
+            const list = document.getElementById('net-list');
+            if (grid) grid.innerHTML = err;
+            if (list) list.innerHTML = err;
         });
 }
 

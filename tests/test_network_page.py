@@ -185,3 +185,67 @@ def test_navbar_hides_network_link_for_single_branch(client):
     res = client.get('/')
     body = res.data.decode('utf-8')
     assert 'href="/network"' not in body
+
+
+def test_network_view_toggle_present(client):
+    """A multi-branch account sees BOTH view options (tiles, list) and both
+    container elements. Default is tiles (active class on view-tiles)."""
+    _login(client, 'admin@test.com')
+    res = client.get('/network')
+    assert res.status_code == 200
+    body = res.data.decode('utf-8')
+    # Both toggle buttons present
+    assert 'id="view-tiles"' in body
+    assert 'id="view-list"' in body
+    assert 'אריחים' in body  # tiles label
+    assert 'רשימה' in body   # list label
+    # Both containers present (the JS toggles which is visible)
+    assert 'id="net-grid"' in body
+    assert 'id="net-list"' in body
+    # Tiles is the default — its button has the active class
+    import re
+    m = re.search(r'id="view-tiles"[^>]*class="([^"]*)"', body)
+    assert m and 'active' in m.group(1), 'tiles must be the default active view'
+    # And list-view button must NOT carry active by default
+    m2 = re.search(r'id="view-list"[^>]*class="active"', body)
+    assert m2 is None, 'list must not be default active'
+
+
+def test_list_view_shows_all_branches(client):
+    """List view renders one row per assigned branch. Rendering is client-side
+    from /api/live-sales/network, so we assert (a) the API returns one entry
+    per assigned branch and (b) the page carries the renderRow JS that emits
+    a 'net-row' anchor per entry to /?branch_id=<id>."""
+    _login(client, 'admin@test.com')
+    api = client.get('/api/live-sales/network').get_json()
+    assert len(api['branches']) == 3, \
+        f'admin must get all 3 active branches in the payload; got {len(api["branches"])}'
+    page = client.get('/network').data.decode('utf-8')
+    # The renderRow function emits a net-row anchor — pin the markup contract
+    assert 'function renderRow' in page
+    assert "'net-row'" in page
+    assert "'/?branch_id=' + encodeURIComponent(b.branch_id)" in page, \
+        'list rows must link to the branch dashboard, same as tiles'
+
+
+def test_views_same_access(client):
+    """Both views share the same access control: a 2-branch manager assigned
+    to {126, 127} sees ONLY those two — never branch 128 — regardless of
+    which view is selected (both views read the same access-controlled API)."""
+    _login(client, 'two@test.com')
+    # /network page loads (access guard same for both views)
+    page = client.get('/network')
+    assert page.status_code == 200
+    body = page.data.decode('utf-8')
+    # Both view containers present — neither leaks branches
+    assert 'id="net-grid"' in body
+    assert 'id="net-list"' in body
+    # The data backing both views is access-controlled
+    api = client.get('/api/live-sales/network').get_json()
+    ids = sorted(b['branch_id'] for b in api['branches'])
+    assert ids == [126, 127], \
+        f'2-branch manager must see only assigned in BOTH views; got {ids}'
+    # URL param injection cannot leak branch 128 into either view
+    api2 = client.get('/api/live-sales/network?branch_id=128').get_json()
+    ids2 = sorted(b['branch_id'] for b in api2['branches'])
+    assert ids2 == [126, 127]
