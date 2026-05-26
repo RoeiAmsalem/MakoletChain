@@ -238,7 +238,7 @@
 <section class="net-summary">
     <div class="net-summary-card profit">
         <div class="net-summary-label">סה״כ הכנסות עכשיו</div>
-        <div class="net-summary-value" id="sum-total">₪ 0</div>
+        <div class="net-summary-value" id="sum-total">₪ 0.00</div>
     </div>
     <div class="net-summary-card">
         <div class="net-summary-label">עסקאות</div>
@@ -246,7 +246,7 @@
     </div>
     <div class="net-summary-card">
         <div class="net-summary-label">ממוצע לסניף</div>
-        <div class="net-summary-value" id="sum-avg">₪ 0</div>
+        <div class="net-summary-value" id="sum-avg">₪ 0.00</div>
     </div>
 </section>
 
@@ -282,8 +282,15 @@ function setView(mode) {
     render(LAST_BRANCHES);
 }
 
+// Single shared money formatter for /network — used by tiles, list rows,
+// and the summary bar so they always agree to the agora. No double-rounding:
+// the server already sums raw branch amounts and rounds once; the client
+// only formats.
 function fmtMoney(n) {
-    return '₪ ' + Math.round(Number(n) || 0).toLocaleString('he-IL');
+    return '₪ ' + (Number(n) || 0).toLocaleString('he-IL', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
 }
 
 function escapeHtml(s) {

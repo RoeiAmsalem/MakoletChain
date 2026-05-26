@@ -278,3 +278,36 @@ def test_network_page_still_chain_total(client):
     # Both seed branches contribute: 5000 + 3200 = 8200
     assert api['chain_total'] == 8200, \
         f'/network endpoint must still return chain total; got {api["chain_total"]}'
+
+
+def test_network_money_two_decimals(client):
+    """Money on /network renders with EXACTLY 2 decimals (agorot) — same
+    formatter for tiles, list rows, and summary so they always match to the
+    cent. Locks the bug where Math.round produced ₪6,924 vs ₪6,925 mismatches."""
+    _login(client, 'admin@test.com')
+    body = client.get('/network').data.decode('utf-8')
+    # Single shared formatter, 2dp
+    assert 'minimumFractionDigits: 2' in body
+    assert 'maximumFractionDigits: 2' in body
+    # Old integer-rounding formatter must be gone
+    assert 'Math.round(Number(n)' not in body, \
+        'fmtMoney must not Math.round money to integer before formatting'
+    # Initial placeholders also use 2dp so the page is consistent before JS loads
+    assert '₪ 0.00' in body
+
+
+def test_network_total_equals_sum_of_branches(client):
+    """API invariant the display depends on: chain_total equals the sum of
+    raw per-branch amounts (server sums once, rounds once). With the client
+    formatting each value to 2dp via the same formatter, displayed total
+    equals sum of displayed branches to the cent — no double-rounding."""
+    _login(client, 'admin@test.com')
+    data = client.get('/api/live-sales/network').get_json()
+    raw_sum = sum(
+        b['amount'] for b in data['branches']
+        if b.get('amount') is not None and not b.get('is_closed')
+    )
+    assert round(raw_sum, 2) == data['chain_total'], (
+        f"chain_total ({data['chain_total']}) must equal sum of branch "
+        f"amounts ({raw_sum}) to the cent"
+    )
