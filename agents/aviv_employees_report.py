@@ -485,7 +485,9 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
 
         find_employer_report_id(reports)  # raises if missing
 
-        windows = [_month_window(today, current=True)]
+        current_window = _month_window(today, current=True)
+        current_month_str = current_window[0]
+        windows = [current_window]
         if include_previous_month:
             windows.append(_month_window(today, current=False))
 
@@ -513,6 +515,18 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
             agg['open_shifts_total'] += res['open_shifts_total']
             agg['total_hours'] += res['total_hours']
             agg['months'].append({'month': month_str, **res})
+
+            # Mirror the value /ops shows as "שעות החודש". Gated to the
+            # current-month window so the optional previous-month re-pull at
+            # 23:30 / Sat does NOT clobber it with a backdated total. Same
+            # column aviv_live.scrape_hours_end_of_day writes — single field,
+            # two writers, last-write-wins (we run after the live scrape).
+            if month_str == current_month_str:
+                conn.execute(
+                    "UPDATE branches SET hours_this_month=?, "
+                    "hours_updated_at=datetime('now') WHERE id=?",
+                    (res['total_hours'], branch_id))
+                conn.commit()
 
         msg = (f"matched={agg['matched']} unmatched={agg['unmatched']} "
                f"open_shifts={agg['open_shifts_total']} hours={agg['total_hours']:.1f}")
