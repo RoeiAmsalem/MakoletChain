@@ -131,7 +131,7 @@
     <div class="admin-section">
         <h2>הגדרת סניף</h2>
         <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.9rem;">
-            הסניפים מתגלים אוטומטית מחשבון הרשת ב-Aviv. בחר סניף קיים מהרשימה והוסף את פרטי ה-BilBoy, ספק הזיכיון והמנהל.
+            הסניפים מתגלים אוטומטית מחשבון הרשת ב-Aviv ומחשבון הרשת ב-BilBoy. בחר סניף קיים מהרשימה והוסף עיר, ספק זיכיון, ומנהל.
         </p>
         <form id="add-branch-form" onsubmit="return addBranch(event)">
             <div class="form-grid">
@@ -149,14 +149,6 @@
                 <div class="form-group">
                     <label>עיר</label>
                     <input type="text" name="city" placeholder="תל אביב">
-                </div>
-                <div class="form-group">
-                    <label>BilBoy User</label>
-                    <input type="text" name="bilboy_user" style="direction:ltr;">
-                </div>
-                <div class="form-group full">
-                    <label>BilBoy Token (JWT)</label>
-                    <textarea name="bilboy_pass" placeholder="eyJhbGciOiJIUzI1..." style="direction:ltr;"></textarea>
                 </div>
                 <div class="form-group full">
                     <label>ספק זיכיון</label>
@@ -192,8 +184,6 @@
                 <div class="form-group"><label>שם</label><input type="text" id="edit-name"></div>
                 <div class="form-group"><label>עיר</label><input type="text" id="edit-city"></div>
                 <div class="form-group"><label>ספק זיכיון</label><input type="text" id="edit-franchise_supplier"></div>
-                <div class="form-group"><label>BilBoy User</label><input type="text" id="edit-bilboy_user" style="direction:ltr;"></div>
-                <div class="form-group full"><label>BilBoy Token</label><textarea id="edit-bilboy_pass" style="direction:ltr;" rows="2"></textarea></div>
                 <div class="form-group">
                     <label>פעיל</label>
                     <select id="edit-active" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem; color:var(--text-primary); font-family:inherit;">
@@ -258,8 +248,6 @@ function editBranch(id) {
     document.getElementById('edit-name').value = b.name || '';
     document.getElementById('edit-city').value = b.city || '';
     document.getElementById('edit-franchise_supplier').value = b.franchise_supplier || '';
-    document.getElementById('edit-bilboy_user').value = b.bilboy_user || '';
-    document.getElementById('edit-bilboy_pass').value = b.bilboy_pass || '';
     document.getElementById('edit-active').value = b.active ? '1' : '0';
     const overlay = document.getElementById('edit-overlay');
     overlay.style.display = 'flex';
@@ -276,8 +264,6 @@ async function saveEdit(e) {
         name: document.getElementById('edit-name').value,
         city: document.getElementById('edit-city').value,
         franchise_supplier: document.getElementById('edit-franchise_supplier').value,
-        bilboy_user: document.getElementById('edit-bilboy_user').value,
-        bilboy_pass: document.getElementById('edit-bilboy_pass').value,
         active: parseInt(document.getElementById('edit-active').value),
     };
     try {

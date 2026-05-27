@@ -3336,7 +3336,7 @@ def admin_branches():
         managers = manager_map.get(bd['id'], [])
         bd['manager_count'] = len(managers)
         bd['manager_names'] = ', '.join(m['name'] for m in managers)
-        bd['has_bilboy'] = bool((bd.get('bilboy_pass') or '').strip())
+        bd['has_bilboy'] = bd.get('bilboy_branch_id') is not None
         bd['has_franchise'] = bool((bd.get('franchise_supplier') or '').strip())
         bd['has_manager'] = len(managers) > 0
         is_chain = (bd.get('aviv_branch_id') is not None
@@ -3400,7 +3400,7 @@ def api_admin_branch_create():
     city = (data.get('city') or '').strip()
     if city and not (row['city'] or '').strip():
         updates['city'] = city
-    for f in ('bilboy_user', 'bilboy_pass', 'franchise_supplier'):
+    for f in ('franchise_supplier',):
         if f in data and (data.get(f) or '').strip():
             updates[f] = data[f].strip()
     if updates:
@@ -3443,7 +3443,7 @@ def api_admin_branch_update(branch_id):
     data = request.get_json()
     db = get_db()
     fields = ['name', 'city', 'active', 'aviv_user_id', 'aviv_password',
-              'bilboy_user', 'bilboy_pass', 'gmail_label', 'franchise_supplier', 'iec_contract']
+              'gmail_label', 'franchise_supplier', 'iec_contract']
     updates = {f: data[f] for f in fields if f in data}
     if not updates:
         return jsonify({'ok': True})

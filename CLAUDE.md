@@ -119,7 +119,10 @@ Promote staging→prod by merging `dev` → `main` and pushing main, then run
 branches:
   id, name, city, active
   aviv_user_id, aviv_password
-  bilboy_user, bilboy_pass             -- JWT Bearer token (1yr expiry)
+  bilboy_user, bilboy_pass             -- legacy per-store JWT (kept in DB but
+                                       --   no longer collected by the UI; only
+                                       --   used as fallback when chain mode off)
+  bilboy_branch_id                     -- BilBoy chain customerBranchId (mig 015)
   gmail_label                          -- unique word in Z-report email subject
   franchise_supplier                   -- supplier name to EXCLUDE from BilBoy
   avg_hourly_rate REAL                 -- weighted avg from last month CSV
@@ -200,9 +203,14 @@ prevents browsers from serving stale CSS/JS after deploy.
 ### `bilboy.py` — Nightly goods sync (02:00)
 
 - API: `https://app.billboy.co.il:5050/api`
-- Auth: JWT Bearer token from `branches.bilboy_pass` (expires Mar 2027)
-- Token obtained manually: BilBoy web app → DevTools → Network → copy
-  Authorization header
+- Auth: **chain mode** — one JWT in `.env` as `BILBOY_CHAIN_TOKEN`
+  (userId=136 / יניב בן אלי, expires **2027-05-27**). Per-call branch via
+  `branches.bilboy_branch_id` (BilBoy's internal store id).
+- Per-store fallback: `branches.bilboy_pass` still works for branches without
+  a `bilboy_branch_id` mapping (used when `BILBOY_USE_CHAIN=0` or chain token
+  missing).
+- Token obtained manually from BilBoy web app → DevTools → Network →
+  Authorization header. Token NEVER goes in code, CLAUDE.md, or commits.
 - Strategy: full-month delete + reinsert nightly
 - 5-layer dedup: `lstrip('0')`, batch dedup, franchise filter, zero-amount
   filter, reconciliation verify
@@ -212,6 +220,41 @@ prevents browsers from serving stale CSS/JS after deploy.
 - Reconciliation diff > 500 → brrr warning. On 401 → brrr alert,
   `agent_runs.status=error`.
 - Suppliers must be batched in chunks of 30 (URL length limit).
+
+#### BilBoy chain mapping (one token, 18 branches)
+
+Chain BilBoy is the **single source** for goods/docs across the chain. One JWT
+in `.env` (`BILBOY_CHAIN_TOKEN`, 1yr, expires 2027-05-27, userId=136 Yaniv)
+sees all 18 stores. Per-store BilBoy tokens are no longer required for any
+store in the chain.
+
+`/customer/docs/headers` requires `?branches=<bilboy_branch_id>` (the chain
+endpoint did NOT accept `customerBranchId=N` — returns 400).
+`/customer/suppliers` accepts `?customerBranchId=<bilboy_branch_id>`.
+
+| bilboy_branch_id | local branch id | name                                      |
+| ---------------- | --------------- | ----------------------------------------- |
+| 99               | 9001            | קדיש לוז                                  |
+| 106              | 9006            | נווה זיו                                  |
+| 107              | 9011            | ויצמן                                     |
+| 122              | 9013            | לימן                                      |
+| 123              | 9012            | בצת                                       |
+| 124              | 9010            | שומרת                                     |
+| 125              | 9007            | ז'בוטינסקי                                |
+| 126              | 126             | אינשטיין (Shimon)                         |
+| 170              | 127             | גל ודרור / התיכון                         |
+| 483              | 9015            | ההגנה                                     |
+| 2267             | 9016            | קריית טבעון                               |
+| 2337             | 9017            | רמת השרון                                 |
+| 2653             | 9002            | קק"ל                                      |
+| 3327             | 9014            | קרן היסוד                                 |
+| 3606             | 9009            | שבטי ישראל                                |
+| 3684             | 9018            | דפנה                                      |
+| 4724             | 9019            | כפר סירקין                                |
+| 4901             | 9020            | רמת גן                                    |
+
+Token rotation: edit `.env`, restart `makolet-chain` + `makolet-chain-scheduler`.
+The token NEVER goes into CLAUDE.md, git history, or logs.
 
 ### `gmail_agent.py` — Nightly email processing (02:00)
 
@@ -462,6 +505,8 @@ GMAIL_APP_PASSWORD
 RESEND_API_KEY
 BRRR_URL
 ADMIN_PASSWORD            # initial admin seed password (TODO: rotate from 12345)
+BILBOY_CHAIN_TOKEN        # chain JWT (userId=136 Yaniv, exp 2027-05-27)
+BILBOY_USE_CHAIN          # 1 = use chain token + bilboy_branch_id; 0 = per-store bilboy_pass
 ```
 
 ---
@@ -475,7 +520,7 @@ ADMIN_PASSWORD            # initial admin seed password (TODO: rotate from 12345
 ### Branch 127 — המכולת תיכון status
 
 - Aviv credentials: `Tichon123/Tichon123` ✅
-- BilBoy token: set, expires Mar 2027 ✅
+- BilBoy: chain via `bilboy_branch_id=170` (גל ודרור), no per-store token needed ✅
 - Gmail label: `התיכון` ✅
 - IEC contract: ⏳ pending
 - Employees: ⏳ pending (Gal hasn't sent list yet)
@@ -485,7 +530,9 @@ ADMIN_PASSWORD            # initial admin seed password (TODO: rotate from 12345
 
 ## Onboarding Checklist (per new branch)
 
-1. BilBoy JWT token: log in → DevTools → Network → Authorization header
+1. Confirm the store is in Yaniv's chain BilBoy (already true for all 18) and
+   note its `bilboy_branch_id` — see the chain mapping table under the bilboy
+   agent. No per-store BilBoy token needed.
 2. Aviv credentials: `user_id` + `password` (usually same value)
 3. Gmail label: a unique word in Z-report email subject from `avivpost@avivpos.co.il`
 4. Franchise supplier name to exclude from BilBoy

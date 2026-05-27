@@ -37,6 +37,14 @@ API_BASE = "https://app.billboy.co.il:5050/api"
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 ALLOWED_DOC_TYPES = {2, 3, 4, 5}
 
+# Chain-account auth: when BILBOY_USE_CHAIN=1 in env and the branch has
+# bilboy_branch_id set, use the single chain JWT (BILBOY_CHAIN_TOKEN) and
+# query BilBoy with ?branches=<bilboy_branch_id>. Otherwise fall back to the
+# per-store JWT in branches.bilboy_pass + /user/branches[0] discovery.
+USE_CHAIN_AUTH = os.environ.get('BILBOY_USE_CHAIN', '').strip().lower() in (
+    '1', 'true', 'yes', 'on')
+CHAIN_TOKEN_ENV = 'BILBOY_CHAIN_TOKEN'
+
 # BilBoy document lifecycle statuses:
 #   3 = active invoice
 #   5 = accepted/processed
@@ -116,22 +124,37 @@ def run_bilboy(branch_id: int) -> dict:
 
     try:
         branch = _get_branch_config(branch_id)
-        token = branch.get('bilboy_pass') or ''
         franchise_supplier = branch.get('franchise_supplier') or 'זיכיונות המכולת בע"מ'
 
-        if not token:
-            log.warning("No BilBoy token for branch %d", branch_id)
-            return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': 'no token'}
+        # ── Auth path: chain (env token + bilboy_branch_id) vs per-store ──
+        chain_token = os.environ.get(CHAIN_TOKEN_ENV) or ''
+        mapped_bb_id = branch.get('bilboy_branch_id')
+        if USE_CHAIN_AUTH and chain_token and mapped_bb_id:
+            auth_source = 'chain'
+            token = chain_token
+            bb_branch_id = str(mapped_bb_id)
+            log.info("Auth path: chain (BILBOY_USE_CHAIN=1, bilboy_branch_id=%s)",
+                     bb_branch_id)
+        else:
+            auth_source = 'per_store'
+            token = branch.get('bilboy_pass') or ''
+            if not token:
+                log.warning("No BilBoy token for branch %d (per-store fallback)", branch_id)
+                return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': 'no token'}
+            log.info("Auth path: per_store (no chain token/flag/mapping for branch %d)",
+                     branch_id)
 
         session = requests.Session()
         session.headers.update({'Authorization': f'Bearer {token}'})
 
-        # Get BilBoy branch
-        branches_data = _api_get(session, '/user/branches')
-        if not branches_data:
-            raise ValueError("No branches from BilBoy API")
-        first = branches_data[0] if isinstance(branches_data, list) else branches_data
-        bb_branch_id = str(first.get('branchId') or first.get('id') or first.get('branch_id', ''))
+        # Resolve BilBoy branch id. In chain mode we already know it from
+        # branches.bilboy_branch_id and skip the per-store discovery call.
+        if auth_source != 'chain':
+            branches_data = _api_get(session, '/user/branches')
+            if not branches_data:
+                raise ValueError("No branches from BilBoy API")
+            first = branches_data[0] if isinstance(branches_data, list) else branches_data
+            bb_branch_id = str(first.get('branchId') or first.get('id') or first.get('branch_id', ''))
 
         # Get suppliers, filter out franchise
         raw = _api_get(session, '/customer/suppliers', params={
