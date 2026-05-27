@@ -68,10 +68,11 @@
                         <th>#</th>
                         <th>שם</th>
                         <th>עיר</th>
-                        <th>Aviv</th>
+                        <th>Aviv #</th>
                         <th>BilBoy</th>
-                        <th>Gmail Label</th>
-                        <th>פעיל</th>
+                        <th>ספק זיכיון</th>
+                        <th>מנהל</th>
+                        <th>סטטוס</th>
                         <th>פעולות</th>
                     </tr>
                 </thead>
@@ -81,10 +82,19 @@
                         <td>{{ b.id }}</td>
                         <td class="cell-name">{{ b.name or '' }}</td>
                         <td class="cell-city">{{ b.city or '' }}</td>
-                        <td class="cell-aviv">{{ b.aviv_user_id or '—' }}</td>
-                        <td class="cell-bilboy">{{ '✓' if b.bilboy_pass else '—' }}</td>
-                        <td class="cell-gmail">{{ b.gmail_label or '—' }}</td>
-                        <td><span class="{{ 'badge-active' if b.active else 'badge-inactive' }}">{{ 'פעיל' if b.active else 'לא פעיל' }}</span></td>
+                        <td>{{ b.aviv_branch_id if b.aviv_branch_id is not none else '—' }}</td>
+                        <td>{{ '✓' if b.has_bilboy else '—' }}</td>
+                        <td>{{ '✓' if b.has_franchise else '—' }}</td>
+                        <td title="{{ b.manager_names }}">{{ b.manager_count if b.manager_count else '—' }}</td>
+                        <td>
+                          {% if not b.is_chain_store %}
+                            <span class="badge-inactive">לא חיבור צ&#39;יין</span>
+                          {% elif b.needs_setup %}
+                            <span class="badge-inactive">חסר הגדרה</span>
+                          {% else %}
+                            <span class="badge-active">מוגדר</span>
+                          {% endif %}
+                        </td>
                         <td><button class="btn-sm" onclick="editBranch({{ b.id }})">ערוך</button></td>
                     </tr>
                     {% endfor %}
@@ -117,26 +127,28 @@
         </div>
     </div>
 
-    <!-- Add New Branch -->
+    <!-- Configure Chain Store -->
     <div class="admin-section">
-        <h2>הוספת סניף חדש</h2>
+        <h2>הגדרת סניף</h2>
+        <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.9rem;">
+            הסניפים מתגלים אוטומטית מחשבון הרשת ב-Aviv. בחר סניף קיים מהרשימה והוסף את פרטי ה-BilBoy, ספק הזיכיון והמנהל.
+        </p>
         <form id="add-branch-form" onsubmit="return addBranch(event)">
             <div class="form-grid">
-                <div class="form-group">
-                    <label>שם הסניף *</label>
-                    <input type="text" name="name" required placeholder="לדוגמה: המכולת דיזנגוף">
+                <div class="form-group full">
+                    <label>סניף *</label>
+                    <select name="branch_id" id="enrich-branch-select" required style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <option value="">— בחר סניף מרשימת הרשת —</option>
+                        {% for s in chain_stores %}
+                        <option value="{{ s.id }}" data-needs="{{ '1' if s.needs_setup else '0' }}">
+                            {{ s.name }} (Aviv #{{ s.aviv_branch_id }}){% if s.needs_setup %} — חסר הגדרה{% else %} — מוגדר{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div class="form-group">
                     <label>עיר</label>
                     <input type="text" name="city" placeholder="תל אביב">
-                </div>
-                <div class="form-group">
-                    <label>Aviv User ID</label>
-                    <input type="text" name="aviv_user_id" placeholder="S33834" style="direction:ltr;">
-                </div>
-                <div class="form-group">
-                    <label>Aviv Password</label>
-                    <input type="text" name="aviv_password" style="direction:ltr;">
                 </div>
                 <div class="form-group">
                     <label>BilBoy User</label>
@@ -146,15 +158,11 @@
                     <label>BilBoy Token (JWT)</label>
                     <textarea name="bilboy_pass" placeholder="eyJhbGciOiJIUzI1..." style="direction:ltr;"></textarea>
                 </div>
-                <div class="form-group">
-                    <label>Gmail Label</label>
-                    <input type="text" name="gmail_label" placeholder="המילה הייחודית בנושא מייל ה-Z">
-                </div>
-                <div class="form-group">
+                <div class="form-group full">
                     <label>ספק זיכיון</label>
                     <input type="text" name="franchise_supplier" value="זיכיונות המכולת בע&quot;מ">
                 </div>
-                <div class="form-separator">שדות מנהל (אופציונלי)</div>
+                <div class="form-separator">פרטי מנהל (אופציונלי — ייצור משתמש חדש או יקשר קיים)</div>
                 <div class="form-group">
                     <label>שם מנהל</label>
                     <input type="text" name="manager_name">
@@ -164,7 +172,7 @@
                     <input type="email" name="manager_email" style="direction:ltr;">
                 </div>
                 <div class="form-group full" style="margin-top:0.5rem;">
-                    <button type="submit" class="btn-submit" id="btn-add">הוסף סניף</button>
+                    <button type="submit" class="btn-submit" id="btn-add">שמור הגדרות</button>
                 </div>
             </div>
         </form>
@@ -183,10 +191,8 @@
             <div class="form-grid">
                 <div class="form-group"><label>שם</label><input type="text" id="edit-name"></div>
                 <div class="form-group"><label>עיר</label><input type="text" id="edit-city"></div>
-                <div class="form-group"><label>Aviv User ID</label><input type="text" id="edit-aviv_user_id" style="direction:ltr;"></div>
-                <div class="form-group"><label>Aviv Password</label><input type="text" id="edit-aviv_password" style="direction:ltr;"></div>
-                <div class="form-group"><label>Gmail Label</label><input type="text" id="edit-gmail_label"></div>
                 <div class="form-group"><label>ספק זיכיון</label><input type="text" id="edit-franchise_supplier"></div>
+                <div class="form-group"><label>BilBoy User</label><input type="text" id="edit-bilboy_user" style="direction:ltr;"></div>
                 <div class="form-group full"><label>BilBoy Token</label><textarea id="edit-bilboy_pass" style="direction:ltr;" rows="2"></textarea></div>
                 <div class="form-group">
                     <label>פעיל</label>
@@ -225,7 +231,7 @@ async function addBranch(e) {
         const result = await resp.json();
         if (result.ok) {
             const banner = document.getElementById('success-banner');
-            let msg = 'סניף #' + result.branch_id + ' נוסף בהצלחה!';
+            let msg = 'סניף #' + result.branch_id + ' עודכן בהצלחה!';
             if (result.temp_password) {
                 msg += ' סיסמה זמנית למנהל: ' + result.temp_password;
             }
@@ -233,6 +239,8 @@ async function addBranch(e) {
             banner.style.display = 'block';
             form.reset();
             setTimeout(() => location.reload(), 2000);
+        } else if (result.error) {
+            await mkAlert({ type: 'danger', title: 'שגיאה', message: result.error });
         }
     } catch (err) {
         await mkAlert({ type: 'danger', title: 'שגיאה', message: err.message });
@@ -249,10 +257,8 @@ function editBranch(id) {
     document.getElementById('edit-title').textContent = 'עריכת סניף #' + id;
     document.getElementById('edit-name').value = b.name || '';
     document.getElementById('edit-city').value = b.city || '';
-    document.getElementById('edit-aviv_user_id').value = b.aviv_user_id || '';
-    document.getElementById('edit-aviv_password').value = b.aviv_password || '';
-    document.getElementById('edit-gmail_label').value = b.gmail_label || '';
     document.getElementById('edit-franchise_supplier').value = b.franchise_supplier || '';
+    document.getElementById('edit-bilboy_user').value = b.bilboy_user || '';
     document.getElementById('edit-bilboy_pass').value = b.bilboy_pass || '';
     document.getElementById('edit-active').value = b.active ? '1' : '0';
     const overlay = document.getElementById('edit-overlay');
@@ -269,10 +275,8 @@ async function saveEdit(e) {
     const data = {
         name: document.getElementById('edit-name').value,
         city: document.getElementById('edit-city').value,
-        aviv_user_id: document.getElementById('edit-aviv_user_id').value,
-        aviv_password: document.getElementById('edit-aviv_password').value,
-        gmail_label: document.getElementById('edit-gmail_label').value,
         franchise_supplier: document.getElementById('edit-franchise_supplier').value,
+        bilboy_user: document.getElementById('edit-bilboy_user').value,
         bilboy_pass: document.getElementById('edit-bilboy_pass').value,
         active: parseInt(document.getElementById('edit-active').value),
     };

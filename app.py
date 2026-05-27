@@ -3250,14 +3250,53 @@ def api_ops_health():
 @_admin_required
 def admin_branches():
     db = get_db()
-    branches = db.execute('SELECT * FROM branches ORDER BY id').fetchall()
+    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
+    excluded = set(EXCLUDED_CHAIN_AVIV_IDS)
+
+    branch_rows = db.execute('SELECT * FROM branches ORDER BY id').fetchall()
+    manager_map = {}
+    for row in db.execute(
+        "SELECT ub.branch_id, u.id AS user_id, u.name, u.email "
+        "FROM user_branches ub JOIN users u ON u.id = ub.user_id "
+        "WHERE u.active = 1 AND u.role = 'manager' "
+        "ORDER BY ub.branch_id, u.id"
+    ).fetchall():
+        manager_map.setdefault(row['branch_id'], []).append(
+            {'id': row['user_id'], 'name': row['name'], 'email': row['email']})
+
+    branches = []
+    chain_stores = []
+    for b in branch_rows:
+        bd = dict(b)
+        managers = manager_map.get(bd['id'], [])
+        bd['manager_count'] = len(managers)
+        bd['manager_names'] = ', '.join(m['name'] for m in managers)
+        bd['has_bilboy'] = bool((bd.get('bilboy_pass') or '').strip())
+        bd['has_franchise'] = bool((bd.get('franchise_supplier') or '').strip())
+        bd['has_manager'] = len(managers) > 0
+        is_chain = (bd.get('aviv_branch_id') is not None
+                    and bd['aviv_branch_id'] not in excluded)
+        bd['is_chain_store'] = is_chain
+        bd['needs_setup'] = is_chain and not (
+            bd['has_bilboy'] and bd['has_franchise'] and bd['has_manager'])
+        branches.append(bd)
+        if is_chain and bd.get('active'):
+            chain_stores.append({
+                'id': bd['id'],
+                'name': bd.get('name') or f"סניף {bd['aviv_branch_id']}",
+                'aviv_branch_id': bd['aviv_branch_id'],
+                'city': bd.get('city') or '',
+                'needs_setup': bd['needs_setup'],
+            })
+
     users = db.execute(
         "SELECT u.*, GROUP_CONCAT(ub.branch_id) as branch_ids "
         "FROM users u LEFT JOIN user_branches ub ON u.id = ub.user_id "
         "GROUP BY u.id ORDER BY u.id"
     ).fetchall()
     return render_template('admin_branches.html',
-                           branches=[dict(b) for b in branches],
+                           branches=branches,
+                           chain_stores=chain_stores,
                            users=[dict(u) for u in users],
                            **_page_context('admin'))
 
@@ -3265,23 +3304,47 @@ def admin_branches():
 @app.route('/api/admin/branches', methods=['POST'])
 @_admin_required
 def api_admin_branch_create():
-    data = request.get_json()
+    """Enrich an autoseed-discovered chain store with per-store config.
+
+    This endpoint NO LONGER creates rows — autoseed (from /account/branches)
+    owns the store roster. The form picks an existing branch_id from the
+    chain-stores dropdown; we UPDATE that row in place. Rejects any call that
+    targets a row without aviv_branch_id set or one in EXCLUDED_CHAIN_AVIV_IDS,
+    which prevents the form from recreating the NULL-aviv_branch_id collision
+    that pre-dated this change.
+    """
+    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
+    data = request.get_json() or {}
+    try:
+        branch_id = int(data.get('branch_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'branch_id required'}), 400
+
     db = get_db()
-    max_id = db.execute('SELECT MAX(id) FROM branches').fetchone()[0] or 126
-    new_id = max_id + 1
-    db.execute(
-        '''INSERT INTO branches (id, name, city, active, aviv_user_id, aviv_password,
-           bilboy_user, bilboy_pass, gmail_label, franchise_supplier, iec_contract)
-           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)''',
-        (new_id, data.get('name', ''), data.get('city', ''),
-         data.get('aviv_user_id', ''), data.get('aviv_password', ''),
-         data.get('bilboy_user', ''), data.get('bilboy_pass', ''),
-         data.get('gmail_label', ''),
-         data.get('franchise_supplier', 'זיכיונות המכולת בע"מ'),
-         data.get('iec_contract', '')))
-    db.commit()
-    manager_email = data.get('manager_email', '').strip().lower()
-    manager_name = data.get('manager_name', '').strip()
+    row = db.execute(
+        'SELECT id, aviv_branch_id, city, franchise_supplier '
+        'FROM branches WHERE id=?', (branch_id,)).fetchone()
+    if row is None:
+        return jsonify({'error': 'unknown branch_id'}), 404
+    if row['aviv_branch_id'] is None:
+        return jsonify({'error': 'branch is not a chain store (no aviv_branch_id)'}), 400
+    if row['aviv_branch_id'] in EXCLUDED_CHAIN_AVIV_IDS:
+        return jsonify({'error': 'branch is HQ/legacy and cannot be enriched'}), 400
+
+    updates = {}
+    city = (data.get('city') or '').strip()
+    if city and not (row['city'] or '').strip():
+        updates['city'] = city
+    for f in ('bilboy_user', 'bilboy_pass', 'franchise_supplier'):
+        if f in data and (data.get(f) or '').strip():
+            updates[f] = data[f].strip()
+    if updates:
+        sql = 'UPDATE branches SET ' + ', '.join(f + '=?' for f in updates) + ' WHERE id=?'
+        db.execute(sql, list(updates.values()) + [branch_id])
+        db.commit()
+
+    manager_email = (data.get('manager_email') or '').strip().lower()
+    manager_name = (data.get('manager_name') or '').strip()
     if manager_email and manager_name:
         temp_password = secrets.token_urlsafe(8)
         pw_hash = generate_password_hash(temp_password)
@@ -3289,13 +3352,14 @@ def api_admin_branch_create():
             "INSERT OR IGNORE INTO users (name, email, password_hash, role) VALUES (?,?,?,'manager')",
             (manager_name, manager_email, pw_hash))
         db.commit()
-        user_row = db.execute('SELECT id FROM users WHERE LOWER(email)=?', (manager_email,)).fetchone()
+        user_row = db.execute('SELECT id FROM users WHERE LOWER(email)=?',
+                              (manager_email,)).fetchone()
         if user_row:
             db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
-                       (user_row['id'], new_id))
+                       (user_row['id'], branch_id))
             db.commit()
-        return jsonify({'ok': True, 'branch_id': new_id, 'temp_password': temp_password})
-    return jsonify({'ok': True, 'branch_id': new_id})
+        return jsonify({'ok': True, 'branch_id': branch_id, 'temp_password': temp_password})
+    return jsonify({'ok': True, 'branch_id': branch_id})
 
 
 @app.route('/api/admin/branches/<int:branch_id>')
