@@ -652,6 +652,12 @@ def scrape_hours_midday(branch_id: int) -> dict:
 CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
 CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
 
+# Opt-in flag mirroring AVIV_Z_USE_CHAIN / AVIV_EMP_USE_CHAIN. When set, the
+# manual /ops aviv_live trigger uses the chain-account path for branches with
+# aviv_branch_id; otherwise the legacy per-store path runs as before.
+USE_CHAIN_AUTH = os.environ.get('AVIV_LIVE_USE_CHAIN', '').strip().lower() in (
+    '1', 'true', 'yes', 'on')
+
 
 def _login_chain_account() -> str:
     """Login with chain-owner creds from env. Returns token. Never logs the password."""
@@ -732,6 +738,88 @@ def _persist_chain_branch(conn, branch_id: int, data: dict, log: logging.Logger)
             'UPDATE branches SET hours_this_month=?, hours_updated_at=? WHERE id=?',
             (data['monthly_hours'], datetime.now(IL_TZ).isoformat(), branch_id),
         )
+
+
+def run_aviv_live_chain_one(branch_id: int, force: bool = False) -> dict:
+    """Single-branch chain run — used by the manual /ops "Run Aviv" button.
+
+    ONE chain login + ONE multi-branch POST (scoped to this branch's aviv_id),
+    then the same persist path as run_aviv_live_chain. Writes its own agent_runs
+    row so the /ops UI sees status back. Mirrors the bilboy chain pattern.
+
+    Returns dict shape matching run_aviv_live (`success`, `amount`,
+    `transactions`, optional `skipped`, `error`) so the existing /ops handler
+    can format the toast the same way.
+    """
+    log = _setup_logger(branch_id)
+    t0 = time.time()
+
+    if not force and not _is_store_hours():
+        log.info("Outside store hours, skipping (chain)")
+        return {'success': True, 'amount': 0, 'transactions': 0,
+                'skipped': 'outside_hours'}
+    if force and not _is_store_hours():
+        log.info("Manual force run outside store hours — bypassing guard (chain)")
+
+    branch = _get_branch_config(branch_id)
+    aviv_id = branch.get('aviv_branch_id')
+    if aviv_id is None:
+        log.info("No aviv_branch_id for branch %d, skipping (chain)", branch_id)
+        return {'success': True, 'amount': 0, 'transactions': 0,
+                'skipped': 'no_aviv_branch_id'}
+
+    conn = _get_db()
+    cur = conn.execute(
+        "INSERT INTO agent_runs (branch_id, agent, started_at, status) "
+        "VALUES (?, 'aviv_live', datetime('now'), 'running')",
+        (branch_id,))
+    run_id = cur.lastrowid
+    conn.commit()
+
+    try:
+        token = _login_chain_account()
+        response = _fetch_multi_status(token, [int(aviv_id)])
+        log.info("Auth path: chain (aviv_branch_id=%s)", aviv_id)
+
+        by_aviv = {row.get('branch'): row for row in response
+                   if isinstance(row, dict) and row.get('branch') is not None}
+        raw = by_aviv.get(int(aviv_id))
+        if raw is None:
+            msg = f"branch {branch_id} (aviv_id={aviv_id}) missing from chain response"
+            log.warning(msg)
+            conn.execute(
+                "UPDATE agent_runs SET finished_at=datetime('now'), "
+                "status='error', message=?, duration_seconds=? WHERE id=?",
+                (msg[:500], round(time.time() - t0, 1), run_id))
+            conn.commit()
+            return {'success': False, 'amount': 0, 'transactions': 0,
+                    'error': msg}
+
+        data = _status_row_to_data(raw)
+        _persist_chain_branch(conn, branch_id, data, log)
+        msg = f"₪{data['amount']:,.0f} ({data['transactions']} tx)"
+        conn.execute(
+            "UPDATE agent_runs SET finished_at=datetime('now'), "
+            "status='success', amount=?, message=?, duration_seconds=? WHERE id=?",
+            (data['amount'], msg, round(time.time() - t0, 1), run_id))
+        conn.commit()
+        log.info("chain branch=%d ₪%.2f tx=%d", branch_id,
+                 data['amount'], data['transactions'])
+        return {'success': True,
+                'amount': data['amount'],
+                'transactions': data['transactions'],
+                'auth_path': 'chain'}
+    except Exception as e:
+        log.error("aviv_live chain single-branch failed: %s", e, exc_info=True)
+        conn.execute(
+            "UPDATE agent_runs SET finished_at=datetime('now'), "
+            "status='error', message=?, duration_seconds=? WHERE id=?",
+            (str(e)[:500], round(time.time() - t0, 1), run_id))
+        conn.commit()
+        return {'success': False, 'amount': 0, 'transactions': 0,
+                'error': str(e)[:200]}
+    finally:
+        conn.close()
 
 
 def run_aviv_live_chain(force: bool = False,

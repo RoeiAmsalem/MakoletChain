@@ -2814,10 +2814,15 @@ def _convert_run_times(row_dict):
 @app.route('/api/ops-status')
 @_admin_required
 def api_ops_status():
+    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
+    excluded = set(EXCLUDED_CHAIN_AVIV_IDS)
+
     db = get_db()
     current_month = _now_il().strftime('%Y-%m')
     # Branches
-    branches_rows = db.execute('SELECT id, name, city, active FROM branches WHERE active = 1').fetchall()
+    branches_rows = db.execute(
+        'SELECT id, name, city, active, aviv_branch_id FROM branches WHERE active = 1'
+    ).fetchall()
     branches = []
     for b in branches_rows:
         bid = b['id']
@@ -2866,13 +2871,16 @@ def api_ops_status():
         else:
             agents_data['iec'] = None
 
-        # Determine overall status
+        # Determine overall status. 'skipped' is NOT 'ok' — a chain branch
+        # whose only runs were no_credentials skips would otherwise show a
+        # green dot. Treat all-skipped (or no rows) as 'unknown'; any real
+        # success alongside skips is 'ok'.
         statuses = [a['status'] for a in agents_data.values() if a]
         if 'error' in statuses:
             overall = 'error'
         elif 'warning' in statuses:
             overall = 'warning'
-        elif statuses:
+        elif 'success' in statuses:
             overall = 'ok'
         else:
             overall = 'unknown'
@@ -2895,6 +2903,8 @@ def api_ops_status():
         # vs the per-employee tracked sum on /employees. Reconcile here.
         salary_data = _calculate_salary_cost(bid, current_month)
 
+        aviv_chain_id = b['aviv_branch_id']
+        is_chain_store = aviv_chain_id is not None and aviv_chain_id not in excluded
         branches.append({
             'id': bid, 'name': b['name'], 'city': b['city'],
             'status': overall, 'agents': agents_data,
@@ -2905,6 +2915,8 @@ def api_ops_status():
             'salary_source': salary_data['source'],
             'employees_with_rates': emp_rate_count,
             'has_iec_token': bool(has_iec),
+            'aviv_branch_id': aviv_chain_id,
+            'is_chain_store': is_chain_store,
         })
 
     # Recent agent runs
@@ -2968,6 +2980,16 @@ def ops_run_agent():
         return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
 
     t0 = time.time()
+    # Resolve chain-mode eligibility once: a branch is chain-eligible when it
+    # has aviv_branch_id set. The auth path actually used is logged below so
+    # /ops shows which one ran (mirrors the bilboy pattern).
+    db = get_db()
+    branch_row = db.execute(
+        'SELECT aviv_branch_id FROM branches WHERE id=?', (int(branch_id),)
+    ).fetchone()
+    has_aviv_chain_id = bool(branch_row and branch_row['aviv_branch_id'] is not None)
+    auth_path = 'per_store'
+
     try:
         if agent == 'bilboy':
             from agents.bilboy import run_bilboy
@@ -2978,10 +3000,17 @@ def ops_run_agent():
             result = run_gmail_sync(int(branch_id))
             msg = f"{result.get('new_reports', 0)} דוחות חדשים"
         elif agent == 'aviv_live':
-            from agents.aviv_live import run_aviv_live
             # Manual /ops trigger: bypass the store-hours guard (admin clicked
             # the button on purpose). Only aviv_live takes force.
-            result = run_aviv_live(int(branch_id), force=True)
+            from agents.aviv_live import (
+                run_aviv_live, run_aviv_live_chain_one,
+                USE_CHAIN_AUTH as AVIV_LIVE_USE_CHAIN,
+            )
+            if AVIV_LIVE_USE_CHAIN and has_aviv_chain_id:
+                auth_path = 'chain'
+                result = run_aviv_live_chain_one(int(branch_id), force=True)
+            else:
+                result = run_aviv_live(int(branch_id), force=True)
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
         elif agent == 'iec':
             # IEC API is geo-blocked outside Israel — must run on Israeli VPS via SSH
@@ -3000,19 +3029,55 @@ def ops_run_agent():
             else:
                 result = {'success': False}
                 msg = proc.stderr.strip() or proc.stdout.strip() or 'SSH to VPS failed'
-        else:  # aviv_employees
-            from agents.aviv_employees import run_aviv_employees
-            result = run_aviv_employees(int(branch_id))
-            msg = result.get('message', 'done')
+        else:  # aviv_employees → chain-aware aviv_employees_report.run_for_branch
+            from agents.aviv_employees_report import (
+                run_for_branch, _login_chain_account, _refresh,
+                USE_CHAIN_AUTH as AVIV_EMP_USE_CHAIN,
+            )
+            chain_token = None
+            if AVIV_EMP_USE_CHAIN and has_aviv_chain_id:
+                auth_path = 'chain'
+                chain_token = _refresh(_login_chain_account())
+            report_res = run_for_branch(int(branch_id), include_previous_month=False,
+                                        chain_token=chain_token)
+            # Normalize to the shape the rest of the handler expects.
+            if report_res.get('ok'):
+                if report_res.get('skipped'):
+                    result = {'success': True, 'skipped': report_res.get('reason')}
+                    msg = report_res.get('reason') or 'skipped'
+                else:
+                    result = {'success': True}
+                    msg = (f"matched={report_res.get('matched',0)} "
+                           f"unmatched={report_res.get('unmatched',0)} "
+                           f"hours={report_res.get('total_hours',0):.1f}")
+            else:
+                result = {'success': False, 'error': report_res.get('error', 'unknown')}
+                msg = report_res.get('error', 'unknown')
 
         duration = round(time.time() - t0, 1)
-        status = 'success' if result.get('success') else 'error'
+        # Classify outcome: real success vs no-op skip vs error. Skipped runs
+        # do NOT count as success — they're surfaced as 'skipped' so the /ops
+        # status dot reflects reality and brrr stays quiet.
         if not result.get('success'):
-            msg = result.get('error', 'Unknown error')
+            status = 'error'
+            msg = result.get('error', msg or 'Unknown error')
+        elif result.get('skipped'):
+            status = 'skipped'
+            msg = f"דילוג: {result.get('skipped')}"
+        else:
+            status = 'success'
+
+        app.logger.info("ops_run_agent agent=%s branch=%s auth_path=%s status=%s",
+                        agent, branch_id, auth_path, status)
 
         from utils.notify import notify
-        notify(f"{'✅' if status == 'success' else '❌'} {agent}", f"סניף {branch_id} — {msg}")
-        return jsonify({'status': status, 'message': msg, 'duration': duration})
+        # Only emit brrr for real outcomes — not for skipped/no-op manual runs.
+        if status == 'error':
+            notify(f"❌ {agent}", f"סניף {branch_id} — {msg}")
+        elif status == 'success':
+            notify(f"✅ {agent}", f"סניף {branch_id} — {msg}")
+        return jsonify({'status': status, 'message': msg,
+                        'duration': duration, 'auth_path': auth_path})
 
     except Exception as e:
         duration = round(time.time() - t0, 1)
