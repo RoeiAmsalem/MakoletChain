@@ -420,6 +420,30 @@ def _now_il():
     return datetime.now(IL_TZ)
 
 
+def _utc_str_to_il_iso(utc_str):
+    """Convert a SQLite datetime('now') UTC string to Israel-local ISO.
+
+    SQLite's datetime('now') returns naive 'YYYY-MM-DD HH:MM:SS' in UTC. We
+    surface fetched_at to the UI as an Israel-local timestamp, DST-safe via
+    zoneinfo. Returns None on missing/unparseable input. Output format
+    matches what sales.html already slices (YYYY-MM-DDTHH:MM:SS).
+    """
+    if not utc_str:
+        return None
+    s = str(utc_str).strip()
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S',
+                '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S.%f'):
+        try:
+            dt = datetime.strptime(s, fmt)
+            break
+        except ValueError:
+            dt = None
+    if dt is None:
+        return s
+    return dt.replace(tzinfo=timezone.utc).astimezone(IL_TZ).strftime(
+        '%Y-%m-%dT%H:%M:%S')
+
+
 def _parse_month():
     """Return the active month, clamped to DATA_FLOOR_MONTH.
 
@@ -2641,6 +2665,8 @@ def api_sales():
         (branch_id, month)
     ).fetchall()
     sales = [dict(r) for r in rows]
+    for s in sales:
+        s['fetched_at'] = _utc_str_to_il_iso(s.get('fetched_at'))
 
     total = sum(s['amount'] for s in sales)
     days = len(sales)

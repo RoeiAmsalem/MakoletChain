@@ -738,3 +738,98 @@ def test_primary_run_pulls_all_branches(monkeypatch, sample_pdf_bytes):
     seen = _spy_run_for_branch(monkeypatch)
     zr.run_all_branches('2026-05-20', missing_only=False, conn=conn)
     assert sorted(seen) == [126, 127]
+
+
+def test_backfill_interval_skips_resolved(monkeypatch, sample_pdf_bytes):
+    """Interval backfill: a branch with a row (real or sentinel) is skipped on
+    later 30-min ticks. Simulates ticks N, N+1, N+2 — branch never re-probed.
+    """
+    conn = _multi_branch_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    # Tick 1: 126 lands a real row, 127 still missing.
+    conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
+                 "VALUES (126, '2026-05-20', 2525, 5000.0)")
+    # 127 already marked closed-day (sentinel) on the primary run.
+    zr.record_closed_day(conn, 127, '2026-05-20')
+    conn.commit()
+
+    seen = _spy_run_for_branch(monkeypatch)
+    # Tick 2 and Tick 3 (both --missing-only) — neither branch should be touched.
+    zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
+    zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
+    assert seen == [], \
+        f'resolved branches (real + sentinel) must not be re-probed; got {seen}'
+
+
+def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
+    """Interval backfill: a missing branch is attempted on every tick until it
+    lands, then stops being attempted. Models Aviv's late-morning window for 126.
+    """
+    # Single-branch DB to keep retry accounting simple. The internal
+    # FILTERS_MAX_ATTEMPTS retries are real — what we test is the OUTER tick loop.
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER DEFAULT 1,
+            aviv_user_id TEXT, aviv_password TEXT
+        );
+        CREATE TABLE z_report_902 (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL,
+            z_number INTEGER, amount REAL, transactions INTEGER,
+            avg_per_txn REAL, payment_breakdown TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(branch_id, date)
+        );
+    ''')
+    conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password) "
+                 "VALUES (126, 'Einstein', 'e_u', 'e_p')")
+    conn.commit()
+
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+
+    # Tick-aware filters: ticks 1+2 fail every filters call (simulates Aviv's
+    # 404 window still being closed); tick 3 succeeds. The OUTER tick loop is
+    # what should keep retrying — internal FILTERS_MAX_ATTEMPTS won't bridge
+    # the multi-hour window.
+    tick = {'n': 0}
+
+    def flaky_filters(aviv_bid, token):
+        if tick['n'] < 3:
+            raise RuntimeError('Aviv 404 / window not open yet')
+        return _good_filters()
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', flaky_filters)
+    seen = _spy_run_for_branch(monkeypatch)
+
+    for n in range(1, 5):
+        tick['n'] = n
+        zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
+
+    # Ticks 1, 2, 3 attempt 126 (3x). Tick 4 skips it (row exists).
+    assert seen == [126, 126, 126], \
+        f'missing branch must be retried each tick until it lands; saw {seen}'
+    row = conn.execute("SELECT amount FROM z_report_902 "
+                       "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row is not None and row['amount'] is not None, \
+        'tick 3 should have written a real row for 126'
+
+
+def test_fetched_at_displays_israel_time():
+    """app._utc_str_to_il_iso converts a SQLite UTC string to Israel-local ISO.
+
+    DST-safe via zoneinfo. May 2026 is IDT (UTC+3): 00:30 UTC → 03:30 IL.
+    Winter sample (Jan): UTC+2: 22:15 UTC → 00:15 IL the next day.
+    """
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from app import _utc_str_to_il_iso
+
+    # IDT (UTC+3)
+    assert _utc_str_to_il_iso('2026-05-27 00:30:00') == '2026-05-27T03:30:00'
+    # IST (UTC+2) — winter
+    assert _utc_str_to_il_iso('2026-01-15 22:15:00') == '2026-01-16T00:15:00'
+    # None / empty input
+    assert _utc_str_to_il_iso(None) is None
+    assert _utc_str_to_il_iso('') is None
