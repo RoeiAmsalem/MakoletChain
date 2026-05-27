@@ -25,6 +25,7 @@ import re
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 import urllib3
@@ -36,6 +37,16 @@ log = logging.getLogger(__name__)
 BASE = 'https://bi1.aviv-pos.co.il:8443/avivbi/v2'
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
 Z_REPORT_ID = 902
+
+# The 02:00 IL primary run lives in IL time but the server clock is UTC.
+# date.today() at 02:00 IL == 23:00 UTC = still "yesterday-UTC", so it would
+# resolve "yesterday" to two-days-ago-IL. Always anchor on Israel time.
+IL_TZ = ZoneInfo('Asia/Jerusalem')
+
+
+def _yesterday_il() -> str:
+    """Return yesterday in Israel time as YYYY-MM-DD."""
+    return (datetime.now(IL_TZ).date() - timedelta(days=1)).isoformat()
 
 # Where /sales reads PDF previews from (mirror of app.py's PDF_BASE). Saving 902
 # PDFs here makes the "צפה" preview work on 902 rows identically to Gmail-Z rows.
@@ -54,6 +65,20 @@ USE_CHAIN_AUTH = os.environ.get('AVIV_Z_USE_CHAIN', '').strip().lower() in (
     '1', 'true', 'yes', 'on')
 CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
 CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
+
+# When AVIV_Z_CHAIN_AUTOSEED=1, the chain-mode primary run first calls
+# /account/branches and INSERT OR IGNOREs a minimal branches row for every
+# aviv branch we haven't seen yet (synthetic local id = 9000 + aviv_branch_id,
+# name from the API). This is how the diagnostic widens from 126/127 to the
+# whole chain without a migration. STAGING-only by convention (the flag is
+# only set in /opt/makolet-chain-staging/.env).
+AUTOSEED_CHAIN = os.environ.get('AVIV_Z_CHAIN_AUTOSEED', '').strip().lower() in (
+    '1', 'true', 'yes', 'on')
+
+# Offset for synthetic local branch ids when seeding chain branches we don't
+# already have a row for. Franchise numbers are <200 in practice; 9000+ keeps
+# the synthetic rows well clear of real ones.
+CHAIN_AUTOSEED_LOCAL_ID_OFFSET = 9000
 
 # Mirror successful 902 pulls into daily_sales so the dashboard's existing
 # Z source picks them up. INSERT OR IGNORE — never overwrites a Gmail-Z row
@@ -181,6 +206,75 @@ def _login_chain_account() -> str:
     if not token:
         raise Exception('chain login response missing token')
     return token
+
+
+def fetch_chain_branches(token: str) -> list[dict]:
+    """POST /account/branches → [{id, name}, ...] for the logged-in chain account.
+
+    Returns [] on any non-200 response or unexpected shape — the caller falls
+    back to whatever's already in the local branches table. Names may be in
+    Hebrew.
+    """
+    r = requests.post(f'{BASE}/account/branches', json={},
+                      headers={'Authtoken': token, 'Content-Type': 'application/json'},
+                      timeout=15, verify=False)
+    if r.status_code != 200:
+        log.warning('chain /account/branches non-200: %s body=%r',
+                    r.status_code, r.text[:200])
+        return []
+    try:
+        body = r.json()
+    except Exception as e:
+        log.warning('chain /account/branches non-JSON: %s', e)
+        return []
+    if not isinstance(body, list):
+        log.warning('chain /account/branches unexpected shape: %s',
+                    type(body).__name__)
+        return []
+    out: list[dict] = []
+    for b in body:
+        if not isinstance(b, dict):
+            continue
+        bid = b.get('id')
+        name = b.get('name')
+        if bid is None:
+            continue
+        try:
+            out.append({'id': int(bid), 'name': str(name) if name else f'Aviv #{bid}'})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def autoseed_chain_branches(conn, chain_branches: list[dict]) -> list[int]:
+    """For each chain branch with no existing row in `branches` that has the
+    same aviv_branch_id, INSERT OR IGNORE a synthetic row. Returns the list of
+    local branch ids that were newly seeded.
+
+    Synthetic local id = CHAIN_AUTOSEED_LOCAL_ID_OFFSET + aviv_branch_id.
+    Existing rows (e.g. 126→aviv 3, 127→aviv 8) are detected via aviv_branch_id
+    and skipped — never reassigned.
+    """
+    if not chain_branches:
+        return []
+    existing = {row['aviv_branch_id'] for row in conn.execute(
+        "SELECT aviv_branch_id FROM branches "
+        "WHERE aviv_branch_id IS NOT NULL").fetchall()}
+    seeded: list[int] = []
+    for b in chain_branches:
+        aviv_id = b['id']
+        if aviv_id in existing:
+            continue
+        local_id = CHAIN_AUTOSEED_LOCAL_ID_OFFSET + aviv_id
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO branches (id, name, active, aviv_branch_id) "
+            "VALUES (?, ?, 1, ?)",
+            (local_id, b['name'], aviv_id))
+        if cur.rowcount > 0:
+            seeded.append(local_id)
+    if seeded:
+        conn.commit()
+    return seeded
 
 
 def _refresh(token: str) -> str:
@@ -406,7 +500,7 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
     If chain_token is provided, skip per-branch login and read aviv_branch_id
     from the branches table (chain-account mode).
     """
-    target_date = target_date or (date.today() - timedelta(days=1)).isoformat()
+    target_date = target_date or _yesterday_il()
 
     owns_conn = conn is None
     if owns_conn:
@@ -541,7 +635,7 @@ def run_all_branches(target_date: str | None = None,
     target_date (real Z or closed-day sentinel) are skipped — used by the
     03/04/05 IL backfill passes.
     """
-    target_date = target_date or (date.today() - timedelta(days=1)).isoformat()
+    target_date = target_date or _yesterday_il()
     results: list[dict] = []
     owns_conn = conn is None
     if owns_conn:
@@ -557,12 +651,37 @@ def run_all_branches(target_date: str | None = None,
         # In chain mode: one login + one refresh, reuse the token for all branches.
         chain_token: str | None = None
         if USE_CHAIN_AUTH:
+            # Autoseed must run BEFORE _branch_ids_for_date so newly seeded
+            # branches are included in the iteration list. We need the token
+            # first to call /account/branches.
+            if AUTOSEED_CHAIN:
+                try:
+                    chain_token = _login_chain_account()
+                    chain_token = _refresh(chain_token)
+                    chain_list = fetch_chain_branches(chain_token)
+                    seeded = autoseed_chain_branches(conn, chain_list)
+                    if seeded:
+                        log.info('autoseed: %d new chain branch row(s): %s',
+                                 len(seeded), seeded)
+                    else:
+                        log.info('autoseed: 0 new rows (got %d chain branches '
+                                 'from /account/branches)', len(chain_list))
+                    # Recompute the branch list now that autoseed may have
+                    # added rows.
+                    bids = _branch_ids_for_date(conn, target_date, missing_only,
+                                                chain_mode=True)
+                except Exception as e:
+                    log.error('autoseed failed; falling back to existing '
+                              'branches table: %s', e)
+                    chain_token = None
+
             if not bids:
                 log.info('chain mode: no branches with aviv_branch_id set')
             else:
                 try:
-                    chain_token = _login_chain_account()
-                    chain_token = _refresh(chain_token)
+                    if chain_token is None:
+                        chain_token = _login_chain_account()
+                        chain_token = _refresh(chain_token)
                     log.info('chain auth: 1 login for %d branch(es): %s',
                              len(bids), bids)
                 except Exception as e:

@@ -3212,6 +3212,82 @@ def admin_users():
     return render_template('admin_users.html', **_page_context('admin'))
 
 
+def _z_status_rows(db, target_date):
+    """Build /z-status rows: one per active branch with aviv_branch_id,
+    joined LEFT to z_report_902 for target_date. Sorted by local branch id.
+
+    Derived status values:
+      got      — z_number AND amount NOT NULL
+      closed   — row exists, z_number IS NULL (closed-day sentinel)
+      missing  — no row in z_report_902 for (branch, date)
+      parse    — z_number NOT NULL but amount IS NULL (parse failure edge)
+    """
+    rows = db.execute(
+        "SELECT b.id AS branch_id, b.name AS branch_name, "
+        "       b.aviv_branch_id, "
+        "       z.z_number, z.amount, z.transactions, z.fetched_at "
+        "FROM branches b "
+        "LEFT JOIN z_report_902 z "
+        "  ON z.branch_id = b.id AND z.date = ? "
+        "WHERE b.active = 1 AND b.aviv_branch_id IS NOT NULL "
+        "ORDER BY b.id",
+        (target_date,)
+    ).fetchall()
+    out = []
+    for r in rows:
+        has_row = r['fetched_at'] is not None
+        if not has_row:
+            status = 'missing'
+        elif r['z_number'] is None:
+            status = 'closed'
+        elif r['amount'] is None:
+            status = 'parse'
+        else:
+            status = 'got'
+        out.append({
+            'branch_id': r['branch_id'],
+            'branch_name': r['branch_name'],
+            'aviv_branch_id': r['aviv_branch_id'],
+            'z_number': r['z_number'],
+            'amount': r['amount'],
+            'transactions': r['transactions'],
+            'fetched_at_il': _utc_str_to_il_iso(r['fetched_at']),
+            'status': status,
+        })
+    return out
+
+
+@app.route('/z-status')
+@_admin_required
+def z_status():
+    """Diagnostic page: per-branch Z pull status for a chosen date.
+
+    Read-only — reads only z_report_902 + branches. Default date is
+    yesterday in Israel time (matches the agent's default target).
+    """
+    requested = (request.args.get('date') or '').strip()
+    if requested:
+        try:
+            target_date = datetime.strptime(requested, '%Y-%m-%d').date().isoformat()
+        except ValueError:
+            target_date = (_now_il().date() - timedelta(days=1)).isoformat()
+    else:
+        target_date = (_now_il().date() - timedelta(days=1)).isoformat()
+
+    db = get_db()
+    rows = _z_status_rows(db, target_date)
+
+    summary = {
+        'total': len(rows),
+        'got': sum(1 for r in rows if r['status'] == 'got'),
+        'closed': sum(1 for r in rows if r['status'] == 'closed'),
+        'missing': sum(1 for r in rows if r['status'] == 'missing'),
+        'parse': sum(1 for r in rows if r['status'] == 'parse'),
+    }
+    return render_template('z_status.html', rows=rows, target_date=target_date,
+                           summary=summary, **_page_context('admin'))
+
+
 @app.route('/api/admin/users')
 @_admin_required
 def api_admin_users():
