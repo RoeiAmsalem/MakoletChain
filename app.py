@@ -2851,11 +2851,47 @@ def _admin_required(f):
     return decorated
 
 
+def _collect_chain_stores(db):
+    """Return the list of active chain stores (rows with aviv_branch_id set,
+    excluding HQ/legacy ids) with a needs_setup flag — same shape the
+    /admin/branches enrich-form expects. Lifted out so /ops can render the
+    same dropdown without duplicating the loop.
+    """
+    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
+    excluded = set(EXCLUDED_CHAIN_AVIV_IDS)
+    manager_map = {}
+    for row in db.execute(
+        "SELECT ub.branch_id FROM user_branches ub JOIN users u ON u.id = ub.user_id "
+        "WHERE u.active = 1 AND u.role = 'manager'"
+    ).fetchall():
+        manager_map[row['branch_id']] = manager_map.get(row['branch_id'], 0) + 1
+    stores = []
+    for b in db.execute(
+        'SELECT id, name, city, aviv_branch_id, bilboy_branch_id, '
+        'franchise_supplier FROM branches WHERE active=1 ORDER BY id'
+    ).fetchall():
+        if b['aviv_branch_id'] is None or b['aviv_branch_id'] in excluded:
+            continue
+        has_franchise = bool((b['franchise_supplier'] or '').strip())
+        has_bilboy = b['bilboy_branch_id'] is not None
+        has_manager = manager_map.get(b['id'], 0) > 0
+        needs_setup = not (has_franchise and has_bilboy and has_manager)
+        stores.append({
+            'id': b['id'],
+            'name': b['name'] or f"סניף {b['aviv_branch_id']}",
+            'aviv_branch_id': b['aviv_branch_id'],
+            'city': b['city'] or '',
+            'needs_setup': needs_setup,
+        })
+    return stores
+
+
 @app.route('/ops')
 @_admin_required
 def ops():
     ctx = _page_context('ops')
-    return render_template('ops.html', **ctx)
+    db = get_db()
+    return render_template('ops.html', chain_stores=_collect_chain_stores(db), **ctx)
 
 
 def _to_il_time(utc_str):

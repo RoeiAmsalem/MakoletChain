@@ -182,46 +182,33 @@
     <!-- Add Branch Panel -->
     <div id="branches-panel" style="display:none; margin-bottom:1.5rem;">
         <div class="section-card">
-            <h2>הוספת סניף חדש</h2>
+            <h2>הגדרת סניף</h2>
+            <p style="font-size:0.82rem; color:var(--text-muted); margin-bottom:0.9rem;">
+                הסניפים מתגלים אוטומטית מחשבון הרשת ב-Aviv ומחשבון הרשת ב-BilBoy. בחר סניף קיים מהרשימה והוסף עיר, ספק זיכיון, ומנהל.
+            </p>
             <div class="success-banner" id="branch-success" style="display:none; background:rgba(34,197,94,0.15); border:1px solid rgba(34,197,94,0.3); border-radius:8px; padding:0.75rem 1rem; color:#86efac; font-size:0.9rem; font-weight:600; margin-bottom:1rem;"></div>
             <form id="add-branch-form" onsubmit="return addBranch(event)">
                 <div style="display:flex; flex-direction:column; gap:12px;">
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
-                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם הסניף *</label>
-                        <input type="text" name="name" id="branch-name" required placeholder="לדוגמה: המכולת ד׳יזנגוף" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">סניף *</label>
+                        <select name="branch_id" id="enrich-branch-select" required style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                            <option value="">— בחר סניף מרשימת הרשת —</option>
+                            {% for s in chain_stores %}
+                            <option value="{{ s.id }}">
+                                {{ s.name }} (Aviv #{{ s.aviv_branch_id }}){% if s.needs_setup %} — חסר הגדרה{% else %} — מוגדר{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">עיר</label>
-                        <input type="text" name="city" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
-                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Aviv User ID</label>
-                        <input type="text" name="aviv_user_id" placeholder="לדוגמה: S33834" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
-                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Aviv Password</label>
-                        <input type="text" name="aviv_password" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
-                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">BilBoy Token (JWT)</label>
-                        <textarea name="bilboy_pass" placeholder="הדבק את ה-JWT token מ-BilBoy (מ-localStorage או DevTools)" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem; resize:vertical; min-height:60px;"></textarea>
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
-                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Gmail Label</label>
-                        <input type="text" name="gmail_label" placeholder="המילה הייחודית בנושא מייל ה-Z" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                        <div style="font-size:0.75rem; color:#64748b; margin-top:3px;">Forward one Z-report email from avivpost@avivpos.co.il to makoletdashboard@gmail.com — the unique word in the subject becomes the label</div>
-                    </div>
-                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
-                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">מספר חוזה חשמל (IEC)</label>
-                        <input type="text" name="iec_contract" id="branch-iec-contract" placeholder="לדוגמה: 346412955" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                        <span style="font-size:0.78rem; color:#94a3b8;">* הגדר העברה אוטומטית מ-noreplys@iec.co.il לתיבה שלנו</span>
+                        <input type="text" name="city" placeholder="תל אביב" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
                     </div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">ספק זיכיון</label>
                         <input type="text" name="franchise_supplier" value="זיכיונות המכולת בע&quot;מ" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
-                        <div style="font-size:0.75rem; color:#64748b; margin-top:3px;">This supplier will be automatically filtered out from goods reports</div>
                     </div>
-                    <div style="border-top:1px solid #334155; margin:8px 0 12px; padding-top:12px; font-size:0.8rem; color:#64748b; text-align:center;">— Manager Details (optional) —</div>
+                    <div style="border-top:1px solid #334155; margin:8px 0 12px; padding-top:12px; font-size:0.8rem; color:#64748b; text-align:center;">— פרטי מנהל (אופציונלי — ייצור משתמש חדש או יקשר קיים) —</div>
                     <div style="display:flex; flex-direction:column; gap:0.3rem;">
                         <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם מנהל</label>
                         <input type="text" name="manager_name" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
@@ -231,7 +218,7 @@
                         <input type="email" name="manager_email" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
                     </div>
                     <div style="margin-top:0.5rem;">
-                        <button type="submit" id="submit-branch-btn" style="background:var(--accent); color:white; border:none; border-radius:8px; padding:0.6rem 1.5rem; font-size:0.9rem; font-weight:700; cursor:pointer; font-family:inherit; opacity:0.5; cursor:not-allowed;" disabled>הוסף סניף</button>
+                        <button type="submit" id="submit-branch-btn" style="background:var(--accent); color:white; border:none; border-radius:8px; padding:0.6rem 1.5rem; font-size:0.9rem; font-weight:700; cursor:pointer; font-family:inherit;">שמור הגדרות</button>
                     </div>
                 </div>
             </form>
@@ -315,12 +302,6 @@
       <input id="edit-name" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
       <div><label style="font-size:0.82rem;color:#94a3b8;">City</label>
       <input id="edit-city" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
-      <div><label style="font-size:0.82rem;color:#94a3b8;">Aviv User ID</label>
-      <input id="edit-aviv-user" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
-      <div><label style="font-size:0.82rem;color:#94a3b8;">Aviv Password</label>
-      <input id="edit-aviv-pass" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
-      <div><label style="font-size:0.82rem;color:#94a3b8;">BilBoy Token (JWT)</label>
-      <textarea id="edit-bilboy-token" rows="3" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.82rem;margin-top:4px;resize:vertical;"></textarea></div>
       <div><label style="font-size:0.82rem;color:#94a3b8;">Gmail Label</label>
       <input id="edit-gmail-label" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
       <div><label style="font-size:0.82rem;color:#94a3b8;">IEC Contract Number</label>
@@ -445,7 +426,12 @@ function renderBranches(branches) {
         return;
     }
     grid.innerHTML = branches.map(b => {
-        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_employees', 'aviv_report'].map(agent => {
+        // aviv_employees row dropped — deprecated, replaced by aviv_employees_report
+        // which writes agent='aviv_report' rows. The "Run עובדים" button below
+        // still dispatches as agent='aviv_employees' for the legacy /ops route,
+        // and the server-side handler now translates that to the chain-aware
+        // aviv_employees_report.run_for_branch call.
+        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_report'].map(agent => {
             const a = b.agents[agent];
             if (agent === 'iec' && !b.has_iec_token) {
                 return `<div class="agent-row"><span class="agent-name">IEC</span><span class="agent-msg" style="color:#64748b">לא מוגדר</span><button class="btn-action" style="padding:0.2rem 0.6rem;font-size:0.75rem;" onclick="iecWizard.open(${b.id},'${b.name.replace(/'/g,"\\'")}')">הגדר חשמל</button></div>`;
@@ -720,9 +706,6 @@ async function openEditBranch(branchId) {
     document.getElementById('edit-branch-title').textContent = `Edit Branch — ${b.name}`;
     document.getElementById('edit-name').value = b.name || '';
     document.getElementById('edit-city').value = b.city || '';
-    document.getElementById('edit-aviv-user').value = b.aviv_user_id || '';
-    document.getElementById('edit-aviv-pass').value = b.aviv_password || '';
-    document.getElementById('edit-bilboy-token').value = b.bilboy_pass || '';
     document.getElementById('edit-gmail-label').value = b.gmail_label || '';
     document.getElementById('edit-iec-contract').value = b.iec_contract || '';
     document.getElementById('edit-franchise-supplier').value = b.franchise_supplier || '';
@@ -740,9 +723,6 @@ async function saveEditBranch() {
     const payload = {
         name: document.getElementById('edit-name').value.trim(),
         city: document.getElementById('edit-city').value.trim(),
-        aviv_user_id: document.getElementById('edit-aviv-user').value.trim(),
-        aviv_password: document.getElementById('edit-aviv-pass').value.trim(),
-        bilboy_pass: document.getElementById('edit-bilboy-token').value.trim(),
         gmail_label: document.getElementById('edit-gmail-label').value.trim(),
         iec_contract: document.getElementById('edit-iec-contract').value.trim(),
         franchise_supplier: document.getElementById('edit-franchise-supplier').value.trim(),
@@ -788,7 +768,7 @@ async function addBranch(e) {
     const data = {};
     new FormData(form).forEach((v, k) => { data[k] = v; });
     btn.disabled = true;
-    btn.textContent = 'מוסיף...';
+    btn.textContent = 'שומר...';
     try {
         const resp = await fetch('/api/admin/branches', {
             method: 'POST',
@@ -798,7 +778,7 @@ async function addBranch(e) {
         const result = await resp.json();
         if (result.ok) {
             const banner = document.getElementById('branch-success');
-            let msg = 'סניף #' + result.branch_id + ' נוסף בהצלחה!';
+            let msg = 'סניף #' + result.branch_id + ' עודכן בהצלחה!';
             if (result.temp_password) {
                 msg += ' סיסמה זמנית למנהל: ' + result.temp_password;
             }
@@ -817,20 +797,8 @@ async function addBranch(e) {
         showToast('שגיאה: ' + err.message, 'error');
     } finally {
         btn.disabled = false;
-        btn.textContent = 'הוסף סניף';
+        btn.textContent = 'שמור הגדרות';
     }
-}
-
-// Submit button validation
-const branchNameInput = document.getElementById('branch-name');
-const submitBtn = document.getElementById('submit-branch-btn');
-if (branchNameInput && submitBtn) {
-    branchNameInput.addEventListener('input', function() {
-        const hasValue = this.value.trim().length > 0;
-        submitBtn.disabled = !hasValue;
-        submitBtn.style.opacity = hasValue ? '1' : '0.5';
-        submitBtn.style.cursor = hasValue ? 'pointer' : 'not-allowed';
-    });
 }
 
 // ── IEC Onboarding Wizard ────────────────────────────
