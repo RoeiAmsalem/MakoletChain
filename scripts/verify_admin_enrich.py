@@ -88,7 +88,7 @@ if not admin:
     sys.exit(1)
 with client.session_transaction() as sess:
     sess['user_id'] = admin['id']
-    sess['role'] = 'admin'
+    sess['user_role'] = 'admin'
 
 # 1) Reject when branch_id missing.
 resp = client.post('/api/admin/branches', json={'city': 'X'})
