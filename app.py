@@ -3191,13 +3191,23 @@ def api_ops_health():
         except Exception as e:
             return str(e)
 
-    svc1 = _run("systemctl is-active makolet-chain")
-    svc2 = _run("systemctl is-active makolet-chain-scheduler")
-    disk = _run("df -h /opt/makolet-chain --output=used,size,pcent | tail -1")
+    # Derive project root + service names from this file's location so the
+    # same code reports staging's state on staging and prod's on prod. Prior
+    # version hardcoded /opt/makolet-chain and showed prod data on staging.
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    service_name = os.path.basename(project_root)
+    svc1 = _run(f"systemctl is-active {service_name}")
+    # Staging runs Flask only (no separate scheduler unit per STAGING.md);
+    # mark scheduler as 'n/a' there so the health card doesn't false-error.
+    if service_name.endswith('-staging'):
+        svc2 = 'n/a'
+    else:
+        svc2 = _run(f"systemctl is-active {service_name}-scheduler")
+    disk = _run(f"df -h {project_root} --output=used,size,pcent | tail -1")
     memory = _run("free -m | awk 'NR==2{printf \"%s/%s\", $3, $2}'")
     uptime = _run("uptime -p")
-    deploy_ago = _run("git -C /opt/makolet-chain log -1 --format='%ar'")
-    deploy_msg = _run("git -C /opt/makolet-chain log -1 --format='%s'")
+    deploy_ago = _run(f"git -C {project_root} log -1 --format='%ar'")
+    deploy_msg = _run(f"git -C {project_root} log -1 --format='%s'")
 
     # Parse disk: "3.4G  150G   3%"  →  "3.4G / 150G (3%)"
     disk_pct = 0
@@ -3215,11 +3225,17 @@ def api_ops_health():
         deploy_msg = deploy_msg[:30] + '...'
     last_deploy = f"{deploy_ago} — {deploy_msg}"
 
-    services_ok = svc1 == 'active' and svc2 == 'active'
+    # Only count expected services. Staging has Flask only (svc2='n/a'), so
+    # total=1 — keeps the "X/N פעילים" tile honest across environments.
+    expected = [s for s in (svc1, svc2) if s != 'n/a']
+    services_active = sum(1 for s in expected if s == 'active')
+    services_total = len(expected)
+    services_ok = services_active == services_total
     disk_status = 'ok' if disk_pct < 70 else ('warning' if disk_pct < 90 else 'error')
 
     return jsonify({
-        'services': {'app': svc1, 'scheduler': svc2, 'ok': services_ok},
+        'services': {'app': svc1, 'scheduler': svc2, 'ok': services_ok,
+                     'active': services_active, 'total': services_total},
         'disk': {'raw': disk_display, 'pct': disk_pct, 'status': disk_status},
         'memory': memory,
         'uptime': uptime,

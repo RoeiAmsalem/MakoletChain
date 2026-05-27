@@ -516,8 +516,9 @@ function renderHealth(h) {
     const grid = document.getElementById('health-grid');
     if (!h) { grid.innerHTML = '<span style="color:var(--text-muted)">לא זמין</span>'; return; }
 
-    const svcCount = (h.services.app === 'active' ? 1 : 0) + (h.services.scheduler === 'active' ? 1 : 0);
-    const svcClass = svcCount === 2 ? 'ok' : 'error';
+    const svcActive = h.services.active != null ? h.services.active : ((h.services.app === 'active' ? 1 : 0) + (h.services.scheduler === 'active' ? 1 : 0));
+    const svcTotal = h.services.total != null ? h.services.total : 2;
+    const svcClass = svcActive === svcTotal ? 'ok' : 'error';
 
     const diskClass = h.disk.status;
 
@@ -534,7 +535,7 @@ function renderHealth(h) {
     grid.innerHTML = `
         <div class="health-card">
             <div class="health-label">שירותים</div>
-            <div class="health-value ${svcClass}">${svcCount}/2 פעילים</div>
+            <div class="health-value ${svcClass}">${svcActive}/${svcTotal} פעילים</div>
             <div class="health-sub">${h.uptime || ''}</div>
         </div>
         <div class="health-card">
