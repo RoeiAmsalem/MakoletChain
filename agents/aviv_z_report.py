@@ -422,17 +422,27 @@ def download_pdf(file_url: str, token: str) -> bytes:
 
 # ---- DB upsert ------------------------------------------------------------
 
-def record_closed_day(conn, branch_id: int, target_date: str) -> None:
+def record_closed_day(conn, branch_id: int, target_date: str,
+                      trigger_type: str = 'auto',
+                      auth_source: str | None = None) -> None:
     """Insert a sentinel row (z_number=NULL, amount=NULL) so backfill passes
     later in the night recognize this (branch, date) as resolved-no-data and
     don't re-probe Aviv. INSERT OR IGNORE: never overwrite a real row.
+
+    Metadata is recorded for the sentinel too — /z-status surfaces it the
+    same way it does for real rows.
     """
+    if trigger_type not in TRIGGER_TYPES:
+        trigger_type = 'auto'
+    if auth_source is not None and auth_source not in AUTH_SOURCES:
+        auth_source = None
     conn.execute('''
         INSERT OR IGNORE INTO z_report_902
           (branch_id, date, z_number, amount, transactions, avg_per_txn,
-           payment_breakdown, fetched_at)
-        VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, datetime('now'))
-    ''', (branch_id, target_date))
+           payment_breakdown, fetched_at, trigger_type, auth_source)
+        VALUES (?, ?, NULL, NULL, NULL, NULL, NULL,
+                datetime('now'), ?, ?)
+    ''', (branch_id, target_date, trigger_type, auth_source))
     conn.commit()
 
 
@@ -448,6 +458,12 @@ def _save_z_pdf(branch_id: int, target_date: str, pdf_bytes: bytes) -> str:
     with open(pdf_path, 'wb') as f:
         f.write(pdf_bytes)
     return pdf_path
+
+
+# Allowed enum values for trigger_type / auth_source. Anything else gets
+# rejected at write time so /z-status never has to handle bogus strings.
+TRIGGER_TYPES = ('auto', 'manual')
+AUTH_SOURCES = ('chain', 'per_store')
 
 
 def mirror_to_daily_sales(conn, branch_id: int, target_date: str,
@@ -468,25 +484,39 @@ def mirror_to_daily_sales(conn, branch_id: int, target_date: str,
 
 
 def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
-                    parsed: dict) -> None:
-    """Write to z_report_902 ONLY. Never daily_sales."""
+                    parsed: dict, trigger_type: str = 'auto',
+                    auth_source: str | None = None) -> None:
+    """Write to z_report_902 ONLY. Never daily_sales.
+
+    trigger_type ('auto'/'manual') and auth_source ('chain'/'per_store') are
+    recorded on every write so /z-status can surface provenance accurately.
+    Unknown values are coerced (trigger_type → 'auto', auth_source → NULL)
+    rather than silently propagating bad data into the table.
+    """
+    if trigger_type not in TRIGGER_TYPES:
+        trigger_type = 'auto'
+    if auth_source is not None and auth_source not in AUTH_SOURCES:
+        auth_source = None
     pb = parsed.get('payment_breakdown')
     pb_json = json.dumps(pb, ensure_ascii=False) if pb else None
     conn.execute('''
         INSERT INTO z_report_902
           (branch_id, date, z_number, amount, transactions, avg_per_txn,
-           payment_breakdown, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           payment_breakdown, fetched_at, trigger_type, auth_source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
         ON CONFLICT(branch_id, date) DO UPDATE SET
           z_number=excluded.z_number,
           amount=excluded.amount,
           transactions=excluded.transactions,
           avg_per_txn=excluded.avg_per_txn,
           payment_breakdown=excluded.payment_breakdown,
-          fetched_at=excluded.fetched_at
+          fetched_at=excluded.fetched_at,
+          trigger_type=excluded.trigger_type,
+          auth_source=excluded.auth_source
     ''', (branch_id, target_date, z_number,
           parsed.get('total'), parsed.get('transactions'),
-          parsed.get('avg_per_txn'), pb_json))
+          parsed.get('avg_per_txn'), pb_json,
+          trigger_type, auth_source))
     conn.commit()
 
 
@@ -494,13 +524,17 @@ def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
 
 def run_for_branch(branch_id: int, target_date: str | None = None,
                    conn: sqlite3.Connection | None = None,
-                   chain_token: str | None = None) -> dict:
+                   chain_token: str | None = None,
+                   trigger_type: str = 'auto') -> dict:
     """Fetch + parse + upsert one branch's Z for target_date (default yesterday).
 
     If chain_token is provided, skip per-branch login and read aviv_branch_id
-    from the branches table (chain-account mode).
+    from the branches table (chain-account mode). auth_source is derived
+    here: 'chain' if chain_token was passed in, 'per_store' otherwise.
+    trigger_type is recorded verbatim on the row.
     """
     target_date = target_date or _yesterday_il()
+    auth_source = 'chain' if chain_token is not None else 'per_store'
 
     owns_conn = conn is None
     if owns_conn:
@@ -564,7 +598,9 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
         if not z_number:
             # Filters call succeeded but no Z for this date → store was closed.
             # Mark resolved so 03/04/05 backfill passes skip this branch.
-            record_closed_day(conn, branch_id, target_date)
+            record_closed_day(conn, branch_id, target_date,
+                              trigger_type=trigger_type,
+                              auth_source=auth_source)
             return {'ok': False, 'branch_id': branch_id,
                     'date': target_date, 'error': 'no Z for date'}
 
@@ -583,7 +619,9 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
                     'z_number': z_number, 'error': 'parse failed (no total)'}
 
         _save_z_pdf(branch_id, target_date, pdf_bytes)
-        upsert_z_report(conn, branch_id, target_date, z_number, parsed)
+        upsert_z_report(conn, branch_id, target_date, z_number, parsed,
+                        trigger_type=trigger_type,
+                        auth_source=auth_source)
         log.info('branch=%d date=%s z=%d total=%.2f txns=%s',
                  branch_id, target_date, z_number,
                  parsed['total'], parsed['transactions'])
@@ -628,7 +666,8 @@ def _branch_ids_for_date(conn, target_date: str, missing_only: bool,
 
 def run_all_branches(target_date: str | None = None,
                      missing_only: bool = False,
-                     conn: sqlite3.Connection | None = None) -> list[dict]:
+                     conn: sqlite3.Connection | None = None,
+                     trigger_type: str = 'auto') -> list[dict]:
     """Run every active branch sequentially. One branch's failure never aborts the loop.
 
     With missing_only=True, branches that already have a z_report_902 row for
@@ -694,7 +733,8 @@ def run_all_branches(target_date: str | None = None,
         for bid in bids:
             try:
                 results.append(run_for_branch(bid, target_date, conn=conn,
-                                              chain_token=chain_token))
+                                              chain_token=chain_token,
+                                              trigger_type=trigger_type))
             except Exception as e:
                 log.exception('aviv_z_report failed for branch %d', bid)
                 results.append({'ok': False, 'branch_id': bid,
@@ -719,14 +759,20 @@ if __name__ == '__main__':
     ap.add_argument('--missing-only', action='store_true',
                     help='Only attempt branches missing a row for target_date '
                          '(for hourly backfill passes after the primary 02:00 IL run)')
+    ap.add_argument('--manual', action='store_true',
+                    help="Mark this run as trigger_type='manual' in z_report_902. "
+                         "Default is 'auto' (cron/scheduler invocation).")
     args = ap.parse_args()
 
+    trigger = 'manual' if args.manual else 'auto'
+
     if args.branch_id:
-        out = run_for_branch(args.branch_id, args.date)
+        out = run_for_branch(args.branch_id, args.date, trigger_type=trigger)
         print(out)
         sys.exit(0 if out.get('ok') else 1)
     else:
-        out = run_all_branches(args.date, missing_only=args.missing_only)
+        out = run_all_branches(args.date, missing_only=args.missing_only,
+                               trigger_type=trigger)
         for r in out:
             print(r)
         sys.exit(0 if all(r.get('ok') for r in out) else 1)

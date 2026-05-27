@@ -2,60 +2,175 @@
 {% block title %}סטטוס Z — קופה שקופה{% endblock %}
 {% block head %}
 <style>
-    .z-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
-    .z-header { margin-bottom:1.25rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
-    .z-header h1 { font-size:1.5rem; font-weight:700; margin:0; }
-    .z-date-form { display:inline-flex; align-items:center; gap:0.5rem; }
-    .z-date-form input[type=date] { background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.35rem 0.6rem; color:var(--text-primary); font-size:0.9rem; font-family:inherit; }
-    .z-date-form button { background:var(--accent); border:none; border-radius:6px; padding:0.4rem 0.85rem; color:white; font-size:0.85rem; font-weight:600; cursor:pointer; font-family:inherit; }
-    .z-summary { display:flex; gap:0.6rem; flex-wrap:wrap; margin-bottom:1rem; }
-    .z-summary-pill { display:inline-flex; align-items:center; gap:0.4rem; background:var(--card); border:1px solid var(--card-border); border-radius:999px; padding:0.3rem 0.85rem; font-size:0.82rem; color:var(--text-secondary); }
-    .z-summary-pill strong { color:var(--text-primary); font-weight:700; }
-    .z-table-wrap { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow); }
-    .z-table { width:100%; border-collapse:collapse; font-size:0.88rem; }
-    .z-table th { text-align:right; padding:0.7rem 0.9rem; background:rgba(255,255,255,0.04); color:var(--text-muted); font-weight:600; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid var(--card-border); }
-    .z-table td { padding:0.7rem 0.9rem; border-bottom:1px solid rgba(255,255,255,0.04); color:var(--text-primary); }
-    .z-table tr:last-child td { border-bottom:none; }
-    .z-table tr:hover td { background:rgba(255,255,255,0.02); }
-    .z-table .num { font-variant-numeric:tabular-nums; }
-    .z-table .muted { color:var(--text-muted); }
-    .status-badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.72rem; font-weight:700; }
-    .status-got { background:rgba(34,197,94,0.18); color:#86efac; }
-    .status-closed { background:rgba(148,163,184,0.18); color:#cbd5e1; }
-    .status-missing { background:rgba(239,68,68,0.18); color:#fca5a5; }
-    .status-parse { background:rgba(217,119,6,0.2); color:#fcd34d; }
-    .empty { text-align:center; padding:2rem; color:var(--text-muted); font-style:italic; }
-    .page-note { font-size:0.78rem; color:var(--text-muted); margin-top:0.6rem; font-style:italic; }
+    .zs-wrap { max-width: 1200px; margin: 0 auto; padding: 1.25rem 1rem; }
+
+    .zs-header {
+        display: flex; align-items: flex-end; justify-content: space-between;
+        flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem;
+    }
+    .zs-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin: 0; }
+    .zs-subtitle { font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.2rem; }
+
+    .zs-date-form {
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 10px; padding: 0.35rem 0.55rem;
+    }
+    .zs-date-form label { font-size: 0.78rem; color: var(--text-secondary); }
+    .zs-date-form input[type=date] {
+        background: rgba(0,0,0,0.25); border: 1px solid var(--card-border);
+        border-radius: 6px; padding: 0.32rem 0.55rem;
+        color: var(--text-primary); font-size: 0.85rem; font-family: inherit;
+    }
+    .zs-date-form button {
+        background: var(--accent); border: none; border-radius: 6px;
+        padding: 0.4rem 0.85rem; color: #fff;
+        font-size: 0.82rem; font-weight: 600; cursor: pointer;
+        font-family: inherit; min-height: 32px;
+    }
+    .zs-date-form button:hover { opacity: 0.9; }
+
+    .zs-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.6rem; margin-bottom: 1rem;
+    }
+    .zs-summary-card {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); padding: 0.7rem 0.85rem;
+    }
+    .zs-summary-label {
+        font-size: 0.72rem; color: var(--text-secondary);
+        font-weight: 600; margin-bottom: 0.25rem;
+        text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .zs-summary-value {
+        font-size: 1.4rem; font-weight: 700; color: var(--text-primary);
+        font-variant-numeric: tabular-nums;
+    }
+    .zs-summary-card.got .zs-summary-value { color: var(--profit, #4ade80); }
+    .zs-summary-card.missing .zs-summary-value { color: #fca5a5; }
+    .zs-summary-card.closed .zs-summary-value { color: var(--text-secondary); }
+    .zs-summary-card.parse .zs-summary-value { color: #fcd34d; }
+
+    .zs-table-card {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); overflow: hidden;
+        box-shadow: var(--shadow);
+    }
+    .zs-table-scroll { overflow-x: auto; }
+    .zs-table {
+        width: 100%; border-collapse: collapse;
+        font-size: 0.86rem;
+    }
+    .zs-table thead th {
+        text-align: right; padding: 0.7rem 0.85rem;
+        background: rgba(255,255,255,0.03);
+        color: var(--text-secondary);
+        font-weight: 700; font-size: 0.72rem;
+        text-transform: uppercase; letter-spacing: 0.4px;
+        border-bottom: 1px solid var(--card-border);
+        white-space: nowrap;
+    }
+    .zs-table tbody td {
+        padding: 0.65rem 0.85rem;
+        border-bottom: 1px solid rgba(148,163,184,0.08);
+        color: var(--text-primary);
+    }
+    .zs-table tbody tr:last-child td { border-bottom: none; }
+    .zs-table tbody tr:hover td { background: rgba(255,255,255,0.025); }
+    .zs-table .num { font-variant-numeric: tabular-nums; direction: ltr; text-align: right; }
+    .zs-table .muted { color: var(--text-muted); }
+
+    .zs-branch-name { font-weight: 600; }
+    .zs-branch-id { font-size: 0.72rem; color: var(--text-muted); margin-right: 0.4rem; }
+
+    .zs-pill {
+        display: inline-block; padding: 2px 9px; border-radius: 999px;
+        font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+    }
+    .zs-pill.got { background: rgba(34,197,94,0.18); color: #86efac; }
+    .zs-pill.closed { background: rgba(148,163,184,0.18); color: #cbd5e1; }
+    .zs-pill.missing { background: rgba(239,68,68,0.18); color: #fca5a5; }
+    .zs-pill.parse { background: rgba(217,119,6,0.2); color: #fcd34d; }
+
+    .zs-tag {
+        display: inline-block; padding: 1px 8px; border-radius: 999px;
+        font-size: 0.7rem; font-weight: 600; white-space: nowrap;
+        border: 1px solid var(--card-border);
+        color: var(--text-secondary);
+        background: rgba(255,255,255,0.03);
+    }
+    .zs-tag.auto { color: #93c5fd; border-color: rgba(59,130,246,0.35); background: rgba(59,130,246,0.1); }
+    .zs-tag.manual { color: #c4b5fd; border-color: rgba(139,92,246,0.4); background: rgba(139,92,246,0.1); }
+    .zs-tag.chain { color: #fbcfe8; border-color: rgba(236,72,153,0.35); background: rgba(236,72,153,0.08); }
+    .zs-tag.per_store { color: #fde68a; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.08); }
+    .zs-tag.empty { color: var(--text-muted); border-style: dashed; }
+
+    .zs-footer-note {
+        font-size: 0.76rem; color: var(--text-muted);
+        margin-top: 0.7rem; font-style: italic;
+    }
+
+    .zs-empty {
+        text-align: center; padding: 2.5rem;
+        color: var(--text-muted); font-style: italic;
+    }
+
     @media (max-width: 768px) {
-        .z-container { padding:0.75rem; }
-        .z-header h1 { font-size:1.2rem; }
-        .z-table th, .z-table td { padding:0.5rem 0.55rem; font-size:0.8rem; }
+        .zs-wrap { padding: 0.75rem; }
+        .zs-title { font-size: 1.05rem; }
+        .zs-table { font-size: 0.8rem; }
+        .zs-table thead th, .zs-table tbody td { padding: 0.5rem 0.55rem; }
+        .zs-summary { grid-template-columns: repeat(2, 1fr); }
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="z-container">
-    <div class="z-header">
-        <h1>סטטוס משיכת Z — כל הסניפים</h1>
-        <form class="z-date-form" method="get">
-            <label for="z-date" class="muted">תאריך:</label>
-            <input id="z-date" type="date" name="date" value="{{ target_date }}">
+<div class="zs-wrap">
+    <div class="zs-header">
+        <div>
+            <h1 class="zs-title">סטטוס משיכת Z — כל הסניפים</h1>
+            <div class="zs-subtitle">דיאגנוסטיקה: שעת משיכה בזמן ישראל, מקור אימות וטריגר לכל סניף · {{ target_date }}</div>
+        </div>
+        <form class="zs-date-form" method="get">
+            <label for="zs-date">תאריך:</label>
+            <input id="zs-date" type="date" name="date" value="{{ target_date }}">
             <button type="submit">הצג</button>
         </form>
     </div>
 
-    <div class="z-summary">
-        <span class="z-summary-pill">סה"כ סניפים: <strong>{{ summary.total }}</strong></span>
-        <span class="z-summary-pill">קיבלנו Z: <strong>{{ summary.got }}</strong></span>
-        <span class="z-summary-pill">יום סגור: <strong>{{ summary.closed }}</strong></span>
-        <span class="z-summary-pill">חסר: <strong>{{ summary.missing }}</strong></span>
-        {% if summary.parse %}<span class="z-summary-pill">שגיאת פרסור: <strong>{{ summary.parse }}</strong></span>{% endif %}
+    <div class="zs-summary">
+        <div class="zs-summary-card">
+            <div class="zs-summary-label">סה"כ סניפים</div>
+            <div class="zs-summary-value">{{ summary.total }}</div>
+        </div>
+        <div class="zs-summary-card got">
+            <div class="zs-summary-label">קיבלנו</div>
+            <div class="zs-summary-value">{{ summary.got }}</div>
+        </div>
+        <div class="zs-summary-card closed">
+            <div class="zs-summary-label">סגור</div>
+            <div class="zs-summary-value">{{ summary.closed }}</div>
+        </div>
+        <div class="zs-summary-card missing">
+            <div class="zs-summary-label">חסר</div>
+            <div class="zs-summary-value">{{ summary.missing }}</div>
+        </div>
+        {% if summary.parse %}
+        <div class="zs-summary-card parse">
+            <div class="zs-summary-label">שגיאת פרסור</div>
+            <div class="zs-summary-value">{{ summary.parse }}</div>
+        </div>
+        {% endif %}
     </div>
 
-    <div class="z-table-wrap">
+    <div class="zs-table-card">
         {% if rows %}
-        <table class="z-table">
+        <div class="zs-table-scroll">
+        <table class="zs-table">
             <thead>
                 <tr>
                     <th>סניף</th>
@@ -63,34 +178,50 @@
                     <th>מס' Z</th>
                     <th>סכום</th>
                     <th>עסקאות</th>
-                    <th>נמשך בשעה (IL)</th>
+                    <th>מקור</th>
+                    <th>טריגר</th>
+                    <th>שעת משיכה (IL)</th>
                     <th>סטטוס</th>
                 </tr>
             </thead>
             <tbody>
             {% for r in rows %}
                 <tr>
-                    <td>{{ r.branch_name }} <span class="muted">#{{ r.branch_id }}</span></td>
+                    <td>
+                        <span class="zs-branch-name">{{ r.branch_name }}</span>
+                        <span class="zs-branch-id">#{{ r.branch_id }}</span>
+                    </td>
                     <td class="num muted">{{ r.aviv_branch_id }}</td>
                     <td class="num">{% if r.z_number %}{{ r.z_number }}{% else %}<span class="muted">—</span>{% endif %}</td>
                     <td class="num">{% if r.amount is not none %}₪{{ '{:,.2f}'.format(r.amount) }}{% else %}<span class="muted">—</span>{% endif %}</td>
                     <td class="num">{% if r.transactions is not none %}{{ r.transactions }}{% else %}<span class="muted">—</span>{% endif %}</td>
+                    <td>
+                        {% if r.auth_source == 'chain' %}<span class="zs-tag chain">חשבון רשת</span>
+                        {% elif r.auth_source == 'per_store' %}<span class="zs-tag per_store">לפי סניף</span>
+                        {% else %}<span class="zs-tag empty">—</span>{% endif %}
+                    </td>
+                    <td>
+                        {% if r.trigger_type == 'auto' %}<span class="zs-tag auto">אוטומטי</span>
+                        {% elif r.trigger_type == 'manual' %}<span class="zs-tag manual">ידני</span>
+                        {% else %}<span class="zs-tag empty">—</span>{% endif %}
+                    </td>
                     <td class="num muted">{% if r.fetched_at_il %}{{ r.fetched_at_il.replace('T', ' ') }}{% else %}—{% endif %}</td>
                     <td>
-                        {% if r.status == 'got' %}<span class="status-badge status-got">קיבלנו</span>
-                        {% elif r.status == 'closed' %}<span class="status-badge status-closed">סגור</span>
-                        {% elif r.status == 'parse' %}<span class="status-badge status-parse">שגיאת פרסור</span>
-                        {% else %}<span class="status-badge status-missing">חסר</span>{% endif %}
+                        {% if r.status == 'got' %}<span class="zs-pill got">קיבלנו</span>
+                        {% elif r.status == 'closed' %}<span class="zs-pill closed">סגור</span>
+                        {% elif r.status == 'parse' %}<span class="zs-pill parse">שגיאת פרסור</span>
+                        {% else %}<span class="zs-pill missing">חסר</span>{% endif %}
                     </td>
                 </tr>
             {% endfor %}
             </tbody>
         </table>
+        </div>
         {% else %}
-        <div class="empty">אין סניפים פעילים עם aviv_branch_id מוגדר.</div>
+        <div class="zs-empty">אין סניפים פעילים עם aviv_branch_id מוגדר.</div>
         {% endif %}
     </div>
 
-    <div class="page-note">דיאגנוסטיקה בלבד — קורא z_report_902. שעת המשיכה מוצגת בזמן ישראל.</div>
+    <div class="zs-footer-note">דיאגנוסטיקה בלבד · קורא z_report_902 · שעת המשיכה והסכומים מוצגים בזמן ישראל (DST-safe).</div>
 </div>
 {% endblock %}

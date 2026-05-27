@@ -3225,7 +3225,8 @@ def _z_status_rows(db, target_date):
     rows = db.execute(
         "SELECT b.id AS branch_id, b.name AS branch_name, "
         "       b.aviv_branch_id, "
-        "       z.z_number, z.amount, z.transactions, z.fetched_at "
+        "       z.z_number, z.amount, z.transactions, z.fetched_at, "
+        "       z.trigger_type, z.auth_source "
         "FROM branches b "
         "LEFT JOIN z_report_902 z "
         "  ON z.branch_id = b.id AND z.date = ? "
@@ -3252,6 +3253,8 @@ def _z_status_rows(db, target_date):
             'amount': r['amount'],
             'transactions': r['transactions'],
             'fetched_at_il': _utc_str_to_il_iso(r['fetched_at']),
+            'trigger_type': r['trigger_type'],
+            'auth_source': r['auth_source'],
             'status': status,
         })
     return out
@@ -3284,8 +3287,9 @@ def z_status():
         'missing': sum(1 for r in rows if r['status'] == 'missing'),
         'parse': sum(1 for r in rows if r['status'] == 'parse'),
     }
+    ctx = _page_context('z_status')
     return render_template('z_status.html', rows=rows, target_date=target_date,
-                           summary=summary, **_page_context('admin'))
+                           summary=summary, **ctx)
 
 
 @app.route('/api/admin/users')
