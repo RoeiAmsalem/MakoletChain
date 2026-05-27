@@ -992,8 +992,19 @@ async function loadHourlyHealth() {
     const container = document.getElementById('hourly-health-container');
     try {
         const today = new Date().toISOString().split('T')[0];
-        // Fetch for all active branches (we know 126 and 127)
-        const branches = [126, 127];
+        // Pull the chain-store list straight from /api/ops-status so we don't
+        // hardcode branch ids. Filter to is_chain_store=true (active branches
+        // with aviv_branch_id, HQ/legacy already excluded server-side).
+        const opsResp = await fetch('/api/ops-status');
+        const opsData = await opsResp.json();
+        const branches = (opsData.branches || [])
+            .filter(b => b.is_chain_store)
+            .map(b => b.id)
+            .sort((a, b) => a - b);
+        if (!branches.length) {
+            container.innerHTML = '<div style="color:var(--text-muted);">אין סניפי רשת זמינים</div>';
+            return;
+        }
         const results = await Promise.all(branches.map(bid =>
             fetch(`/api/hourly-health?branch_id=${bid}&date=${today}`).then(r => r.json()).catch(() => null)
         ));
