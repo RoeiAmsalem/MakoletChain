@@ -860,10 +860,10 @@ def test_autoseed_chain_branches_inserts_new_rows_only():
         {'id': 3, 'name': 'איינשטיין'},   # already mapped (126) — skip
         {'id': 8, 'name': 'תיכון'},       # already mapped (127) — skip
         {'id': 1, 'name': 'Branch One'},  # new → local 9001
-        {'id': 900, 'name': 'Big Branch'},  # new → local 9900
+        {'id': 7, 'name': 'Branch Seven'},  # new → local 9007
     ]
     seeded = zr.autoseed_chain_branches(conn, chain)
-    assert sorted(seeded) == [9001, 9900]
+    assert sorted(seeded) == [9001, 9007]
 
     # Existing 126/127 rows untouched.
     assert conn.execute("SELECT name FROM branches WHERE id=126").fetchone()['name'] == 'Einstein'
@@ -874,6 +874,43 @@ def test_autoseed_chain_branches_inserts_new_rows_only():
     assert row9001['name'] == 'Branch One'
     assert row9001['active'] == 1
     assert row9001['aviv_branch_id'] == 1
+
+
+def test_autoseed_excludes_hq_and_legacy_aviv_ids():
+    """aviv_branch_id 90 (HQ) and 900 (legacy) must NEVER be seeded, even when
+    /account/branches returns them. They aren't operating stores."""
+    conn = _autoseed_db()
+    chain = [
+        {'id': 1, 'name': 'Real Branch'},
+        {'id': 90, 'name': 'בשכונה HO'},          # HQ → excluded
+        {'id': 900, 'name': 'שבטי ישראל - ישן'},  # legacy → excluded
+    ]
+    seeded = zr.autoseed_chain_branches(conn, chain)
+    # Only the real branch was inserted; HQ + legacy never get a local row.
+    assert seeded == [9001]
+    # Defense in depth: those aviv ids must not exist in branches AT ALL
+    # afterwards (independent of whether they pre-existed).
+    rows = conn.execute(
+        "SELECT aviv_branch_id FROM branches WHERE aviv_branch_id IN (90, 900)"
+    ).fetchall()
+    assert rows == [], 'HQ/legacy must not be present after autoseed'
+
+
+def test_branch_ids_for_date_excludes_hq_and_legacy(monkeypatch):
+    """If an HQ/legacy row somehow exists, iteration still skips it."""
+    conn = _autoseed_db()
+    # Force-insert an HQ row (simulating a pre-exclusion database).
+    conn.execute("INSERT INTO branches (id, name, active, aviv_branch_id) "
+                 "VALUES (9090, 'HQ', 1, 90)")
+    conn.execute("INSERT INTO branches (id, name, active, aviv_branch_id) "
+                 "VALUES (9900, 'Legacy', 1, 900)")
+    conn.commit()
+    bids = zr._branch_ids_for_date(conn, '2026-05-20', missing_only=False,
+                                   chain_mode=True)
+    assert 9090 not in bids
+    assert 9900 not in bids
+    # The legitimately mapped 126/127 still come through.
+    assert 126 in bids and 127 in bids
 
 
 def test_autoseed_is_idempotent():
@@ -896,7 +933,10 @@ def test_run_all_branches_autoseed_widens_iteration(monkeypatch, sample_pdf_byte
         {'id': 3, 'name': 'איינשטיין'},
         {'id': 8, 'name': 'תיכון'},
         {'id': 1, 'name': 'Branch One'},
-        {'id': 900, 'name': 'Big Branch'},
+        {'id': 7, 'name': 'Branch Seven'},
+        # HQ (90) + legacy (900) present in chain list but must NOT be iterated.
+        {'id': 90, 'name': 'בשכונה HO'},
+        {'id': 900, 'name': 'שבטי ישראל - ישן'},
     ])
     monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
     monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'u')
@@ -905,9 +945,10 @@ def test_run_all_branches_autoseed_widens_iteration(monkeypatch, sample_pdf_byte
 
     seen = _spy_run_for_branch(monkeypatch)
     zr.run_all_branches('2026-05-20', conn=conn)
-    # All four branches (existing 126/127 + autoseeded 9001/9900) attempted.
-    assert sorted(seen) == [126, 127, 9001, 9900], \
-        f'autoseed should widen iteration to the full chain; saw {seen}'
+    # Existing 126/127 + the two non-excluded autoseeds (9001, 9007).
+    # The HQ/legacy entries are silently dropped by EXCLUDED_CHAIN_AVIV_IDS.
+    assert sorted(seen) == [126, 127, 9001, 9007], \
+        f'autoseed must skip HQ/legacy aviv ids; saw {seen}'
 
 
 def test_yesterday_il_anchors_on_israel_time_not_utc(monkeypatch):

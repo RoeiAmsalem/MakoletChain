@@ -3222,6 +3222,11 @@ def _z_status_rows(db, target_date):
       missing  — no row in z_report_902 for (branch, date)
       parse    — z_number NOT NULL but amount IS NULL (parse failure edge)
     """
+    # Non-store chain entries (HQ, legacy) must never show on /z-status. The
+    # agent's EXCLUDED_CHAIN_AVIV_IDS is the source of truth; mirror it here so
+    # a stray seeded row can't sneak back into the diagnostic.
+    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
+    exclude_csv = ','.join(str(x) for x in sorted(EXCLUDED_CHAIN_AVIV_IDS)) or 'NULL'
     rows = db.execute(
         "SELECT b.id AS branch_id, b.name AS branch_name, "
         "       b.aviv_branch_id, "
@@ -3231,6 +3236,7 @@ def _z_status_rows(db, target_date):
         "LEFT JOIN z_report_902 z "
         "  ON z.branch_id = b.id AND z.date = ? "
         "WHERE b.active = 1 AND b.aviv_branch_id IS NOT NULL "
+        f"  AND b.aviv_branch_id NOT IN ({exclude_csv}) "
         "ORDER BY b.id",
         (target_date,)
     ).fetchall()

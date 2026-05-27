@@ -80,6 +80,13 @@ AUTOSEED_CHAIN = os.environ.get('AVIV_Z_CHAIN_AUTOSEED', '').strip().lower() in 
 # the synthetic rows well clear of real ones.
 CHAIN_AUTOSEED_LOCAL_ID_OFFSET = 9000
 
+# Chain branches returned by /account/branches that are NOT operating stores
+# and must never be seeded, iterated, or shown on /z-status. Source of truth
+# lives here so a future autoseed run cannot silently re-add them.
+#   90  → 'בשכונה HO'         (chain headquarters)
+#   900 → 'שבטי ישראל - ישן' (legacy/decommissioned store)
+EXCLUDED_CHAIN_AVIV_IDS: set[int] = {90, 900}
+
 # Mirror successful 902 pulls into daily_sales so the dashboard's existing
 # Z source picks them up. INSERT OR IGNORE — never overwrites a Gmail-Z row
 # or a previously-mirrored row. Closed-day sentinels do NOT mirror.
@@ -263,6 +270,9 @@ def autoseed_chain_branches(conn, chain_branches: list[dict]) -> list[int]:
     seeded: list[int] = []
     for b in chain_branches:
         aviv_id = b['id']
+        if aviv_id in EXCLUDED_CHAIN_AVIV_IDS:
+            # HQ / legacy / non-store chain entries — never seed.
+            continue
         if aviv_id in existing:
             continue
         local_id = CHAIN_AUTOSEED_LOCAL_ID_OFFSET + aviv_id
@@ -652,6 +662,12 @@ def _branch_ids_for_date(conn, target_date: str, missing_only: bool,
     """
     where = ('aviv_branch_id IS NOT NULL' if chain_mode
              else 'aviv_user_id IS NOT NULL')
+    # Belt-and-suspenders: even if migration 014 was skipped or someone
+    # re-seeded HQ/legacy by hand, filter them out at iteration time too.
+    # Only applicable in chain_mode — per-store dbs may not have the column.
+    if chain_mode and EXCLUDED_CHAIN_AVIV_IDS:
+        exclude_csv = ','.join(str(x) for x in sorted(EXCLUDED_CHAIN_AVIV_IDS))
+        where += f' AND aviv_branch_id NOT IN ({exclude_csv})'
     all_branches = [r['id'] for r in conn.execute(
         f'SELECT id FROM branches WHERE active=1 AND {where} ORDER BY id'
     ).fetchall()]
