@@ -817,6 +817,117 @@ def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
         'tick 3 should have written a real row for 126'
 
 
+def _autoseed_db():
+    """In-memory DB whose branches table has the chain-mode columns the
+    autoseed path needs (id, name, active, aviv_branch_id)."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER DEFAULT 1,
+            aviv_user_id TEXT, aviv_password TEXT, aviv_branch_id INTEGER
+        );
+        CREATE TABLE z_report_902 (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL,
+            z_number INTEGER, amount REAL, transactions INTEGER,
+            avg_per_txn REAL, payment_breakdown TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(branch_id, date)
+        );
+    ''')
+    # Existing mappings: 126 → aviv 3, 127 → aviv 8.
+    conn.execute("INSERT INTO branches (id, name, aviv_branch_id) "
+                 "VALUES (126, 'Einstein', 3)")
+    conn.execute("INSERT INTO branches (id, name, aviv_branch_id) "
+                 "VALUES (127, 'Tichon', 8)")
+    conn.commit()
+    return conn
+
+
+def test_autoseed_chain_branches_inserts_new_rows_only():
+    """Existing aviv_branch_id mappings are preserved; missing ones get
+    synthetic rows at id=9000+aviv_branch_id with the API-provided name."""
+    conn = _autoseed_db()
+    chain = [
+        {'id': 3, 'name': 'איינשטיין'},   # already mapped (126) — skip
+        {'id': 8, 'name': 'תיכון'},       # already mapped (127) — skip
+        {'id': 1, 'name': 'Branch One'},  # new → local 9001
+        {'id': 900, 'name': 'Big Branch'},  # new → local 9900
+    ]
+    seeded = zr.autoseed_chain_branches(conn, chain)
+    assert sorted(seeded) == [9001, 9900]
+
+    # Existing 126/127 rows untouched.
+    assert conn.execute("SELECT name FROM branches WHERE id=126").fetchone()['name'] == 'Einstein'
+
+    # New synthetic rows present with the API name and active=1.
+    row9001 = conn.execute("SELECT name, active, aviv_branch_id "
+                           "FROM branches WHERE id=9001").fetchone()
+    assert row9001['name'] == 'Branch One'
+    assert row9001['active'] == 1
+    assert row9001['aviv_branch_id'] == 1
+
+
+def test_autoseed_is_idempotent():
+    """Re-running autoseed with the same chain list adds zero rows."""
+    conn = _autoseed_db()
+    chain = [{'id': 7, 'name': 'Seven'}]
+    assert zr.autoseed_chain_branches(conn, chain) == [9007]
+    assert zr.autoseed_chain_branches(conn, chain) == []
+
+
+def test_run_all_branches_autoseed_widens_iteration(monkeypatch, sample_pdf_bytes):
+    """USE_CHAIN_AUTH + AUTOSEED_CHAIN: agent fetches chain list, seeds missing
+    rows, and run_for_branch fires for the newly seeded local ids too."""
+    conn = _autoseed_db()
+    monkeypatch.setattr(zr, 'USE_CHAIN_AUTH', True)
+    monkeypatch.setattr(zr, 'AUTOSEED_CHAIN', True)
+    monkeypatch.setattr(zr, '_login_chain_account', lambda: 'CHAIN_TOK')
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'fetch_chain_branches', lambda t: [
+        {'id': 3, 'name': 'איינשטיין'},
+        {'id': 8, 'name': 'תיכון'},
+        {'id': 1, 'name': 'Branch One'},
+        {'id': 900, 'name': 'Big Branch'},
+    ])
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+    monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'u')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    seen = _spy_run_for_branch(monkeypatch)
+    zr.run_all_branches('2026-05-20', conn=conn)
+    # All four branches (existing 126/127 + autoseeded 9001/9900) attempted.
+    assert sorted(seen) == [126, 127, 9001, 9900], \
+        f'autoseed should widen iteration to the full chain; saw {seen}'
+
+
+def test_yesterday_il_anchors_on_israel_time_not_utc(monkeypatch):
+    """At 23:00 UTC = 02:00 IL the next day, "yesterday" must be yesterday-IL,
+    not 2-days-ago-IL.
+
+    UTC: 2026-05-27 23:00  →  IL: 2026-05-28 02:00 (IDT, UTC+3).
+    The agent fires from cron at 02:00 IL — so yesterday should be 2026-05-27,
+    not 2026-05-26 (which is what UTC's date.today()-1 would have returned).
+    """
+    import agents.aviv_z_report as _zr_mod
+    from datetime import datetime as _real_dt, timezone as _tz
+
+    class _FrozenDT(_real_dt):
+        @classmethod
+        def now(cls, tz=None):
+            # 23:00 UTC on 2026-05-27 — UTC clock still says "today=27"
+            # but Israel is already 02:00 on 2026-05-28.
+            utc = _real_dt(2026, 5, 27, 23, 0, 0, tzinfo=_tz.utc)
+            if tz is None:
+                return utc.replace(tzinfo=None)
+            return utc.astimezone(tz)
+
+    monkeypatch.setattr(_zr_mod, 'datetime', _FrozenDT)
+    assert _zr_mod._yesterday_il() == '2026-05-27', \
+        'yesterday-IL at 02:00 IL is the IL calendar date one before — not two before'
+
+
 def test_fetched_at_displays_israel_time():
     """app._utc_str_to_il_iso converts a SQLite UTC string to Israel-local ISO.
 
