@@ -539,7 +539,8 @@ def run_all_branches(target_date: str | None = None,
 
     With missing_only=True, branches that already have a z_report_902 row for
     target_date (real Z or closed-day sentinel) are skipped — used by the
-    03/04/05 IL backfill passes.
+    30-minute interval backfill ticks (~05:00–12:00 IL) so each branch is
+    retried until it lands and resolved branches stop being re-probed.
     """
     target_date = target_date or (date.today() - timedelta(days=1)).isoformat()
     results: list[dict] = []
