@@ -34,7 +34,7 @@ def client():
     cols = [r[1] for r in conn.execute("PRAGMA table_info(branches)").fetchall()]
     if 'aviv_branch_id' not in cols:
         conn.execute("ALTER TABLE branches ADD COLUMN aviv_branch_id INTEGER")
-    # Ensure z_report_902 table exists (migration 010).
+    # Ensure z_report_902 table exists (migrations 010 + 013).
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS z_report_902 (
             branch_id INTEGER NOT NULL,
@@ -45,6 +45,8 @@ def client():
             avg_per_txn REAL,
             payment_breakdown TEXT,
             fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+            trigger_type TEXT,
+            auth_source TEXT,
             UNIQUE(branch_id, date)
         );
     ''')
@@ -84,12 +86,14 @@ def _login(client, email='admin@test.com', password='test123'):
 
 
 def _seed_z(branch_id, target_date, z_number=None, amount=None, transactions=None,
-            fetched_at='2026-05-27 23:00:00'):
+            fetched_at='2026-05-27 23:00:00', trigger_type=None, auth_source=None):
     conn = sqlite3.connect(TEST_DB, timeout=30)
     conn.execute(
         "INSERT INTO z_report_902 (branch_id, date, z_number, amount, "
-        "transactions, fetched_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (branch_id, target_date, z_number, amount, transactions, fetched_at))
+        "transactions, fetched_at, trigger_type, auth_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (branch_id, target_date, z_number, amount, transactions, fetched_at,
+         trigger_type, auth_source))
     conn.commit()
     conn.close()
 
@@ -134,10 +138,10 @@ def test_status_derivation_got_closed_missing(client):
     assert res.status_code == 200
     html = res.get_data(as_text=True)
 
-    # Got, closed, and missing badges all present.
-    assert 'status-got' in html and 'קיבלנו' in html
-    assert 'status-closed' in html and 'סגור' in html
-    assert 'status-missing' in html and 'חסר' in html
+    # Got, closed, and missing badges all present (CSS class + Hebrew label).
+    assert 'zs-pill got' in html and 'קיבלנו' in html
+    assert 'zs-pill closed' in html and 'סגור' in html
+    assert 'zs-pill missing' in html and 'חסר' in html
 
     # Amount formatted with thousands separator + ₪.
     assert '₪13,721.98' in html
@@ -164,6 +168,52 @@ def test_invalid_date_falls_back_to_yesterday(client):
     _login(client)
     res = client.get('/z-status?date=not-a-date')
     assert res.status_code == 200
+
+
+def test_metadata_columns_render_with_correct_tags(client):
+    """trigger_type + auth_source map to the labeled tags in the table."""
+    _login(client)
+    date_str = '2026-05-26'
+    # Auto + chain (typical 02:00 IL run via chain account).
+    _seed_z(126, date_str, z_number=2525, amount=100.0, transactions=1,
+            trigger_type='auto', auth_source='chain')
+    # Manual + per_store (an admin doing a one-off probe from CLI without chain).
+    _seed_z(127, date_str, z_number=1318, amount=200.0, transactions=2,
+            trigger_type='manual', auth_source='per_store')
+    # Pre-migration row: NULL metadata → renders the dashed "—" tag.
+    _seed_z(9001, date_str, z_number=1, amount=50.0, transactions=1,
+            trigger_type=None, auth_source=None)
+
+    res = client.get(f'/z-status?date={date_str}')
+    html = res.get_data(as_text=True)
+
+    # Hebrew labels for each enum value present.
+    assert 'אוטומטי' in html
+    assert 'ידני' in html
+    assert 'חשבון רשת' in html
+    assert 'לפי סניף' in html
+    # All four enum-tag CSS classes used.
+    for cls in ('zs-tag auto', 'zs-tag manual', 'zs-tag chain', 'zs-tag per_store'):
+        assert cls in html, f'missing tag class: {cls}'
+    # Pre-migration row's NULL metadata renders the "empty" placeholder tag.
+    assert 'zs-tag empty' in html
+
+
+def test_nav_link_visible_for_admin(client):
+    """Admin sees the סטטוס Z nav entry in base.html."""
+    _login(client)
+    res = client.get('/')
+    html = res.get_data(as_text=True)
+    assert 'href="/z-status"' in html
+    assert 'סטטוס Z' in html
+
+
+def test_nav_link_hidden_for_manager(client):
+    """Non-admin (manager) does NOT see the סטטוס Z nav entry."""
+    _login(client, 'mgr@test.com')
+    res = client.get('/')
+    html = res.get_data(as_text=True)
+    assert 'href="/z-status"' not in html
 
 
 def test_fetched_at_displayed_in_il_time(client):

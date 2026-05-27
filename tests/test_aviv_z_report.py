@@ -59,6 +59,8 @@ def staging_db():
             avg_per_txn REAL,
             payment_breakdown TEXT,
             fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT,
+            auth_source TEXT,
             UNIQUE(branch_id, date)
         );
     ''')
@@ -417,6 +419,8 @@ def _multi_branch_db():
             z_number INTEGER, amount REAL, transactions INTEGER,
             avg_per_txn REAL, payment_breakdown TEXT,
             fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT,
+            auth_source TEXT,
             UNIQUE(branch_id, date)
         );
     ''')
@@ -781,6 +785,8 @@ def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
             z_number INTEGER, amount REAL, transactions INTEGER,
             avg_per_txn REAL, payment_breakdown TEXT,
             fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT,
+            auth_source TEXT,
             UNIQUE(branch_id, date)
         );
     ''')
@@ -832,6 +838,8 @@ def _autoseed_db():
             z_number INTEGER, amount REAL, transactions INTEGER,
             avg_per_txn REAL, payment_breakdown TEXT,
             fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT,
+            auth_source TEXT,
             UNIQUE(branch_id, date)
         );
     ''')
@@ -926,6 +934,97 @@ def test_yesterday_il_anchors_on_israel_time_not_utc(monkeypatch):
     monkeypatch.setattr(_zr_mod, 'datetime', _FrozenDT)
     assert _zr_mod._yesterday_il() == '2026-05-27', \
         'yesterday-IL at 02:00 IL is the IL calendar date one before — not two before'
+
+
+# ── pull metadata (trigger_type + auth_source) ────────────────────────────
+
+def test_upsert_records_auto_chain_metadata(staging_db, sample_pdf_bytes):
+    """Default auto + chain (token passed) → row stores ('auto','chain')."""
+    parsed = zr.parse_902_pdf(sample_pdf_bytes)
+    zr.upsert_z_report(staging_db, 126, '2026-05-20', 2525, parsed,
+                       trigger_type='auto', auth_source='chain')
+    row = staging_db.execute(
+        "SELECT trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['trigger_type'] == 'auto'
+    assert row['auth_source'] == 'chain'
+
+
+def test_upsert_records_manual_per_store_metadata(staging_db, sample_pdf_bytes):
+    """Manual CLI invocation without chain token → ('manual','per_store')."""
+    parsed = zr.parse_902_pdf(sample_pdf_bytes)
+    zr.upsert_z_report(staging_db, 126, '2026-05-20', 2525, parsed,
+                       trigger_type='manual', auth_source='per_store')
+    row = staging_db.execute(
+        "SELECT trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['trigger_type'] == 'manual'
+    assert row['auth_source'] == 'per_store'
+
+
+def test_upsert_coerces_unknown_trigger_to_auto(staging_db, sample_pdf_bytes):
+    """Bogus trigger_type values are coerced to 'auto' so /z-status only ever
+    sees the documented enum."""
+    parsed = zr.parse_902_pdf(sample_pdf_bytes)
+    zr.upsert_z_report(staging_db, 126, '2026-05-20', 2525, parsed,
+                       trigger_type='garbage', auth_source='also_garbage')
+    row = staging_db.execute(
+        "SELECT trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['trigger_type'] == 'auto'
+    assert row['auth_source'] is None
+
+
+def test_closed_day_sentinel_records_metadata():
+    """Closed-day sentinel rows also carry trigger_type + auth_source so
+    /z-status can tell that an admin manually probed and confirmed the day
+    was closed."""
+    conn = _multi_branch_db()
+    zr.record_closed_day(conn, 126, '2026-05-20',
+                         trigger_type='manual', auth_source='chain')
+    row = conn.execute(
+        "SELECT z_number, trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['z_number'] is None  # sentinel
+    assert row['trigger_type'] == 'manual'
+    assert row['auth_source'] == 'chain'
+
+
+def test_run_for_branch_chain_token_implies_auth_source_chain(
+        monkeypatch, staging_db, sample_pdf_bytes):
+    """When chain_token is provided, the row's auth_source MUST be 'chain'
+    regardless of how trigger_type is set."""
+    staging_db.execute("ALTER TABLE branches ADD COLUMN aviv_branch_id INTEGER")
+    staging_db.execute("UPDATE branches SET aviv_branch_id=3 WHERE id=126")
+    staging_db.commit()
+
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: _good_filters())
+    monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'u')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    zr.run_for_branch(126, '2026-05-20', conn=staging_db,
+                      chain_token='CHAIN_TOK', trigger_type='manual')
+    row = staging_db.execute(
+        "SELECT trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['trigger_type'] == 'manual'
+    assert row['auth_source'] == 'chain'
+
+
+def test_run_for_branch_no_chain_token_implies_per_store(
+        monkeypatch, staging_db, sample_pdf_bytes):
+    """No chain_token → auth_source='per_store'."""
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
+
+    zr.run_for_branch(126, '2026-05-20', conn=staging_db, trigger_type='auto')
+    row = staging_db.execute(
+        "SELECT trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['trigger_type'] == 'auto'
+    assert row['auth_source'] == 'per_store'
 
 
 def test_fetched_at_displays_israel_time():
