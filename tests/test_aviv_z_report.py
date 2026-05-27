@@ -33,6 +33,17 @@ def _isolate_pdf_base(monkeypatch, tmp_path):
     monkeypatch.setattr(zr, 'PDF_BASE', str(tmp_path / '_default_pdfs'))
 
 
+@pytest.fixture(autouse=True)
+def _stub_possible_values_empty_by_default(monkeypatch):
+    """fetch_902_z_list now tries the possible-values endpoint first. In
+    tests we don't want real HTTP traffic, so default it to "no entries"
+    which makes the wrapper fall back to fetch_902_filters. Tests that want
+    to exercise the possible-values path explicitly override this stub.
+    """
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values',
+                        lambda b, t: [])
+
+
 @pytest.fixture
 def staging_db():
     """In-memory DB with migration 010's schema + a minimal branches row."""
@@ -243,6 +254,111 @@ def _good_filters():
         {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]}
 
 
+# Shape captured from the live probe of /reports/filters/902/possible-values
+# for branch 1: a flat list of single-key dicts {<z_number_str>: "Z: <z>|DD/MM/YYYY"}.
+def _branch_1_possible_values_body():
+    return [
+        {"3036": "Z: 3036|26/05/2026"},
+        {"3035": "Z: 3035|25/05/2026"},
+        {"3034": "Z: 3034|24/05/2026"},
+    ]
+
+
+def test_possible_values_endpoint_parses_branch_1_z_3036(monkeypatch):
+    """The captured possible-values body for branch 1 must:
+       (a) parse via _iter_z_entries with the existing logic, and
+       (b) resolve Z 3036 for target_date='2026-05-26'.
+
+    This was the missing piece — branch 1's main filters/902 returns
+    possibleValues=null under chain auth, so without this endpoint there's
+    no way to find Z 3036."""
+    body = _branch_1_possible_values_body()
+    entries = zr._iter_z_entries(body)
+    assert {'z_number': 3036, 'date': '2026-05-26'} in entries
+    # resolve_z_for_date picks the Z that matches the date we ask for.
+    assert zr.resolve_z_for_date(body, '2026-05-26') == 3036
+    # And it returns None for a date not in the list.
+    assert zr.resolve_z_for_date(body, '2026-05-27') is None
+
+
+def test_fetch_902_z_list_prefers_possible_values_when_populated(monkeypatch):
+    """fetch_902_z_list returns the possible-values body when it has entries —
+    fetch_902_filters must NOT be called at all in that path."""
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values',
+                        lambda b, t: _branch_1_possible_values_body())
+    def boom(b, t):
+        raise AssertionError(
+            'fetch_902_filters must not be called when possible-values has entries')
+    monkeypatch.setattr(zr, 'fetch_902_filters', boom)
+
+    body = zr.fetch_902_z_list(1, 'TOK')
+    assert zr.resolve_z_for_date(body, '2026-05-26') == 3036
+
+
+def test_fetch_902_z_list_falls_back_when_possible_values_empty(monkeypatch):
+    """possible-values returns [] (no entries) → fall back to filters/902."""
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values', lambda b, t: [])
+    called = {'filters': 0}
+    def filters_stub(b, t):
+        called['filters'] += 1
+        return _good_filters()
+    monkeypatch.setattr(zr, 'fetch_902_filters', filters_stub)
+
+    body = zr.fetch_902_z_list(126, 'TOK')
+    assert called['filters'] == 1, 'fallback to filters/902 must fire on empty'
+    assert zr.resolve_z_for_date(body, '2026-05-20') == 2525
+
+
+def test_fetch_902_z_list_falls_back_when_possible_values_raises(monkeypatch):
+    """Non-200 / transport error on possible-values → fall back, not crash."""
+    def boom(b, t):
+        raise RuntimeError('simulated 500 from possible-values')
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values', boom)
+    called = {'filters': 0}
+    def filters_stub(b, t):
+        called['filters'] += 1
+        return _good_filters()
+    monkeypatch.setattr(zr, 'fetch_902_filters', filters_stub)
+
+    body = zr.fetch_902_z_list(126, 'TOK')
+    assert called['filters'] == 1
+    assert zr.resolve_z_for_date(body, '2026-05-20') == 2525
+
+
+def test_fetch_902_z_list_propagates_auth_expired(monkeypatch):
+    """AuthExpired from possible-values must propagate so run_for_branch's
+    re-auth retry kicks in (and is not silently swallowed by the fallback)."""
+    def auth_expired(b, t):
+        raise zr.AuthExpired('possible-values 401')
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values', auth_expired)
+    # If fallback were reached, this would prove it (we don't want that).
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: (_ for _ in ()).throw(
+                            AssertionError('fallback must not run on 401')))
+
+    with pytest.raises(zr.AuthExpired):
+        zr.fetch_902_z_list(1, 'TOK')
+
+
+def test_run_for_branch_uses_possible_values_for_lazy_branch(
+        monkeypatch, staging_db, sample_pdf_bytes):
+    """End-to-end: when possible-values returns branch 1's Z list, the full
+    pipeline lands Z 3036 in z_report_902 — filters/902 is never called."""
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values',
+                        lambda b, t: _branch_1_possible_values_body())
+    def boom(b, t):
+        raise AssertionError('fetch_902_filters must not be hit in the lazy path')
+    monkeypatch.setattr(zr, 'fetch_902_filters', boom)
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+
+    # Re-point branch 126 in staging_db to aviv 1 for the test (the agent
+    # reads aviv creds + writes to local branch_id 126 here).
+    result = zr.run_for_branch(126, '2026-05-26', conn=staging_db)
+    assert result['ok'] is True
+    assert result['z_number'] == 3036
+    assert result['total'] == 13721.98  # from the parsed sample fixture PDF
+
+
 def _stub_success_path(monkeypatch, sample_pdf_bytes):
     """Stub everything downstream of fetch_902_filters so happy path runs."""
     monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
@@ -306,7 +422,7 @@ def test_filters_902_gives_up_after_max_retries(monkeypatch, staging_db,
     result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
     assert result['ok'] is False
     assert result['branch_id'] == 126
-    assert 'filters/902 failed' in result['error']
+    assert 'Z-list fetch failed' in result['error']
     assert calls['n'] == zr.FILTERS_MAX_ATTEMPTS
     # nothing written to z_report_902
     assert staging_db.execute(
@@ -383,7 +499,7 @@ def test_one_branch_failure_doesnt_block_others(monkeypatch, staging_db,
     ]
 
     assert results[0]['ok'] is False
-    assert 'filters/902 failed' in results[0]['error']
+    assert 'Z-list fetch failed' in results[0]['error']
     assert results[1]['ok'] is True
     assert results[1]['total'] == 13721.98
     # Only branch 127's row should be written.

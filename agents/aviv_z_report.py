@@ -297,13 +297,66 @@ def _refresh(token: str) -> str:
 
 
 def fetch_902_filters(aviv_branch_id: int, token: str) -> dict:
-    """GET /reports/filters/902?branch=X → raw JSON (contains Z list)."""
+    """GET /reports/filters/902?branch=X → raw JSON.
+
+    For eager branches (e.g. 8, 127) this body contains the full Z list under
+    ID_Z.possibleValues. For lazy branches (e.g. 1) possibleValues is null and
+    we have to go to the possible-values endpoint instead. Kept as the
+    fallback path; the primary read is now fetch_902_z_list().
+    """
     url = f'{BASE}/reports/filters/{Z_REPORT_ID}?branch={aviv_branch_id}'
     r = requests.get(url, headers={'Authtoken': token}, timeout=30, verify=False)
     if r.status_code == 401:
         raise AuthExpired('filters/902 401')
     r.raise_for_status()
     return r.json()
+
+
+def fetch_902_id_z_possible_values(aviv_branch_id: int, token: str) -> list:
+    """GET /reports/filters/902/possible-values?filter=ID_Z&branch=X → Z list.
+
+    This is the endpoint the BI web UI uses to populate the Z dropdown. It
+    works under chain auth for EVERY branch — including branches like 1
+    whose main /reports/filters/902 returns ID_Z.possibleValues=null. Body
+    shape is a flat list of single-key dicts: [{"<z>": "Z: <z>|DD/MM/YYYY"}, ...]
+    which _iter_z_entries already handles.
+    """
+    url = (f'{BASE}/reports/filters/{Z_REPORT_ID}/possible-values'
+           f'?filter=ID_Z&branch={aviv_branch_id}')
+    r = requests.get(url, headers={'Authtoken': token}, timeout=30, verify=False)
+    if r.status_code == 401:
+        raise AuthExpired('filters/902/possible-values 401')
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_902_z_list(aviv_branch_id: int, token: str):
+    """Return a JSON body resolve_z_for_date can iterate.
+
+    Tries the possible-values endpoint first (works for every chain branch).
+    If it 200s with at least one Z entry, that body is returned. If it fails
+    (non-200, transport error, empty list, parse error), falls back to the
+    legacy /reports/filters/902 read so eager branches keep working even if
+    the new endpoint regresses.
+
+    AuthExpired is allowed to propagate so run_for_branch's re-auth retry
+    still works against the new endpoint.
+    """
+    try:
+        body = fetch_902_id_z_possible_values(aviv_branch_id, token)
+        if _iter_z_entries(body):
+            log.info('branch_aviv=%d Z-list via possible-values',
+                     aviv_branch_id)
+            return body
+        log.info('branch_aviv=%d possible-values returned no Z entries, '
+                 'falling back to filters/902', aviv_branch_id)
+    except AuthExpired:
+        raise
+    except Exception as e:
+        log.warning('branch_aviv=%d possible-values failed (%s) — '
+                    'falling back to filters/902',
+                    aviv_branch_id, str(e)[:160])
+    return fetch_902_filters(aviv_branch_id, token)
 
 
 _Z_LABEL_RE = re.compile(r'Z:\s*(\d+)\s*\|\s*(\d{1,2}/\d{1,2}/\d{2,4})')
@@ -581,19 +634,21 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
                 tok, _ = _login(username, password)
                 return _refresh(tok), aviv_branch_id
 
-        # Retry filters/902 on transient Aviv failures (404/5xx/network/timeout).
+        # Retry Z-list fetch on transient Aviv failures (404/5xx/network/timeout).
         # A 200 response is treated as authoritative — closed-day "no Z for date"
         # is the legitimate skip path and must NOT retry.
+        # fetch_902_z_list prefers the possible-values endpoint and falls back
+        # to filters/902 internally — see its docstring.
         filters = None
         last_err: Exception | None = None
         for attempt in range(1, FILTERS_MAX_ATTEMPTS + 1):
             try:
-                filters = fetch_902_filters(aviv_branch_id, token)
+                filters = fetch_902_z_list(aviv_branch_id, token)
                 break
             except Exception as e:
                 last_err = e
                 log.warning(
-                    'branch=%d filters/902 attempt %d/%d failed: %s',
+                    'branch=%d Z-list attempt %d/%d failed: %s',
                     branch_id, attempt, FILTERS_MAX_ATTEMPTS, e)
                 if attempt == FILTERS_MAX_ATTEMPTS:
                     break
@@ -601,7 +656,7 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
                 token, aviv_branch_id = _reauth()
         if filters is None:
             return {'ok': False, 'branch_id': branch_id, 'date': target_date,
-                    'error': f'filters/902 failed after {FILTERS_MAX_ATTEMPTS} '
+                    'error': f'Z-list fetch failed after {FILTERS_MAX_ATTEMPTS} '
                              f'attempts: {str(last_err)[:160]}'}
 
         z_number = resolve_z_for_date(filters, target_date)
