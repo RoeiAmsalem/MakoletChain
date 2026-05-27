@@ -340,6 +340,49 @@ def test_fetch_902_z_list_propagates_auth_expired(monkeypatch):
         zr.fetch_902_z_list(1, 'TOK')
 
 
+def test_run_for_branch_with_chain_token_handles_branch_without_per_store_creds(
+        monkeypatch, sample_pdf_bytes):
+    """Autoseeded chain rows have NULL aviv_user_id. When invoked with a
+    chain_token, run_for_branch must use it and ignore the missing per-store
+    creds — this is what the single-branch CLI path relies on."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER DEFAULT 1,
+            aviv_user_id TEXT, aviv_password TEXT, aviv_branch_id INTEGER
+        );
+        CREATE TABLE z_report_902 (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL,
+            z_number INTEGER, amount REAL, transactions INTEGER,
+            avg_per_txn REAL, payment_breakdown TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT, auth_source TEXT,
+            UNIQUE(branch_id, date)
+        );
+    ''')
+    # Autoseeded row: NO aviv_user_id / aviv_password — only aviv_branch_id.
+    conn.execute("INSERT INTO branches (id, name, aviv_branch_id) "
+                 "VALUES (9001, 'קדיש לוז', 1)")
+    conn.commit()
+
+    monkeypatch.setattr(zr, 'fetch_902_id_z_possible_values',
+                        lambda b, t: _branch_1_possible_values_body())
+    monkeypatch.setattr(zr, 'submit_902', lambda b, z, t: 'https://x.invalid/r.pdf')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+
+    result = zr.run_for_branch(9001, '2026-05-26', conn=conn,
+                               chain_token='CHAIN_TOK', trigger_type='manual')
+    assert result['ok'] is True, f'expected success, got {result}'
+    assert result['z_number'] == 3036
+    row = conn.execute(
+        "SELECT trigger_type, auth_source FROM z_report_902 "
+        "WHERE branch_id=9001 AND date='2026-05-26'").fetchone()
+    assert row['trigger_type'] == 'manual'
+    assert row['auth_source'] == 'chain'
+
+
 def test_run_for_branch_uses_possible_values_for_lazy_branch(
         monkeypatch, staging_db, sample_pdf_bytes):
     """End-to-end: when possible-values returns branch 1's Z list, the full

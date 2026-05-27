@@ -838,7 +838,19 @@ if __name__ == '__main__':
     trigger = 'manual' if args.manual else 'auto'
 
     if args.branch_id:
-        out = run_for_branch(args.branch_id, args.date, trigger_type=trigger)
+        # Single-branch CLI: in chain mode, issue a chain token here so
+        # autoseeded rows (which have no per-store creds) can still be pulled
+        # one at a time. Without this the agent would error 'no aviv creds'
+        # for any branch that came from /account/branches autoseed.
+        chain_token = None
+        if USE_CHAIN_AUTH:
+            try:
+                chain_token = _refresh(_login_chain_account())
+            except Exception as e:
+                log.error('chain login failed for single-branch CLI: %s', e)
+                sys.exit(2)
+        out = run_for_branch(args.branch_id, args.date,
+                             chain_token=chain_token, trigger_type=trigger)
         print(out)
         sys.exit(0 if out.get('ok') else 1)
     else:
