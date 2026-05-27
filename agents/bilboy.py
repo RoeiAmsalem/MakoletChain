@@ -390,8 +390,10 @@ if __name__ == '__main__':
     parser.add_argument('--branch-id', type=int, dest='branch_id_flag', help='Branch ID (flag form)')
     parser.add_argument('--year', type=int, help='Override year')
     parser.add_argument('--month', type=int, help='Override month')
+    parser.add_argument('--all-active', action='store_true',
+                        help='Iterate every active branch with per-branch try/except '
+                             '(mirrors scheduler.nightly_sync). Used by staging cron.')
     args = parser.parse_args()
-    bid = args.branch_id_flag or args.branch_id
     if args.year and args.month:
         _orig_today = date.today
         class _DateOverride(date):
@@ -401,4 +403,24 @@ if __name__ == '__main__':
                 day = min(_orig_today().day, monthrange(args.year, args.month)[1])
                 return date(args.year, args.month, day)
         globals()['date'] = _DateOverride
-    print(run_bilboy(bid))
+
+    if args.all_active:
+        conn = _get_db()
+        ids = [r['id'] for r in conn.execute(
+            'SELECT id FROM branches WHERE active=1 ORDER BY id').fetchall()]
+        conn.close()
+        print(f"[bilboy_all] running for {len(ids)} active branches: {ids}")
+        ok = fail = 0
+        for bid in ids:
+            try:
+                r = run_bilboy(bid)
+                ok += 1 if r.get('success') else 0
+                fail += 0 if r.get('success') else 1
+                print(f"[bilboy_all] branch={bid} {r}")
+            except Exception as e:
+                fail += 1
+                print(f"[bilboy_all] branch={bid} EXC {e!r}")
+        print(f"[bilboy_all] done: ok={ok} fail={fail}")
+    else:
+        bid = args.branch_id_flag or args.branch_id
+        print(run_bilboy(bid))
