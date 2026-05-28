@@ -3012,7 +3012,7 @@ def ops_run_agent():
     branch_id = data.get('branch_id')
     agent = data.get('agent')
 
-    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
+    if not branch_id or agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_report', 'iec'):
         return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
 
     t0 = time.time()
@@ -3065,7 +3065,7 @@ def ops_run_agent():
             else:
                 result = {'success': False}
                 msg = proc.stderr.strip() or proc.stdout.strip() or 'SSH to VPS failed'
-        else:  # aviv_employees → chain-aware aviv_employees_report.run_for_branch
+        else:  # aviv_report → chain-aware aviv_employees_report.run_for_branch
             from agents.aviv_employees_report import (
                 run_for_branch, _login_chain_account, _refresh,
                 USE_CHAIN_AUTH as AVIV_EMP_USE_CHAIN,
@@ -3124,7 +3124,7 @@ def ops_run_agent():
 @_admin_required
 def ops_logs(branch_id, agent):
     import re as _re
-    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
+    if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_report', 'iec'):
         abort(400)
 
     # Get branch name for modal title

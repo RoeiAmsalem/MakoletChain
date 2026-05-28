@@ -295,10 +295,9 @@ The token NEVER goes into CLAUDE.md, git history, or logs.
 
 | Endpoint                       | Purpose         | Used by                                       |
 | ------------------------------ | --------------- | --------------------------------------------- |
-| POST /account/login            | Get token       | aviv_live, aviv_employees, aviv_employees_report, sales-by-hour |
+| POST /account/login            | Get token       | aviv_live, aviv_employees_report, sales-by-hour |
 | POST /account/refresh          | Refresh token   | Before each call                              |
 | POST /dashboard/query          | SQL-like query  | sales-by-hour (deals table)                   |
-| POST /employees/sales?type=all | Per-employee    | aviv_employees agent (DEPRECATED, see below)  |
 | GET :65010/raw/status/plain    | Live status     | aviv_live (revenue, hours, cancellations)     |
 
 **Fallback: Playwright headless Chromium → `bi-aviv.web.app/status`**.
@@ -318,18 +317,14 @@ REST API fails, agent falls back. Use `domcontentloaded + wait_for_timeout(3000)
 - Alerts after 6 consecutive failures (~30 min) via `_check_consecutive_failures()`;
   recovery alert on first success after 6+ failures.
 
-### `aviv_employees.py` — DEPRECATED (still scheduled at 15:00 + 23:45 IL)
+### `aviv_employees_report.py` — employer-report agent
 
-- Per-employee hours via `POST /employees/sales?type=all`
-- `employee_hours.source = 'aviv_api'`
-- **Status**: still running alongside the new `aviv_employees_report.py` until
-  cutover. Will be retired once the report-based agent is verified across all
-  branches.
+Replaced the legacy `aviv_employees.py` (deleted 2026-05-28; `source='aviv_api'`
+rows are historical only).
 
-### `aviv_employees_report.py` — NEW employer-report agent (May 9)
-
-- Pulls Aviv employer report (report 301)
-- `employee_hours.source = 'aviv_report'`
+- Pulls Aviv employer report (report 301), `employee_hours.source = 'aviv_report'`
+- Also writes `branches.hours_this_month` for the current-month window (single
+  chain pull serves both the per-employee table and the home/ops KPI).
 - Schedule:
   - Sun–Thu 16:00 IL — current month
   - Sun–Thu 23:30 IL — current + previous month
@@ -338,8 +333,6 @@ REST API fails, agent falls back. Use `domcontentloaded + wait_for_timeout(3000)
 - 30s jitter between branches to avoid thundering Aviv
 - Pending name matches go to `employee_match_pending` for manager review;
   parser strips Aviv ID prefix (e.g. `441 עידן בקון` → `עידן בקון`)
-- Lives alongside `aviv_employees.py` until cutover; both write to
-  `employee_hours` with distinct `source` values
 
 ### `iec_agent.py` / IEC integration — Electricity invoices
 
@@ -385,8 +378,6 @@ REST API fails, agent falls back. Use `domcontentloaded + wait_for_timeout(3000)
 | `aviv_live`                       | 07:00–22:55 (every 5 min)       | Aviv live revenue                     |
 | `hours_midday`                    | 16:00                           | Hours estimate (baseline + shift)     |
 | `hours_end_of_day`                | 23:30                           | Hours authoritative total             |
-| `aviv_employees_midday`           | 15:00                           | Per-employee hours via `/employees/sales` (DEPRECATED) |
-| `aviv_employees`                  | 23:45                           | Per-employee hours via `/employees/sales` (DEPRECATED) |
 | `aviv_report_weekday_afternoon`   | Sun–Thu 16:00                   | Employer-report (current month)       |
 | `aviv_report_weekday_night`       | Sun–Thu 23:30                   | Employer-report (current + prev)      |
 | `aviv_report_friday`              | Fri 20:00                       | Employer-report (current month)       |
@@ -411,8 +402,8 @@ Logic: `Salary = SUM(employee_hours.total_hours × employees.hourly_rate)` for
 the month. No estimation. API is source of truth, CSV is verification.
 
 `employee_hours.source`:
-- `aviv_api`    — daily from `aviv_employees` agent (deprecated path)
-- `aviv_report` — daily from `aviv_employees_report` agent (new path)
+- `aviv_report` — daily from `aviv_employees_report` agent (employer report 301)
+- `aviv_api`    — historical only (legacy `aviv_employees` agent, removed 2026-05-28)
 - `csv`         — end-of-month Gmail CSV (verification when API data exists,
                   fallback when none does)
 
@@ -566,10 +557,8 @@ BILBOY_USE_CHAIN          # 1 = use chain token + bilboy_branch_id; 0 = per-stor
 
 ## Open Issues / Known Tech Debt
 
-- `aviv_employees.py` and `gmail_agent.py` still have runtime `ALTER TABLE`
-  blocks. Migration 006 makes them no-ops, but the stylistic debt remains.
-- Old `aviv_employees` agent and new `aviv_employees_report` run in parallel
-  until cutover.
+- `gmail_agent.py` still has runtime `ALTER TABLE` blocks. Migration 006 makes
+  them no-ops, but the stylistic debt remains.
 - Historical backfill Oct 2025 – Feb 2026 shows ₪0 (never imported).
 - `ADMIN_PASSWORD` still `12345` on prod — rotate this.
 - brrr free tier expires 2026-04-09; verify or replace before then.

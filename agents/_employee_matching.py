@@ -1,7 +1,7 @@
 """Shared employee name-matching logic.
 
-Extracted from gmail_agent.py so both gmail_agent and aviv_employees agents
-(current and future) can reuse the same matching without duplication.
+Extracted from gmail_agent.py so both gmail_agent and aviv_employees_report
+can reuse the same matching without duplication.
 """
 
 import logging

@@ -388,7 +388,7 @@
 
 {% block scripts %}
 <script>
-const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', iec: 'IEC', aviv_employees: 'עובדים', aviv_report: 'דוח עובדים' };
+const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', iec: 'IEC', aviv_report: 'עובדים' };
 const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
 const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
 
@@ -426,11 +426,8 @@ function renderBranches(branches) {
         return;
     }
     grid.innerHTML = branches.map(b => {
-        // aviv_employees row dropped — deprecated, replaced by aviv_employees_report
-        // which writes agent='aviv_report' rows. The "Run עובדים" button below
-        // still dispatches as agent='aviv_employees' for the legacy /ops route,
-        // and the server-side handler now translates that to the chain-aware
-        // aviv_employees_report.run_for_branch call.
+        // Employees row uses aviv_report (the chain-aware employer-report 301 agent).
+        // The deprecated aviv_employees agent was removed 2026-05-28.
         const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_report'].map(agent => {
             const a = b.agents[agent];
             if (agent === 'iec' && !b.has_iec_token) {
@@ -467,7 +464,7 @@ function renderBranches(branches) {
                 <button class="btn-action" onclick="runAgent(${b.id},'bilboy',this)">הרץ BilBoy</button>
                 <button class="btn-action" onclick="runAgent(${b.id},'gmail',this)">הרץ Gmail</button>
                 <button class="btn-action" onclick="runAgent(${b.id},'aviv_live',this)">הרץ Aviv</button>
-                <button class="btn-action" onclick="runAgent(${b.id},'aviv_employees',this)">הרץ עובדים</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'aviv_report',this)">הרץ עובדים</button>
                 ${b.has_iec_token ? `<button class="btn-action" onclick="runAgent(${b.id},'iec',this)">הרץ IEC</button>` : ''}
                 <button class="btn-action" onclick="openLogs(${b.id},'bilboy')">לוגים BB</button>
                 <button class="btn-action" onclick="openLogs(${b.id},'gmail')">לוגים GM</button>

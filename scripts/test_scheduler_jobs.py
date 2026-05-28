@@ -1,7 +1,7 @@
 """Regression test for scheduler.py job registration.
 
-After 2026-05-10 cutover, the old aviv_employees agent must NOT be registered
-on the scheduler — its 23:45 run was clobbering aviv_employees_report rows
+Guards against re-introduction of the legacy aviv_employees agent (removed
+2026-05-28). Its 23:45 run used to clobber aviv_employees_report rows
 inserted at 23:30. The new aviv_employees_report jobs must remain registered.
 """
 
