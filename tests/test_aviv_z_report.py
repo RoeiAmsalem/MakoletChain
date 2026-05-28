@@ -451,8 +451,16 @@ def test_filters_902_retries_on_failure(monkeypatch, staging_db, sample_pdf_byte
 
 def test_filters_902_gives_up_after_max_retries(monkeypatch, staging_db,
                                                 sample_pdf_bytes):
-    """All filters/902 attempts fail → graceful error dict, no crash."""
+    """All filters/902 attempts fail → graceful error dict, no crash.
+
+    Replaces the old fixed-attempt-count assertion with the new wall-clock
+    budget. We shrink the budget + backoff so the test runs in milliseconds,
+    then assert: (a) >1 attempt was made (we DID retry, not just give up),
+    (b) the error message reflects the new transient-give-up shape.
+    """
     _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'FILTERS_RETRY_TOTAL_SECONDS', 0.05)
+    monkeypatch.setattr(zr, '_FILTERS_BACKOFF_SCHEDULE', (0.01,))
 
     calls = {'n': 0}
 
@@ -465,11 +473,69 @@ def test_filters_902_gives_up_after_max_retries(monkeypatch, staging_db,
     result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
     assert result['ok'] is False
     assert result['branch_id'] == 126
-    assert 'Z-list fetch failed' in result['error']
-    assert calls['n'] == zr.FILTERS_MAX_ATTEMPTS
+    assert 'Z-list fetch transient-give-up' in result['error']
+    assert calls['n'] >= 2, 'wall-clock budget must allow >1 attempt before giving up'
     # nothing written to z_report_902
     assert staging_db.execute(
         'SELECT COUNT(*) FROM z_report_902').fetchone()[0] == 0
+
+
+def test_filters_902_retry_through_succeeds_before_budget_elapses(
+        monkeypatch, staging_db, sample_pdf_bytes):
+    """N failures then a 200 → loop retries through and lands the Z without
+    crashing. Mirrors Aviv's morning warm-up: filter cache flips from 404 to
+    200 mid-budget. The previous 3-attempt loop gave up before this flip
+    landed; the wall-clock budget must keep trying until the flip happens.
+    """
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'FILTERS_RETRY_TOTAL_SECONDS', 2.0)
+    monkeypatch.setattr(zr, '_FILTERS_BACKOFF_SCHEDULE', (0.05,))
+
+    calls = {'n': 0}
+
+    def flips_to_200_on_5th(aviv_branch_id, token):
+        calls['n'] += 1
+        if calls['n'] < 5:
+            raise requests_HTTPError_404()
+        return _good_filters()
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', flips_to_200_on_5th)
+
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    assert result['ok'] is True, result
+    assert calls['n'] == 5, (
+        f'expected exactly 5 fetch attempts (4 failures + 1 success), got {calls["n"]}')
+    row = staging_db.execute(
+        "SELECT z_number FROM z_report_902 WHERE branch_id=126 AND date='2026-05-20'"
+    ).fetchone()
+    assert row is not None and row['z_number'] == 2525, \
+        'retry-through must persist the Z row when the flip lands'
+
+
+def test_filters_902_first_attempt_success_adds_no_latency(
+        monkeypatch, staging_db, sample_pdf_bytes):
+    """Happy path: a healthy branch returns 200 on attempt 1 — no sleep, no
+    re-auth, no budget overhead. Real budget left at 240s; if we were sleeping
+    spuriously, the test would still pass but the wall-clock would jump.
+    """
+    import time as _t
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    # Keep real budget; only watch wall-clock + attempts.
+    calls = {'n': 0}
+
+    def instant_success(aviv_branch_id, token):
+        calls['n'] += 1
+        return _good_filters()
+
+    monkeypatch.setattr(zr, 'fetch_902_filters', instant_success)
+
+    t0 = _t.monotonic()
+    result = zr.run_for_branch(126, '2026-05-20', conn=staging_db)
+    elapsed = _t.monotonic() - t0
+    assert result['ok'] is True
+    assert calls['n'] == 1, 'fast path must call fetch exactly once'
+    assert elapsed < 1.0, (
+        f'first-attempt success must add no latency; took {elapsed:.2f}s')
 
 
 def test_closed_day_does_not_retry(monkeypatch, staging_db, sample_pdf_bytes):
@@ -506,6 +572,10 @@ def test_one_branch_failure_doesnt_block_others(monkeypatch, staging_db,
                         lambda b, z, t: 'https://example.invalid/r.pdf')
     monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
     monkeypatch.setattr(zr.time, 'sleep', lambda s: None)
+    # Shrink budget so the failing branch's retry loop gives up in ms.
+    # zr.time.sleep is patched above, so the deadline check is what bails us.
+    monkeypatch.setattr(zr, 'FILTERS_RETRY_TOTAL_SECONDS', 0.05)
+    monkeypatch.setattr(zr, '_FILTERS_BACKOFF_SCHEDULE', (0.01,))
 
     def filters_by_branch(aviv_branch_id, token):
         # Branch 126 wired to fail every call; 127 wired to succeed.
@@ -542,7 +612,7 @@ def test_one_branch_failure_doesnt_block_others(monkeypatch, staging_db,
     ]
 
     assert results[0]['ok'] is False
-    assert 'Z-list fetch failed' in results[0]['error']
+    assert 'Z-list fetch transient-give-up' in results[0]['error']
     assert results[1]['ok'] is True
     assert results[1]['total'] == 13721.98
     # Only branch 127's row should be written.
@@ -930,8 +1000,8 @@ def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
     """Interval backfill: a missing branch is attempted on every tick until it
     lands, then stops being attempted. Models Aviv's late-morning window for 126.
     """
-    # Single-branch DB to keep retry accounting simple. The internal
-    # FILTERS_MAX_ATTEMPTS retries are real — what we test is the OUTER tick loop.
+    # Single-branch DB to keep retry accounting simple. The inner per-tick
+    # wall-clock budget is real — what we test here is the OUTER tick loop.
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript('''
@@ -954,11 +1024,14 @@ def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
     conn.commit()
 
     _stub_success_path(monkeypatch, sample_pdf_bytes)
+    # Shrink inner budget so each failing tick gives up in milliseconds.
+    monkeypatch.setattr(zr, 'FILTERS_RETRY_TOTAL_SECONDS', 0.05)
+    monkeypatch.setattr(zr, '_FILTERS_BACKOFF_SCHEDULE', (0.01,))
 
     # Tick-aware filters: ticks 1+2 fail every filters call (simulates Aviv's
     # 404 window still being closed); tick 3 succeeds. The OUTER tick loop is
-    # what should keep retrying — internal FILTERS_MAX_ATTEMPTS won't bridge
-    # the multi-hour window.
+    # what should keep retrying — the per-tick 4-min budget won't bridge a
+    # multi-hour window.
     tick = {'n': 0}
 
     def flaky_filters(aviv_bid, token):

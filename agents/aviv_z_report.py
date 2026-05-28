@@ -52,10 +52,24 @@ def _yesterday_il() -> str:
 # PDFs here makes the "צפה" preview work on 902 rows identically to Gmail-Z rows.
 PDF_BASE = os.path.join(os.path.dirname(__file__), '..', 'data', 'pdfs')
 
-# Retry policy for transient Aviv failures on filters/902 (404/5xx/network).
-# Closed-day "no Z for date" is a 200 response and does NOT consume retries.
-FILTERS_MAX_ATTEMPTS = 3
-FILTERS_RETRY_BACKOFF_SEC = 2
+# Retry-through-transient policy for the Z-list fetch (possible-values +
+# filters/902 fallback). Closed-day "no Z for date" is a 200 response and
+# does NOT consume retries.
+#
+# Background: Aviv's filter-cache warms up unpredictably in the morning. On
+# 2026-05-28 branch 126 flipped from 404 → 200 with Z 2530 present sometime
+# between 03:00:11 UTC and 03:11:57 UTC (~11 min). Our previous 3-attempt
+# × 2s loop (~6s) gave up far inside the warm-up window and waited 30 min
+# until the next cron tick. The website rides through the transient errors;
+# this loop does too — by wall-clock budget, not by attempt count.
+#
+# Retry on any non-200, non-AuthExpired outcome (404, 5xx, network/timeout).
+# Don't classify transient vs permanent by status code — let the OUTCOME
+# (budget elapsed without a 200) make the call. AuthExpired bubbles up via
+# its existing one-shot re-login between attempts.
+FILTERS_RETRY_TOTAL_SECONDS = 240
+# Capped-linear backoff between attempts (1st sleep, 2nd, ... then cap).
+_FILTERS_BACKOFF_SCHEDULE = (5, 10, 15, 20, 30)
 
 # Chain-account auth: when AVIV_Z_USE_CHAIN=1 in env, run_all_branches logs in
 # ONCE with chain creds (AVIV_CHAIN_USER / AVIV_CHAIN_PASS) and reuses the
@@ -634,30 +648,58 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
                 tok, _ = _login(username, password)
                 return _refresh(tok), aviv_branch_id
 
-        # Retry Z-list fetch on transient Aviv failures (404/5xx/network/timeout).
+        # Retry Z-list fetch on transient Aviv failures (404/5xx/network/timeout)
+        # against a wall-clock budget — see FILTERS_RETRY_TOTAL_SECONDS comment.
         # A 200 response is treated as authoritative — closed-day "no Z for date"
         # is the legitimate skip path and must NOT retry.
         # fetch_902_z_list prefers the possible-values endpoint and falls back
         # to filters/902 internally — see its docstring.
         filters = None
         last_err: Exception | None = None
-        for attempt in range(1, FILTERS_MAX_ATTEMPTS + 1):
+        fetch_t0 = time.time()
+        deadline = fetch_t0 + FILTERS_RETRY_TOTAL_SECONDS
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 filters = fetch_902_z_list(aviv_branch_id, token)
+                elapsed = time.time() - fetch_t0
+                if attempt > 1:
+                    log.info(
+                        'branch=%d Z-list succeeded on attempt %d after %.1fs '
+                        '(retry-through)', branch_id, attempt, elapsed)
                 break
             except Exception as e:
                 last_err = e
+                elapsed = time.time() - fetch_t0
                 log.warning(
-                    'branch=%d Z-list attempt %d/%d failed: %s',
-                    branch_id, attempt, FILTERS_MAX_ATTEMPTS, e)
-                if attempt == FILTERS_MAX_ATTEMPTS:
+                    'branch=%d Z-list attempt %d failed at +%.1fs: %s',
+                    branch_id, attempt, elapsed, str(e)[:160])
+                if time.time() >= deadline:
                     break
-                time.sleep(FILTERS_RETRY_BACKOFF_SEC)
-                token, aviv_branch_id = _reauth()
+                # Capped-linear backoff: 5, 10, 15, 20, then 30 repeating.
+                bidx = min(attempt - 1, len(_FILTERS_BACKOFF_SCHEDULE) - 1)
+                sleep_secs = _FILTERS_BACKOFF_SCHEDULE[bidx]
+                sleep_secs = min(sleep_secs, max(0.0, deadline - time.time()))
+                if sleep_secs <= 0:
+                    break
+                time.sleep(sleep_secs)
+                # Refresh token between attempts in case it expired. If re-auth
+                # itself blows up, the cause isn't transient — bail.
+                try:
+                    token, aviv_branch_id = _reauth()
+                except Exception as re_err:
+                    log.error(
+                        'branch=%d re-auth failed mid-retry: %s — aborting '
+                        'retry loop', branch_id, re_err)
+                    last_err = re_err
+                    break
         if filters is None:
+            elapsed = time.time() - fetch_t0
             return {'ok': False, 'branch_id': branch_id, 'date': target_date,
-                    'error': f'Z-list fetch failed after {FILTERS_MAX_ATTEMPTS} '
-                             f'attempts: {str(last_err)[:160]}'}
+                    'error': f'Z-list fetch transient-give-up after {attempt} '
+                             f'attempts over {elapsed:.0f}s: '
+                             f'{str(last_err)[:160]}'}
 
         z_number = resolve_z_for_date(filters, target_date)
         if not z_number:
