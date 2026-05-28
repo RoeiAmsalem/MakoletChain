@@ -25,7 +25,12 @@ import re
 import sqlite3
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 import requests
 import urllib3
