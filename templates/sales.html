@@ -11,6 +11,71 @@
     }
     .btn-pdf:hover { background: rgba(239,68,68,0.3); }
     .btn-pdf:disabled { opacity: 0.3; cursor: default; }
+    /* Dept expand chevron + panel — colors match page tokens (cards #1e293b,
+       expanded #172033 = slightly lighter so it reads as nested under the row). */
+    .dept-toggle {
+        background: none; border: 1px solid #334155; border-radius: 6px;
+        width: 28px; height: 28px; cursor: pointer; color: #94a3b8;
+        display: inline-flex; align-items: center; justify-content: center;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+        padding: 0;
+    }
+    .dept-toggle:hover { background: rgba(148,163,184,0.12); color: #f1f5f9; border-color: #475569; }
+    .dept-toggle svg { width: 14px; height: 14px; transition: transform 0.2s; }
+    .dept-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+    .dept-toggle[aria-expanded="true"] { color: #f1f5f9; border-color: #475569; background: rgba(148,163,184,0.08); }
+    tr.dept-panel-row > td { padding: 0; background: #172033; border-top: 1px solid #334155; }
+    .dept-panel { padding: 1rem 1.25rem 1.1rem; }
+    .dept-panel-head {
+        display: flex; align-items: center; gap: 0.5rem; color: #64748b;
+        font-size: 0.85rem; font-weight: 600; margin-bottom: 0.85rem;
+    }
+    .dept-panel-head svg { width: 14px; height: 14px; opacity: 0.9; }
+    .dept-priority-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 0.65rem; margin-bottom: 1rem;
+    }
+    .dept-priority-card {
+        background: #1e293b; border: 1px solid #334155; border-right: 4px solid #475569;
+        border-radius: 8px; padding: 0.75rem 0.9rem;
+    }
+    .dept-priority-card[data-code="5"]  { border-right-color: #60a5fa; }
+    .dept-priority-card[data-code="83"] { border-right-color: #fbbf24; }
+    .dept-priority-card[data-code="2"]  { border-right-color: #4ade80; }
+    .dept-priority-label { font-size: 0.78rem; color: #94a3b8; font-weight: 600; margin-bottom: 0.25rem; }
+    .dept-priority-amount { font-size: 1.15rem; font-weight: 700; color: #f1f5f9; direction: ltr; text-align: right; }
+    .dept-priority-meta { font-size: 0.75rem; color: #64748b; margin-top: 0.2rem; }
+    .dept-rest-title { font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.5rem; }
+    .dept-rest-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1.5rem;
+        padding-top: 0.4rem; border-top: 1px solid rgba(51,65,85,0.7);
+    }
+    .dept-rest-row {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 0.75rem; font-size: 0.85rem; color: #e2e8f0; padding: 0.15rem 0;
+    }
+    .dept-rest-row .dept-rest-amount { color: #cbd5e1; direction: ltr; font-variant-numeric: tabular-nums; }
+    .dept-rest-collapsed {
+        font-size: 0.78rem; color: #64748b; padding: 0.4rem 0 0;
+        grid-column: 1 / -1; cursor: pointer;
+    }
+    .dept-rest-collapsed:hover { color: #94a3b8; }
+    .dept-total-row {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-top: 0.75rem; padding-top: 0.6rem; border-top: 1px solid #334155;
+        font-size: 0.9rem; font-weight: 700;
+    }
+    .dept-total-row .label { color: #94a3b8; }
+    .dept-total-row .amount { color: #4ade80; direction: ltr; }
+    .dept-empty {
+        font-size: 0.85rem; color: #64748b; padding: 0.5rem 0.25rem; text-align: center;
+    }
+    .dept-error {
+        font-size: 0.85rem; color: #fca5a5; padding: 0.5rem 0.25rem; text-align: center;
+    }
+    .dept-loading {
+        font-size: 0.85rem; color: #94a3b8; padding: 0.6rem 0.25rem; text-align: center;
+    }
     /* PDF Modal */
     .pdf-overlay {
         display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
@@ -60,6 +125,11 @@
         .pdf-modal-body img { width: 100%; height: auto; }
         .pdf-nav button { min-height: 44px; min-width: 44px; padding: 0.5rem 1rem; touch-action: manipulation; }
         .pdf-modal-close { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+        .dept-priority-grid { grid-template-columns: 1fr; gap: 0.5rem; }
+        .dept-rest-grid { grid-template-columns: 1fr; gap: 0.3rem; }
+        .dept-panel { padding: 0.75rem 0.85rem 0.9rem; }
+        .dept-toggle { min-width: 36px; min-height: 36px; touch-action: manipulation; }
+        .dept-priority-amount { font-size: 1rem; }
     }
 </style>
 {% endblock %}
@@ -85,10 +155,11 @@
                     <th>מקור</th>
                     <th>שעת משיכה</th>
                     <th>PDF</th>
+                    <th style="text-align:center">פירוט</th>
                 </tr>
             </thead>
             <tbody id="sales-tbody">
-                <tr><td colspan="7" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
+                <tr><td colspan="8" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
             </tbody>
             <tfoot id="sales-tfoot">{% if sales_footer %}
                 <tr class="tfoot-total" style="font-weight:700;border-top:2px solid #334155;background:#0f172a">
@@ -96,6 +167,8 @@
                     <td class="money profit" style="direction:ltr;text-align:left;font-weight:700">₪ {{ '{:,.2f}'.format(sales_footer.total_revenue) }}</td>
                     <td style="text-align:center">{{ sales_footer.total_transactions }}</td>
                     <td style="text-align:center">₪ {{ sales_footer.avg_basket }}</td>
+                    <td></td>
+                    <td></td>
                     <td></td>
                     <td></td>
                 </tr>{% endif %}</tfoot>
@@ -193,7 +266,7 @@ async function loadSales() {
 
         // Table rows
         if (!d.sales.length) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:2rem">אין נתוני הכנסות לחודש זה</td></tr>';
             return;
         }
 
@@ -216,7 +289,20 @@ async function loadSales() {
             const fetched = s.fetched_at
                 ? `<span style="font-size:0.8rem;color:#94a3b8">${s.fetched_at.slice(0,16).replace('T',' ')}</span>`
                 : '<span style="color:#64748b;font-size:0.8rem">—</span>';
-            return `<tr>
+            // Expandable only when the row has a positive amount. Closed-day
+            // sentinels and provisional 0-rows show "—" with no chevron.
+            const hasAmount = Number(s.amount) > 0;
+            const toggleCell = hasAmount
+                ? `<td style="text-align:center"><button class="dept-toggle" type="button"
+                       aria-expanded="false" aria-label="הצג פירוט מחלקות"
+                       data-date="${s.date}" data-amount="${s.amount}"
+                       onclick="toggleDeptPanel(this)">
+                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                   </button></td>`
+                : '<td style="text-align:center"><span style="color:#64748b;font-size:0.8rem">—</span></td>';
+            return `<tr data-z-date="${s.date}">
                 <td>${s.date}</td>
                 <td class="money profit" style="direction:ltr;text-align:left;font-weight:600">₪ ${Number(s.amount).toLocaleString('he-IL', {minimumFractionDigits:2})}</td>
                 <td style="text-align:center">${s.transactions || '—'}</td>
@@ -224,6 +310,7 @@ async function loadSales() {
                 <td>${srcBadge}</td>
                 <td style="text-align:center">${fetched}</td>
                 <td>${pdfBtn}</td>
+                ${toggleCell}
             </tr>`;
         }).join('');
 
@@ -231,6 +318,222 @@ async function loadSales() {
         console.error(err);
         kpis.innerHTML = '<p style="color:#ef4444;padding:1rem">שגיאה בטעינת נתונים</p>';
     }
+}
+
+// ── Department breakdown panel ─────────────────────────────────────────────
+// Lazy-loaded per (branch, date); cached client-side so re-expanding the
+// same row doesn't re-fetch. The day-total is taken from the Z row itself
+// (data-amount) — the API never owns this number; daily_sales does.
+const PRIORITY_DEPT_CODES = [5, 83, 2];
+const PRIORITY_DEPT_META = {
+    5:  { label: 'חלב',     unit: 'יח׳' },
+    83: { label: 'סיגריות', unit: 'יח׳' },
+    2:  { label: 'ירקות',   unit: 'ק״ג' },  // produce sold by weight in Aviv
+};
+const REST_VISIBLE_COUNT = 6;
+const _deptCache = new Map();        // date → API response (or 'ERROR')
+const _restExpanded = new Set();     // dates whose "rest" list is fully shown
+
+function _fmtMoney(n) {
+    if (n === null || n === undefined || isNaN(n)) return '—';
+    return '₪ ' + Number(n).toLocaleString('he-IL',
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function _fmtQty(q, unit) {
+    if (q === null || q === undefined) return '';
+    // Produce ships fractional kg; everything else is whole units. Trim .00.
+    const isWhole = Math.abs(q - Math.round(q)) < 0.001;
+    const qStr = isWhole ? Math.round(q).toString()
+                         : Number(q).toLocaleString('he-IL',
+                              { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+    return `${qStr} ${unit}`;
+}
+
+function _pct(part, whole) {
+    if (!whole || whole <= 0) return '';
+    return (part / whole * 100).toFixed(1) + '%';
+}
+
+function _stripDeptCodePrefix(name) {
+    // Aviv stores dept_name as "<code> <name>" (e.g. "5 מקרר-מוצרי חלב ותחליפים").
+    // Strip the leading code so the panel reads cleanly.
+    return String(name || '').replace(/^\s*\d+\s+/, '').trim();
+}
+
+function _layoutGridIconSvg() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true">
+              <rect x="4" y="4" width="6" height="6" rx="1"/>
+              <rect x="14" y="4" width="6" height="6" rx="1"/>
+              <rect x="4" y="14" width="6" height="6" rx="1"/>
+              <rect x="14" y="14" width="6" height="6" rx="1"/>
+            </svg>`;
+}
+
+function _renderDeptPanel(data, dayTotal) {
+    // data: { date, departments: [{code, name, amount, qty}, ...] }
+    // dayTotal: numeric Z total from the row's data-amount (denominator for %).
+    const dateFmt = data.date ? data.date.split('-').reverse().join('/') : '';
+    const head = `<div class="dept-panel-head">${_layoutGridIconSvg()}
+                    <span>מכירות לפי מחלקה — ${dateFmt}</span>
+                  </div>`;
+
+    if (!data.departments || data.departments.length === 0) {
+        return `<div class="dept-panel">${head}
+                  <div class="dept-empty">אין נתוני מחלקות ליום זה</div>
+                </div>`;
+    }
+
+    const byCode = {};
+    for (const d of data.departments) byCode[d.code] = d;
+
+    // Priority cards (always render all 3, "—" when missing).
+    const cardsHtml = PRIORITY_DEPT_CODES.map(code => {
+        const meta = PRIORITY_DEPT_META[code];
+        const entry = byCode[code];
+        if (!entry) {
+            return `<div class="dept-priority-card" data-code="${code}">
+                      <div class="dept-priority-label">${meta.label}</div>
+                      <div class="dept-priority-amount">—</div>
+                      <div class="dept-priority-meta">אין נתון</div>
+                    </div>`;
+        }
+        const pctStr = _pct(entry.amount, dayTotal);
+        const qtyStr = _fmtQty(entry.qty, meta.unit);
+        const metaParts = [];
+        if (qtyStr) metaParts.push(qtyStr);
+        if (pctStr) metaParts.push(`${pctStr} מהמכירות`);
+        return `<div class="dept-priority-card" data-code="${code}">
+                  <div class="dept-priority-label">${meta.label}</div>
+                  <div class="dept-priority-amount">${_fmtMoney(entry.amount)}</div>
+                  <div class="dept-priority-meta">${metaParts.join(' · ')}</div>
+                </div>`;
+    }).join('');
+
+    // "Rest" — every dept that isn't one of the 3 priorities, by amount desc.
+    const rest = data.departments
+        .filter(d => !PRIORITY_DEPT_CODES.includes(d.code));
+    const isExpanded = _restExpanded.has(data.date);
+    const visibleRest = isExpanded ? rest : rest.slice(0, REST_VISIBLE_COUNT);
+    const hiddenRest = isExpanded ? [] : rest.slice(REST_VISIBLE_COUNT);
+    const hiddenSum = hiddenRest.reduce((acc, d) => acc + (d.amount || 0), 0);
+
+    const restRowsHtml = visibleRest.map(d => `
+        <div class="dept-rest-row">
+            <span class="dept-rest-name">${_stripDeptCodePrefix(d.name)}</span>
+            <span class="dept-rest-amount">${_fmtMoney(d.amount)}</span>
+        </div>`).join('');
+
+    const restCollapsedHtml = (hiddenRest.length > 0)
+        ? `<div class="dept-rest-collapsed"
+               onclick="expandDeptRest('${data.date}')">
+              + ${hiddenRest.length} מחלקות נוספות / ${_fmtMoney(hiddenSum)}
+           </div>`
+        : '';
+
+    const totalHtml = `<div class="dept-total-row">
+                         <span class="label">סה״כ</span>
+                         <span class="amount">${_fmtMoney(dayTotal)}</span>
+                       </div>`;
+
+    return `<div class="dept-panel">
+              ${head}
+              <div class="dept-priority-grid">${cardsHtml}</div>
+              ${rest.length > 0 ? `<div class="dept-rest-title">שאר המחלקות</div>
+                                   <div class="dept-rest-grid">
+                                     ${restRowsHtml}${restCollapsedHtml}
+                                   </div>` : ''}
+              ${totalHtml}
+            </div>`;
+}
+
+async function toggleDeptPanel(btn) {
+    const tr = btn.closest('tr');
+    const date = btn.dataset.date;
+    const amount = Number(btn.dataset.amount);
+    const isOpen = btn.getAttribute('aria-expanded') === 'true';
+
+    // One open at a time — collapse any other open row first.
+    document.querySelectorAll('.dept-toggle[aria-expanded="true"]')
+        .forEach(other => {
+            if (other === btn) return;
+            other.setAttribute('aria-expanded', 'false');
+            other.setAttribute('aria-label', 'הצג פירוט מחלקות');
+            const sibling = other.closest('tr').nextElementSibling;
+            if (sibling && sibling.classList.contains('dept-panel-row')) {
+                sibling.remove();
+            }
+        });
+
+    if (isOpen) {
+        // Collapse: remove the panel row directly after.
+        const panelRow = tr.nextElementSibling;
+        if (panelRow && panelRow.classList.contains('dept-panel-row')) {
+            panelRow.remove();
+        }
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-label', 'הצג פירוט מחלקות');
+        return;
+    }
+
+    // Expand: insert a loading row first; replace its content when fetch done.
+    const panelRow = document.createElement('tr');
+    panelRow.className = 'dept-panel-row';
+    panelRow.innerHTML = `<td colspan="8">
+        <div class="dept-panel">
+          <div class="dept-loading">
+            <div class="spinner" style="display:inline-block;width:16px;height:16px;vertical-align:middle"></div>
+            <span style="margin-inline-start:0.5rem">טוען פירוט מחלקות…</span>
+          </div>
+        </div></td>`;
+    tr.insertAdjacentElement('afterend', panelRow);
+    btn.setAttribute('aria-expanded', 'true');
+    btn.setAttribute('aria-label', 'הסתר פירוט מחלקות');
+
+    try {
+        let data = _deptCache.get(date);
+        if (!data) {
+            const res = await fetch(
+                `/api/department-sales?branch_id=${BRANCH_ID}&date=${encodeURIComponent(date)}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            data = await res.json();
+            _deptCache.set(date, data);
+        } else if (data === 'ERROR') {
+            // Previously errored — retry once on user-initiated re-expand.
+            _deptCache.delete(date);
+            return toggleDeptPanel(btn);
+        }
+        // Ignore stale render if the user collapsed during the fetch.
+        if (btn.getAttribute('aria-expanded') !== 'true') return;
+        const cell = panelRow.querySelector('td');
+        if (cell) cell.innerHTML = _renderDeptPanel(data, amount);
+    } catch (err) {
+        console.error('dept-sales fetch failed', err);
+        _deptCache.set(date, 'ERROR');
+        const cell = panelRow.querySelector('td');
+        if (cell) {
+            cell.innerHTML = `<div class="dept-panel">
+                <div class="dept-error">שגיאה בטעינת פירוט המחלקות</div>
+              </div>`;
+        }
+    }
+}
+
+function expandDeptRest(date) {
+    _restExpanded.add(date);
+    // Find the open panel row for this date and re-render in place.
+    const btn = document.querySelector(`.dept-toggle[data-date="${date}"]`);
+    if (!btn) return;
+    const tr = btn.closest('tr');
+    const panelRow = tr.nextElementSibling;
+    if (!panelRow || !panelRow.classList.contains('dept-panel-row')) return;
+    const data = _deptCache.get(date);
+    const amount = Number(btn.dataset.amount);
+    if (!data || data === 'ERROR') return;
+    const cell = panelRow.querySelector('td');
+    if (cell) cell.innerHTML = _renderDeptPanel(data, amount);
 }
 
 async function openPdf(dateStr) {
