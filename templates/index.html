@@ -189,6 +189,36 @@ async function setViewMode(mode) {
     </div>
 </section>
 
+<!-- Department KPI tiles — last-day per-department revenue from Aviv Z 902. -->
+<section id="dept-tiles-section" style="display:none; margin-top:0.5rem;">
+  <div style="font-size:0.82rem; color:#94a3b8; margin:0 0.25rem 0.6rem;">
+    מכירות לפי מחלקה — <span id="dept-date">—</span>
+  </div>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.75rem;">
+    <div class="dept-tile" data-dept-code="5" style="background:#0f172a; border:1px solid #334155; border-radius:12px; padding:1rem 1.25rem;">
+      <div style="font-size:0.82rem; color:#94a3b8; font-weight:600; margin-bottom:0.35rem;">
+        <span class="dept-icon">🥛</span>
+        <span class="dept-label">מקרר חלב</span>
+      </div>
+      <div class="dept-amount" style="font-size:1.4rem; font-weight:700; color:#f1f5f9;">—</div>
+    </div>
+    <div class="dept-tile" data-dept-code="83" style="background:#0f172a; border:1px solid #334155; border-radius:12px; padding:1rem 1.25rem;">
+      <div style="font-size:0.82rem; color:#94a3b8; font-weight:600; margin-bottom:0.35rem;">
+        <span class="dept-icon">🚬</span>
+        <span class="dept-label">סיגריות</span>
+      </div>
+      <div class="dept-amount" style="font-size:1.4rem; font-weight:700; color:#f1f5f9;">—</div>
+    </div>
+    <div class="dept-tile" data-dept-code="2" style="background:#0f172a; border:1px solid #334155; border-radius:12px; padding:1rem 1.25rem;">
+      <div style="font-size:0.82rem; color:#94a3b8; font-weight:600; margin-bottom:0.35rem;">
+        <span class="dept-icon">🥬</span>
+        <span class="dept-label">ירקות</span>
+      </div>
+      <div class="dept-amount" style="font-size:1.4rem; font-weight:700; color:#f1f5f9;">—</div>
+    </div>
+  </div>
+</section>
+
 {% include '_unknown_employees_banner.html' %}
 
 <!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
@@ -774,9 +804,48 @@ async function saveManualElectricity() {
     }
 }
 
+async function loadDepartmentSales() {
+    // Per-department Z breakdown for the latest day with data. The endpoint
+    // already falls back to MAX(date), so the tile keeps showing yesterday
+    // until tonight's pull lands. Tiles render "—" when:
+    //   - branch has no z_department_sales rows at all (pre-migration / agent
+    //     never ran for it), or
+    //   - the specific dept (5/83/2) is absent from that day's report
+    //     (department had zero sales — Aviv omits zero rows).
+    const section = document.getElementById('dept-tiles-section');
+    try {
+        const res = await fetch(`/api/department-sales?branch_id=${BRANCH_ID}`);
+        if (!res.ok) {
+            section.style.display = 'none';
+            return;
+        }
+        const d = await res.json();
+        if (!d.date || !d.tiles || d.tiles.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+        // Human-readable date (DD/MM/YYYY) for the section subtitle.
+        const dateFmt = d.date.split('-').reverse().join('/');
+        document.getElementById('dept-date').textContent = dateFmt;
+        for (const t of d.tiles) {
+            const tile = section.querySelector(`.dept-tile[data-dept-code="${t.code}"]`);
+            if (!tile) continue;
+            const amountEl = tile.querySelector('.dept-amount');
+            amountEl.textContent = (t.amount === null || t.amount === undefined)
+                ? '—'
+                : formatMoney(t.amount);
+        }
+        section.style.display = 'block';
+    } catch (err) {
+        // Supplementary widget — never error-block the home page on its account.
+        section.style.display = 'none';
+    }
+}
+
 loadSummary();
 loadHistory();
 loadHourlyChart();
+loadDepartmentSales();
 {% if branch_id == 126 %}loadAmazonDeliveries();{% endif %}
 if (typeof loadLiveSales === 'function') loadLiveSales();
 if (typeof loadPendingMatches === 'function') loadPendingMatches();

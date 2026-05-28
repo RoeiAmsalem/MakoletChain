@@ -1316,3 +1316,275 @@ def test_fetched_at_displays_israel_time():
     # None / empty input
     assert _utc_str_to_il_iso(None) is None
     assert _utc_str_to_il_iso('') is None
+
+
+# ── 902 XLS dept parser ────────────────────────────────────────────────────
+#
+# Captured live fixture: branch 127 Z 1324 (2026-05-27) via chain auth +
+# outputType=XLS. Stored at tests/fixtures/aviv_z_902_127_2026-05-27.xls.
+
+FIXTURE_XLS = os.path.join(os.path.dirname(__file__), 'fixtures',
+                           'aviv_z_902_127_2026-05-27.xls')
+
+
+@pytest.fixture
+def sample_xls_bytes() -> bytes:
+    with open(FIXTURE_XLS, 'rb') as f:
+        return f.read()
+
+
+def test_parse_902_xls_departments_extracts_all_rows(sample_xls_bytes):
+    """Fixture has 39 dept rows visible in the XLS dump. The parser must
+    return ~that many — not the grand-total סה''כ terminator, and not
+    blank-padding rows."""
+    depts = zr.parse_902_xls_departments(sample_xls_bytes)
+    # Fixture has 39 numbered dept rows; assert "at least 30" to leave slack
+    # for Aviv collapsing zero-sale rows in future captures without breaking
+    # the suite on a re-record.
+    assert len(depts) >= 30, f'expected >=30 depts, got {len(depts)}'
+    # No row should be the grand-total row.
+    for d in depts:
+        assert d['dept_name'] != "סה''כ"
+    # Every row must have a positive integer code and a non-empty name.
+    for d in depts:
+        assert isinstance(d['dept_code'], int)
+        assert d['dept_code'] > 0
+        assert d['dept_name']
+        assert d['amount'] > 0
+
+
+def test_parse_902_xls_departments_known_values(sample_xls_bytes):
+    """Spot-check the three departments the home page surfaces.
+
+    Branch 127 on 2026-05-27 (per live XLS dump):
+      dept 5  = 2804.08  (מקרר-מוצרי חלב ותחליפים)
+      dept 83 = 1500.50  (מוצרי טבק)
+      dept 2  = 698.92   (ירקות פירות)
+    Note: the task brief's expected values (4150.33 / 1664.80 / 1069.91)
+    are branch 126 numbers — used in the *staging verification* step, not
+    here. This fixture is branch 127.
+    """
+    depts = zr.parse_902_xls_departments(sample_xls_bytes)
+    by_code = {d['dept_code']: d for d in depts}
+    assert 5 in by_code, '127 must have dept 5 on 2026-05-27'
+    assert by_code[5]['amount'] == 2804.08
+    assert 83 in by_code
+    assert by_code[83]['amount'] == 1500.50
+    assert 2 in by_code
+    assert by_code[2]['amount'] == 698.92
+    # Names include the Hebrew label (the leading code is stripped by parser).
+    assert 'חלב' in by_code[5]['dept_name']
+
+
+def test_parse_902_xls_departments_handles_bad_bytes():
+    """Random bytes can't be opened as XLS → parser returns [] and logs,
+    never raises. This is the safety net for the supplementary-data
+    invariant: dept parsing failure must NEVER fail the Z pull."""
+    out = zr.parse_902_xls_departments(b'not an xls file at all')
+    assert out == []
+
+
+# ── upsert department sales ────────────────────────────────────────────────
+
+@pytest.fixture
+def staging_db_with_depts():
+    """In-memory DB with migration 016's z_department_sales table added."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE z_department_sales (
+            branch_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            dept_code INTEGER NOT NULL,
+            dept_name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            qty REAL,
+            fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (branch_id, date, dept_code)
+        );
+    ''')
+    return conn
+
+
+def test_upsert_department_sales_inserts(staging_db_with_depts):
+    conn = staging_db_with_depts
+    departments = [
+        {'dept_code': 5,  'dept_name': 'מקרר-מוצרי חלב', 'amount': 4150.33, 'qty': 518.0},
+        {'dept_code': 83, 'dept_name': 'מוצרי טבק',      'amount': 1664.80, 'qty': 51.0},
+        {'dept_code': 2,  'dept_name': 'ירקות פירות',    'amount': 1069.91, 'qty': 83.17},
+    ]
+    n = zr.upsert_department_sales(conn, 126, '2026-05-27', departments)
+    assert n == 3
+
+    rows = conn.execute(
+        'SELECT dept_code, amount, qty FROM z_department_sales '
+        'WHERE branch_id=? AND date=? ORDER BY dept_code',
+        (126, '2026-05-27')).fetchall()
+    assert len(rows) == 3
+    by_code = {r['dept_code']: r for r in rows}
+    assert by_code[5]['amount'] == 4150.33
+    assert by_code[5]['qty'] == 518.0
+    assert by_code[83]['amount'] == 1664.80
+    assert by_code[2]['amount'] == 1069.91
+
+
+def test_upsert_department_sales_replaces_prior_rows(staging_db_with_depts):
+    """Re-pulling for the same (branch, date) wipes the prior rows so a
+    corrected Z with FEWER depts doesn't leave stale ones behind."""
+    conn = staging_db_with_depts
+    zr.upsert_department_sales(conn, 126, '2026-05-27', [
+        {'dept_code': 5,  'dept_name': 'A', 'amount': 100.0, 'qty': 1},
+        {'dept_code': 99, 'dept_name': 'X', 'amount': 50.0,  'qty': 1},
+    ])
+    # Second pull drops dept 99.
+    zr.upsert_department_sales(conn, 126, '2026-05-27', [
+        {'dept_code': 5, 'dept_name': 'A', 'amount': 250.0, 'qty': 5},
+    ])
+    rows = conn.execute(
+        'SELECT dept_code, amount FROM z_department_sales '
+        'WHERE branch_id=? AND date=?',
+        (126, '2026-05-27')).fetchall()
+    assert len(rows) == 1
+    assert rows[0]['dept_code'] == 5
+    assert rows[0]['amount'] == 250.0
+
+
+def test_upsert_department_sales_empty_is_noop(staging_db_with_depts):
+    conn = staging_db_with_depts
+    # Seed a row to confirm an empty pull does NOT clobber it (the agent
+    # only calls upsert when parser returns rows; this guards the API
+    # contract anyway).
+    conn.execute(
+        "INSERT INTO z_department_sales (branch_id, date, dept_code, "
+        "dept_name, amount, qty) VALUES (126, '2026-05-27', 5, 'X', 1.0, 1)")
+    conn.commit()
+    n = zr.upsert_department_sales(conn, 126, '2026-05-27', [])
+    assert n == 0
+    rows = conn.execute(
+        'SELECT COUNT(*) AS c FROM z_department_sales').fetchone()
+    assert rows['c'] == 1
+
+
+# ── XLS failure must not break the Z pull ──────────────────────────────────
+
+@pytest.fixture
+def staging_db_with_z_and_depts():
+    """In-memory DB with branches + z_report_902 + z_department_sales."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER DEFAULT 1,
+            aviv_user_id TEXT, aviv_password TEXT
+        );
+        CREATE TABLE z_report_902 (
+            branch_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            z_number INTEGER,
+            amount REAL,
+            transactions INTEGER,
+            avg_per_txn REAL,
+            payment_breakdown TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT,
+            auth_source TEXT,
+            UNIQUE(branch_id, date)
+        );
+        CREATE TABLE z_department_sales (
+            branch_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            dept_code INTEGER NOT NULL,
+            dept_name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            qty REAL,
+            fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (branch_id, date, dept_code)
+        );
+    ''')
+    conn.execute(
+        "INSERT INTO branches (id, name, aviv_user_id, aviv_password) "
+        "VALUES (126, 'Einstein', 'einstein_user', 'einstein_pass')")
+    conn.commit()
+    return conn
+
+
+def test_xls_failure_does_not_break_z_pull(monkeypatch,
+                                            staging_db_with_z_and_depts,
+                                            sample_pdf_bytes):
+    """Core invariant: XLS-side errors are supplementary. If the XLS call
+    bombs (network/parse/anything), the Z pull's return value is still
+    ok=True with the parsed total. No dept rows. No exception out."""
+    monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: {'data': [{'value': [
+                            {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]})
+
+    def fake_submit(branch, z, token, output_type='PDF'):
+        if output_type == 'XLS':
+            raise RuntimeError('Aviv XLS server flaked')
+        return 'https://example.invalid/report.pdf'
+
+    monkeypatch.setattr(zr, 'submit_902', fake_submit)
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    # download_xls shouldn't even be reached, but stub it defensively.
+    monkeypatch.setattr(zr, 'download_xls',
+                        lambda u, t: (_ for _ in ()).throw(
+                            AssertionError('download_xls should not be called')))
+
+    result = zr.run_for_branch(126, '2026-05-20',
+                               conn=staging_db_with_z_and_depts)
+
+    # Z pull succeeded.
+    assert result['ok'] is True
+    assert result['total'] == 13721.98
+    # No dept rows stored.
+    n = staging_db_with_z_and_depts.execute(
+        'SELECT COUNT(*) AS c FROM z_department_sales').fetchone()['c']
+    assert n == 0
+
+
+def test_xls_success_writes_dept_rows(monkeypatch,
+                                       staging_db_with_z_and_depts,
+                                       sample_pdf_bytes, sample_xls_bytes):
+    """Happy path: PDF succeeds (Z total lands), XLS succeeds → all dept
+    rows for the fixture (~39) are persisted; spot-check dept 5 = 2804.08."""
+    monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: {'data': [{'value': [
+                            {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]})
+
+    def fake_submit(branch, z, token, output_type='PDF'):
+        return (f'https://example.invalid/r.{output_type.lower()}')
+
+    monkeypatch.setattr(zr, 'submit_902', fake_submit)
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'download_xls', lambda u, t: sample_xls_bytes)
+
+    result = zr.run_for_branch(126, '2026-05-20',
+                               conn=staging_db_with_z_and_depts)
+    assert result['ok'] is True
+
+    rows = staging_db_with_z_and_depts.execute(
+        'SELECT dept_code, amount FROM z_department_sales '
+        'WHERE branch_id=? AND date=?',
+        (126, '2026-05-20')).fetchall()
+    assert len(rows) >= 30
+    by_code = {r['dept_code']: r['amount'] for r in rows}
+    # Fixture is from branch 127 but mocked through branch 126's pull —
+    # the XLS bytes determine the dept values, not the branch arg.
+    assert by_code.get(5) == 2804.08
+    assert by_code.get(83) == 1500.50
+    assert by_code.get(2) == 698.92
+
+
+def test_build_submit_body_xls_outputtype():
+    """The new output_type parameter on build_submit_body must produce the
+    exact body shape Aviv accepts (PDF/XLS only — JSON/CSV/etc. all 400)."""
+    pdf_body = zr.build_submit_body(2525, 2525, output_type='PDF')
+    xls_body = zr.build_submit_body(2525, 2525, output_type='XLS')
+    assert pdf_body['outputType'] == 'PDF'
+    assert xls_body['outputType'] == 'XLS'
+    # Filters must be identical between PDF and XLS for the same Z.
+    assert pdf_body['filters'] == xls_body['filters']

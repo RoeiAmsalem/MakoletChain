@@ -458,11 +458,17 @@ def resolve_z_for_date(filters_json, target_date: str) -> int | None:
     return None
 
 
-def build_submit_body(from_z: int, to_z: int) -> dict:
-    """Exact body shape captured from BI DevTools."""
+def build_submit_body(from_z: int, to_z: int, output_type: str = 'PDF') -> dict:
+    """Exact body shape captured from BI DevTools.
+
+    output_type: 'PDF' (default; what /sales preview reads) or 'XLS' (structured
+    Excel — the only other outputType the server accepts for 902; XLSX/JSON/
+    CSV/HTML all 400). XLS is parsed by the dept agent to extract the
+    per-department breakdown that the PDF only surfaces as RTL-reversed text.
+    """
     return {
         'id': Z_REPORT_ID,
-        'outputType': 'PDF',
+        'outputType': output_type,
         'filters': [
             {'id': 1, 'name': 'ID_Z', 'filterType': 'INTEGER', 'value': from_z},
             {'id': 2, 'name': 'TO_Z', 'filterType': 'INTEGER', 'value': to_z},
@@ -470,9 +476,10 @@ def build_submit_body(from_z: int, to_z: int) -> dict:
     }
 
 
-def submit_902(aviv_branch_id: int, z_number: int, token: str) -> str:
+def submit_902(aviv_branch_id: int, z_number: int, token: str,
+               output_type: str = 'PDF') -> str:
     """POST /reports/result/?branch=X → file url. Raises AuthExpired on 401."""
-    body = build_submit_body(z_number, z_number)
+    body = build_submit_body(z_number, z_number, output_type=output_type)
     url = f'{BASE}/reports/result/?branch={aviv_branch_id}'
     r = requests.post(url, json=body,
                       headers={'Authtoken': token, 'Content-Type': 'application/json'},
@@ -495,6 +502,180 @@ def download_pdf(file_url: str, token: str) -> bytes:
         raise AuthExpired('pdf download 401')
     r.raise_for_status()
     return r.content
+
+
+def download_xls(file_url: str, token: str) -> bytes:
+    """GET the report URL with Authtoken → XLS bytes (legacy BIFF .xls)."""
+    r = requests.get(file_url, headers={'Authtoken': token},
+                     timeout=60, verify=False)
+    if r.status_code == 401:
+        raise AuthExpired('xls download 401')
+    r.raise_for_status()
+    return r.content
+
+
+# ---- XLS dept parser ------------------------------------------------------
+#
+# Aviv's 902 XLS has the per-department breakdown as a contiguous block on the
+# single sheet ('העתק Z'). Shape captured live from branch 127 Z 1324:
+#
+#   row N   : ['מכירות בחתך מחלקה', '', '', ...]               ← section title
+#   row N+1 : ["סה''כ", 'כמות', 'מחלקה']                        ← column header
+#   row N+2 : ['<amount>', '<qty>', '<code> <name>']           ← dept rows
+#   ...
+#   row M   : ['<total_amount>', '<total_qty>', "סה''כ"]        ← terminator
+#
+# Hebrew is NOT RTL-reversed here (unlike the PDF). Column C contains the dept
+# code as a leading integer followed by a space and the Hebrew name. Some rows
+# are blank (Aviv pads with empty rows between groups in some renders) — those
+# get skipped silently. The terminator is a row whose column-C value equals
+# the Hebrew "סה''כ" exactly.
+#
+# Locating the section: scan rows for any cell containing 'מחלקה' AND look
+# ahead for the "סה''כ / כמות / מחלקה" header. Don't hardcode a row index.
+
+_DEPT_SECTION_TITLE = 'מכירות בחתך מחלקה'
+_DEPT_TOTAL_LABEL = "סה''כ"
+_DEPT_HEADER_QTY = 'כמות'
+_DEPT_HEADER_NAME = 'מחלקה'
+_DEPT_CODE_NAME_RE = re.compile(r'^\s*(\d+)\s+(.+?)\s*$')
+
+
+def _xls_cell_str(v) -> str:
+    """xlrd returns floats for numeric cells; normalize everything to str."""
+    if v is None:
+        return ''
+    if isinstance(v, float):
+        # Codes/qty come through as floats from xlrd. Keep precision for qty;
+        # the caller handles int parsing for the dept code.
+        if v.is_integer():
+            return str(int(v))
+        return str(v)
+    return str(v).strip()
+
+
+def _xls_cell_float(v) -> float | None:
+    """Parse a cell value as float. Strings may have commas (rare here)."""
+    if v is None or v == '':
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(',', '').strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_902_xls_departments(xls_bytes: bytes) -> list[dict]:
+    """Extract dept rows from a 902 XLS.
+
+    Aviv's XLS lays the dept section out as 3 columns that are NOT adjacent —
+    captured live, the cells live in columns 0 / 19 / 30 (amount / qty /
+    "<code> <name>") with everything between them empty. Future renders may
+    shift these positions, so we discover them from the header row itself
+    rather than hardcoding indices: the header row has the literal strings
+    "סה''כ" / "כמות" / "מחלקה" in three columns, and the data rows below it
+    use the same three column indices.
+
+    Returns a list of {'dept_code', 'dept_name', 'amount', 'qty'} dicts (one
+    per dept). Empty list if the section can't be located — never raises on
+    parse anomalies; callers treat dept data as supplementary.
+    """
+    try:
+        import xlrd
+    except ImportError:
+        log.warning('xlrd not installed; cannot parse 902 XLS departments')
+        return []
+
+    try:
+        wb = xlrd.open_workbook(file_contents=xls_bytes, formatting_info=False)
+    except Exception as e:
+        log.warning('open 902 XLS failed: %s', str(e)[:160])
+        return []
+
+    sh = wb.sheet_by_index(0)
+
+    # 1) Find the header row + the columns it places amount / qty / name in.
+    amount_col = qty_col = name_col = None
+    header_row = None
+    for i in range(sh.nrows):
+        cells = {c: _xls_cell_str(sh.cell_value(i, c)) for c in range(sh.ncols)
+                 if sh.cell_value(i, c) != ''}
+        if not cells:
+            continue
+        has_total = any(v == _DEPT_TOTAL_LABEL for v in cells.values())
+        has_qty = any(v == _DEPT_HEADER_QTY for v in cells.values())
+        has_name = any(v == _DEPT_HEADER_NAME for v in cells.values())
+        if has_total and has_qty and has_name:
+            for c, v in cells.items():
+                if v == _DEPT_TOTAL_LABEL:
+                    amount_col = c
+                elif v == _DEPT_HEADER_QTY:
+                    qty_col = c
+                elif v == _DEPT_HEADER_NAME:
+                    name_col = c
+            header_row = i
+            break
+
+    if header_row is None:
+        log.warning('dept section header not found in 902 XLS')
+        return []
+    if amount_col is None or qty_col is None or name_col is None:
+        log.warning('dept header row %d missing one of the three columns '
+                    '(amount=%s qty=%s name=%s)',
+                    header_row, amount_col, qty_col, name_col)
+        return []
+
+    # 2) Iterate rows after the header until the terminator (name col == "סה''כ").
+    departments: list[dict] = []
+    seen_codes: set[int] = set()
+    for i in range(header_row + 1, sh.nrows):
+        a_raw = sh.cell_value(i, amount_col)
+        b_raw = sh.cell_value(i, qty_col)
+        c_str = _xls_cell_str(sh.cell_value(i, name_col))
+
+        if not c_str and (a_raw == '' or a_raw is None) and (
+                b_raw == '' or b_raw is None):
+            # Blank padding row — Aviv splits the table mid-stream sometimes.
+            continue
+
+        if c_str.strip() == _DEPT_TOTAL_LABEL:
+            # Terminator row (grand total). Do not store as a dept.
+            break
+
+        m = _DEPT_CODE_NAME_RE.match(c_str)
+        if not m:
+            # Unexpected shape (e.g. a sub-header) — log and skip rather than
+            # poison the table.
+            log.info('skipping unparseable dept row %d: name_col=%r', i, c_str)
+            continue
+
+        try:
+            dept_code = int(m.group(1))
+        except ValueError:
+            log.info('skipping dept row %d with non-int code: %r', i, m.group(1))
+            continue
+        dept_name = m.group(2).strip()
+        amount = _xls_cell_float(a_raw)
+        qty = _xls_cell_float(b_raw)
+        if amount is None:
+            # No amount = nothing useful to store.
+            continue
+        if dept_code in seen_codes:
+            # Defensive: re-runs of a corrupted Z occasionally repeat a row.
+            # Keep the first occurrence; log the second.
+            log.info('duplicate dept_code=%d at row %d — keeping first',
+                     dept_code, i)
+            continue
+        seen_codes.add(dept_code)
+        departments.append({
+            'dept_code': dept_code,
+            'dept_name': dept_name,
+            'amount': amount,
+            'qty': qty,
+        })
+
+    return departments
 
 
 # ---- DB upsert ------------------------------------------------------------
@@ -558,6 +739,30 @@ def mirror_to_daily_sales(conn, branch_id: int, target_date: str,
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+def upsert_department_sales(conn, branch_id: int, target_date: str,
+                            departments: list[dict]) -> int:
+    """INSERT OR REPLACE every dept row for (branch_id, date).
+
+    Returns the number of rows written. The transaction first clears any
+    prior rows for the (branch, date) so a re-pull with FEWER departments
+    (Aviv occasionally drops a dept from the report) doesn't leave stale
+    rows behind. Single commit at the end.
+    """
+    if not departments:
+        return 0
+    conn.execute(
+        'DELETE FROM z_department_sales WHERE branch_id=? AND date=?',
+        (branch_id, target_date))
+    conn.executemany(
+        'INSERT OR REPLACE INTO z_department_sales '
+        '(branch_id, date, dept_code, dept_name, amount, qty, fetched_at) '
+        "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+        [(branch_id, target_date, d['dept_code'], d['dept_name'],
+          d['amount'], d.get('qty')) for d in departments])
+    conn.commit()
+    return len(departments)
 
 
 def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
@@ -732,6 +937,46 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
         log.info('branch=%d date=%s z=%d total=%.2f txns=%s',
                  branch_id, target_date, z_number,
                  parsed['total'], parsed['transactions'])
+
+        # Department breakdown — supplementary; never fails the Z pull.
+        # Rides on the same Z that landed: same auth, same z_number, same
+        # branch URL. Wrapped in a broad try so any XLS-side failure
+        # (network, parse, server flake) is logged and swallowed.
+        try:
+            xls_url = submit_902(aviv_branch_id, z_number, token,
+                                 output_type='XLS')
+            xls_bytes = download_xls(xls_url, token)
+            departments = parse_902_xls_departments(xls_bytes)
+            if departments:
+                n = upsert_department_sales(conn, branch_id, target_date,
+                                            departments)
+                log.info('branch=%d date=%s dept_rows=%d', branch_id,
+                         target_date, n)
+            else:
+                log.warning('branch=%d date=%s dept parse returned 0 rows',
+                            branch_id, target_date)
+        except AuthExpired:
+            # 401 mid-XLS — re-auth and retry once, mirroring the PDF path's
+            # one-shot retry. Still wrapped so a second failure doesn't
+            # bubble out and break the Z pull's return value.
+            try:
+                token, aviv_branch_id = _reauth()
+                xls_url = submit_902(aviv_branch_id, z_number, token,
+                                     output_type='XLS')
+                xls_bytes = download_xls(xls_url, token)
+                departments = parse_902_xls_departments(xls_bytes)
+                if departments:
+                    n = upsert_department_sales(conn, branch_id, target_date,
+                                                departments)
+                    log.info('branch=%d date=%s dept_rows=%d (post-reauth)',
+                             branch_id, target_date, n)
+            except Exception as e:
+                log.warning('branch=%d date=%s dept pull failed after '
+                            're-auth: %s', branch_id, target_date,
+                            str(e)[:160])
+        except Exception as e:
+            log.warning('branch=%d date=%s dept pull failed: %s',
+                        branch_id, target_date, str(e)[:160])
 
         if MIRROR_TO_DAILY_SALES:
             inserted = mirror_to_daily_sales(
