@@ -13,6 +13,10 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 import requests
 
 from utils.notify import notify
