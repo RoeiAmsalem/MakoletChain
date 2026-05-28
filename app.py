@@ -1161,6 +1161,90 @@ def api_summary():
     })
 
 
+# Department codes surfaced as KPI tiles on the home page. The full ~35-row
+# breakdown is stored in z_department_sales nightly; only these are
+# highlighted on /. Adding a 4th dept is a one-line list edit — no schema
+# change. dept_code is the source of truth; the display label here is the
+# Hebrew tag managers want to see (Aviv's own names are stored too but can
+# read awkwardly out of context, e.g. dept 2 = "ירקות פירות").
+HOME_DEPT_TILES: list[dict] = [
+    {'code': 5,  'label': 'מקרר חלב', 'icon': '🥛'},
+    {'code': 83, 'label': 'סיגריות',  'icon': '🚬'},
+    {'code': 2,  'label': 'ירקות',    'icon': '🥬'},
+]
+
+
+@app.route('/api/department-sales')
+@login_required
+def api_department_sales():
+    """Return per-department sales for the selected branch.
+
+    Default: most recent date with any z_department_sales rows for the branch
+    (so the tile keeps showing yesterday's number when today's Z hasn't
+    landed yet, instead of showing "—"). Override with ?date=YYYY-MM-DD.
+
+    Response:
+      {
+        "branch_id": 127,
+        "date": "2026-05-27" | null,
+        "departments": [{"code": 5, "amount": 4150.33, "qty": 518.0,
+                         "name": "מקרר-מוצרי חלב ותחליפים"}, ...],
+        "tiles": [{"code": 5, "label": "מקרר חלב", "icon": "🥛",
+                   "amount": 4150.33}, ...]
+      }
+
+    `tiles` is the home page's preferred renderer payload — codes from
+    HOME_DEPT_TILES with their amounts looked up. Missing depts → amount=None
+    so the template can render "—" gracefully.
+    """
+    branch_id = get_branch_id()
+    db = get_db()
+
+    target_date = request.args.get('date')
+    if not target_date:
+        # Latest date this branch has any dept data for.
+        row = db.execute(
+            'SELECT MAX(date) AS d FROM z_department_sales WHERE branch_id=?',
+            (branch_id,)
+        ).fetchone()
+        target_date = row['d'] if row and row['d'] else None
+
+    departments: list[dict] = []
+    by_code: dict[int, dict] = {}
+    if target_date:
+        rows = db.execute(
+            'SELECT dept_code, dept_name, amount, qty FROM z_department_sales '
+            'WHERE branch_id=? AND date=? ORDER BY amount DESC',
+            (branch_id, target_date)
+        ).fetchall()
+        for r in rows:
+            entry = {
+                'code': r['dept_code'],
+                'name': r['dept_name'],
+                'amount': r['amount'],
+                'qty': r['qty'],
+            }
+            departments.append(entry)
+            by_code[r['dept_code']] = entry
+
+    tiles = []
+    for t in HOME_DEPT_TILES:
+        entry = by_code.get(t['code'])
+        tiles.append({
+            'code': t['code'],
+            'label': t['label'],
+            'icon': t['icon'],
+            'amount': entry['amount'] if entry else None,
+        })
+
+    return jsonify({
+        'branch_id': branch_id,
+        'date': target_date,
+        'departments': departments,
+        'tiles': tiles,
+    })
+
+
 @app.route('/api/network-overview')
 @login_required
 def api_network_overview():
