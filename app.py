@@ -639,6 +639,18 @@ def network_page():
     return render_template('network.html', **ctx)
 
 
+@app.route('/network/revenue')
+@login_required
+def network_revenue_page():
+    """Chain-wide daily revenue headline (total-first). Admin/CEO only —
+    managers keep their per-store /sales. Data via /api/network/revenue."""
+    role = session.get('user_role')
+    if role not in ROLES_ALL_BRANCHES:
+        return redirect(url_for('index'))
+    ctx = _page_context('network_revenue')
+    return render_template('network_revenue.html', **ctx)
+
+
 # ── Sales charts ─────────────────────────────────────────────
 # datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
 _HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
@@ -1495,6 +1507,121 @@ def api_network_overview():
             'fixed_other': round(total_fixed_other, 2),
         },
         'leaderboard': leaderboard,
+    })
+
+
+@app.route('/api/network/revenue')
+@login_required
+def api_network_revenue():
+    """Chain-wide DAILY revenue headline for the admin/CEO network view.
+
+    Total-first: chain total for a single day, % vs the prior calendar day,
+    average per reporting store, a 7-day chain-total sparkline, a truthful
+    coverage line (how many active branches actually have a daily_sales row
+    that day + which are missing), and a ranked per-branch strip.
+
+    Source: daily_sales (Z-reports) — the only feed with reliable per-branch
+    daily totals across every chain store. Default date = the most recent day
+    with ANY data (today is empty before the nightly Z sync / when agents are
+    off), so the headline never opens blank. Admin/CEO only.
+    """
+    role = session.get('user_role')
+    if role not in ROLES_ALL_BRANCHES:
+        return jsonify({'error': 'forbidden'}), 403
+
+    db = get_db()
+    visible = _list_visible_branches(session.get('user_id'), role)
+    total_branches = len(visible)
+    empty = {
+        'date': None, 'chain_total': 0, 'avg_per_store': 0,
+        'prev_date': None, 'prev_total': 0, 'pct_vs_prev': None,
+        'total_branches': total_branches, 'reported': 0, 'missing': [],
+        'per_branch': [], 'top': None, 'bottom': None, 'series_7d': [],
+    }
+    if not visible:
+        return jsonify(empty)
+
+    branch_ids = [b['id'] for b in visible]
+    names = {b['id']: b['name'] for b in visible}
+    ph = ','.join('?' * len(branch_ids))
+
+    # Resolve the date: explicit ?date=YYYY-MM-DD wins (validated), else the
+    # most recent day with any daily_sales row among visible branches.
+    sel_date = None
+    req_date = request.args.get('date')
+    if req_date:
+        try:
+            sel_date = datetime.strptime(req_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+        except ValueError:
+            sel_date = None
+    if not sel_date:
+        row = db.execute(
+            f"SELECT MAX(date) AS d FROM daily_sales WHERE branch_id IN ({ph})",
+            branch_ids
+        ).fetchone()
+        sel_date = row['d'] if row and row['d'] else _now_il().strftime('%Y-%m-%d')
+
+    def _day_total(d):
+        r = db.execute(
+            f"SELECT COALESCE(SUM(amount),0) AS t FROM daily_sales "
+            f"WHERE date=? AND branch_id IN ({ph})",
+            [d] + branch_ids
+        ).fetchone()
+        return round(float(r['t'] or 0), 2)
+
+    # Per-branch rows for the selected day (only branches WITH a row).
+    rows = db.execute(
+        f"SELECT branch_id, COALESCE(SUM(amount),0) AS amount "
+        f"FROM daily_sales WHERE date=? AND branch_id IN ({ph}) "
+        f"GROUP BY branch_id",
+        [sel_date] + branch_ids
+    ).fetchall()
+
+    per_branch = sorted(
+        [{'branch_id': r['branch_id'],
+          'branch_name': names.get(r['branch_id'], 'סניף לא ידוע'),
+          'amount': round(float(r['amount'] or 0), 2)} for r in rows],
+        key=lambda x: x['amount'], reverse=True
+    )
+    reported_ids = {r['branch_id'] for r in rows}
+    missing = [{'branch_id': b['id'], 'branch_name': b['name']}
+               for b in visible if b['id'] not in reported_ids]
+
+    chain_total = round(sum(r['amount'] for r in per_branch), 2)
+    reported = len(per_branch)
+    avg_per_store = round(chain_total / reported, 2) if reported else 0
+
+    prev_date = db.execute("SELECT date(?, '-1 day') AS d", (sel_date,)).fetchone()['d']
+    prev_total = _day_total(prev_date)
+    pct_vs_prev = round((chain_total - prev_total) / prev_total * 100, 1) if prev_total > 0 else None
+
+    # 7-day chain-total sparkline ending on sel_date (zero-filled).
+    start_date = (datetime.strptime(sel_date, '%Y-%m-%d') - timedelta(days=6)).strftime('%Y-%m-%d')
+    series_rows = db.execute(
+        f"SELECT date, COALESCE(SUM(amount),0) AS t FROM daily_sales "
+        f"WHERE date BETWEEN ? AND ? AND branch_id IN ({ph}) GROUP BY date",
+        [start_date, sel_date] + branch_ids
+    ).fetchall()
+    by_day = {r['date']: round(float(r['t'] or 0), 2) for r in series_rows}
+    series_7d = []
+    for i in range(7):
+        d = (datetime.strptime(start_date, '%Y-%m-%d') + timedelta(days=i)).strftime('%Y-%m-%d')
+        series_7d.append({'date': d, 'total': by_day.get(d, 0)})
+
+    return jsonify({
+        'date': sel_date,
+        'chain_total': chain_total,
+        'avg_per_store': avg_per_store,
+        'prev_date': prev_date,
+        'prev_total': prev_total,
+        'pct_vs_prev': pct_vs_prev,
+        'total_branches': total_branches,
+        'reported': reported,
+        'missing': missing,
+        'per_branch': per_branch,
+        'top': per_branch[0] if per_branch else None,
+        'bottom': per_branch[-1] if per_branch else None,
+        'series_7d': series_7d,
     })
 
 

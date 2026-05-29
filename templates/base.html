@@ -50,6 +50,9 @@
             {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
             <li><a href="/network" class="{% if active_page == 'network' %}active{% endif %}">תצוגת רשת</a></li>
             {% endif %}
+            {% if session.get('user_role') in ('admin', 'ceo') %}
+            <li><a href="/network/revenue" class="{% if active_page == 'network_revenue' %}active{% endif %}">הכנסות רשת</a></li>
+            {% endif %}
             {% if session.get('user_role') == 'admin' %}
             <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
             <li><a href="/z-status" class="{% if active_page == 'z_status' %}active{% endif %}">סטטוס Z</a></li>
@@ -95,6 +98,9 @@
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
         {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
         <a href="/network" class="{% if active_page == 'network' %}active{% endif %}">תצוגת רשת</a>
+        {% endif %}
+        {% if session.get('user_role') in ('admin', 'ceo') %}
+        <a href="/network/revenue" class="{% if active_page == 'network_revenue' %}active{% endif %}">הכנסות רשת</a>
         {% endif %}
         {% if session.get('user_role') == 'admin' %}
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
