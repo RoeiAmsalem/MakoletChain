@@ -25,12 +25,26 @@ def main():
         active = db.execute("SELECT id, name FROM branches WHERE active=1 ORDER BY id").fetchall()
         active_ids = [r['id'] for r in active]
         total_branches = len(active)
-        mgr = db.execute(
-            "SELECT u.id FROM users u JOIN user_branches ub ON ub.user_id=u.id "
-            "WHERE u.role='manager' LIMIT 1").fetchone()
         admin = db.execute("SELECT id FROM users WHERE role='admin' LIMIT 1").fetchone()
+        ceo = db.execute("SELECT id FROM users WHERE role='ceo' LIMIT 1").fetchone()
         admin_id = admin['id'] if admin else 1
-        mgr_id = mgr['id'] if mgr else None
+        ceo_id = ceo['id'] if ceo else None
+
+        # Branch-count per manager → pick a multi-store and a single-store one.
+        mgr_rows = db.execute(
+            "SELECT u.id, COUNT(ub.branch_id) n FROM users u "
+            "JOIN user_branches ub ON ub.user_id=u.id "
+            "WHERE u.role='manager' GROUP BY u.id").fetchall()
+        multi_mgr = next((r['id'] for r in mgr_rows if r['n'] >= 2), None)
+        single_mgr = next((r['id'] for r in mgr_rows if r['n'] == 1), None)
+        mgr_id = (multi_mgr or single_mgr or
+                  (mgr_rows[0]['id'] if mgr_rows else None))
+
+        def _mgr_branch_ids(uid):
+            return {r['branch_id'] for r in db.execute(
+                "SELECT branch_id FROM user_branches WHERE user_id=?", (uid,)).fetchall()}
+        multi_branches = _mgr_branch_ids(multi_mgr) if multi_mgr else set()
+        single_branches = _mgr_branch_ids(single_mgr) if single_mgr else set()
 
         # Independent reconciliation totals for PROBE_DATE
         ph = ','.join('?' * len(active_ids))
@@ -143,6 +157,67 @@ def main():
     results.append(line("STEP 13 (admin page 200 + renders)",
                         rpg.status_code == 200 and 'הכנסות רשת' in body and 'nrBody' in body,
                         f"status={rpg.status_code}"))
+
+    # ── /network/revenue-v2 (experimental toggle page) ──
+    # 14. Admin v2 API: 200, scoped to ALL active branches.
+    as_role('admin', admin_id)
+    rv = client.get('/api/network/revenue-v2').get_json()
+    results.append(line("STEP 14 (v2 API admin = all branches)",
+                        rv.get('total_branches') == total_branches,
+                        f"total_branches={rv.get('total_branches')} active={total_branches}"))
+
+    # 15. CEO v2 API: 200, all branches.
+    if ceo_id:
+        as_role('ceo', ceo_id)
+        rvc = client.get('/api/network/revenue-v2')
+        results.append(line("STEP 15 (v2 API ceo 200 + all branches)",
+                            rvc.status_code == 200 and rvc.get_json().get('total_branches') == total_branches,
+                            f"status={rvc.status_code} total={rvc.get_json().get('total_branches')}"))
+
+    # 16. Multi-store manager v2 API: 200 (NOT 403), scoped to ONLY his stores.
+    if multi_mgr:
+        as_role('manager', multi_mgr)
+        rmv = client.get('/api/network/revenue-v2')
+        dm = rmv.get_json()
+        seen = {b['branch_id'] for b in dm['per_branch']} | {m['branch_id'] for m in dm['missing']}
+        results.append(line("STEP 16 (v2 API manager scoped to own stores only)",
+                            rmv.status_code == 200 and dm['total_branches'] == len(multi_branches)
+                            and seen.issubset(multi_branches),
+                            f"total={dm['total_branches']} own={len(multi_branches)} leak={seen - multi_branches}"))
+
+        # 17. Multi-store manager page → toggle shown.
+        rmp = client.get('/network/revenue-v2').get_data(as_text=True)
+        results.append(line("STEP 17 (multi-store manager sees toggle)",
+                            'rev2-toggle' in rmp and 'הרשת שלי' in rmp and 'סניף בודד' in rmp,
+                            f"toggle_present={'rev2-toggle' in rmp}"))
+
+    # 18. Single-store manager page → NO toggle, lands on single store w/ reused /sales content.
+    if single_mgr:
+        as_role('manager', single_mgr)
+        rsp = client.get('/network/revenue-v2').get_data(as_text=True)
+        results.append(line("STEP 18 (single-store manager: no toggle, single mode)",
+                            'rev2-toggle' not in rsp and 'sales-tfoot' in rsp,
+                            f"toggle_absent={'rev2-toggle' not in rsp} sales_content={'sales-tfoot' in rsp}"))
+
+        # 19. Single manager v2 API still scoped to his 1 store.
+        dsv = client.get('/api/network/revenue-v2').get_json()
+        results.append(line("STEP 19 (single manager v2 API = 1 store)",
+                            dsv['total_branches'] == len(single_branches) == 1,
+                            f"total={dsv['total_branches']} own={len(single_branches)}"))
+
+    # 20. EXISTING /sales still renders (include refactor didn't break it).
+    as_role('admin', admin_id)
+    rs = client.get('/sales')
+    rsb = rs.get_data(as_text=True)
+    results.append(line("STEP 20 (/sales unchanged: 200 + Z content)",
+                        rs.status_code == 200 and 'sales-tfoot' in rsb,
+                        f"status={rs.status_code} sales_content={'sales-tfoot' in rsb}"))
+
+    # 21. v2 admin network mode renders aggregate dashboard + toggle.
+    rv2p = client.get('/network/revenue-v2').get_data(as_text=True)
+    results.append(line("STEP 21 (v2 admin network mode renders)",
+                        'nrBody' in rv2p and 'rev2-toggle' in rv2p and 'revenue-v2' in rv2p,
+                        f"dashboard={'nrBody' in rv2p}"))
 
     print()
     failed = [i for i, ok in enumerate(results) if not ok]

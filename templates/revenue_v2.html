@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}הכנסות (ניסיוני) - קופה שקופה{% endblock %}
+{% block head %}
+{% if rev2_mode == 'single' %}{% include '_sales_styles.html' %}{% endif %}
+<style>
+    /* ── Toggle + store picker (v2 sandbox chrome) ── */
+    .rev2-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .rev2-toggle {
+        display: inline-flex; background: rgba(255,255,255,0.05);
+        border: 1px solid var(--card-border); border-radius: 999px; padding: 4px; gap: 4px;
+    }
+    .rev2-toggle a {
+        text-decoration: none; color: var(--text-secondary); border-radius: 999px;
+        padding: 7px 18px; font-size: 0.85rem; font-weight: 600; min-height: 36px;
+        display: inline-flex; align-items: center; touch-action: manipulation;
+    }
+    .rev2-toggle a.active { background: var(--accent); color: #fff; }
+    .rev2-storepick { display: flex; align-items: center; gap: 0.5rem; }
+    .rev2-storepick label { font-size: 0.85rem; color: var(--text-secondary); }
+    .rev2-storepick select {
+        background: rgba(255,255,255,0.05); border: 1px solid var(--card-border);
+        border-radius: 8px; padding: 0.45rem 0.7rem; color: var(--text-primary);
+        font-size: 0.88rem; font-family: inherit; color-scheme: dark; min-height: 38px;
+    }
+
+    /* ── Aggregate dashboard (mirrors /network/revenue, points at the v2 API) ── */
+    .nr-wrap { width: 100%; max-width: 1400px; margin: 0 auto; }
+    .nr-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 0.85rem; }
+    .nr-metric { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.1rem; box-shadow: var(--shadow); border-top: 3px solid var(--card-border); }
+    .nr-metric.accent { border-top-color: var(--profit); }
+    .nr-metric .m-label { font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.35rem; }
+    .nr-metric .m-value { font-size: 1.85rem; font-weight: 800; color: var(--text-light); line-height: 1.1; letter-spacing: -0.5px; }
+    .nr-metric .m-sub { margin-top: 0.4rem; font-size: 0.82rem; color: var(--text-secondary); }
+    .nr-delta { font-weight: 700; }
+    .nr-delta.up { color: var(--profit); }
+    .nr-delta.down { color: var(--loss); }
+    .nr-delta.flat { color: var(--text-muted); }
+    .nr-coverage { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 1rem; padding: 0.7rem 0.9rem; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 10px; }
+    .nr-coverage b { color: var(--text-primary); }
+    .nr-coverage .nr-missing { color: #f59e0b; }
+    .nr-trend { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.2rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
+    .nr-trend h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.7rem; }
+    .nr-trend-wrap { position: relative; height: 120px; width: 100%; }
+    .nr-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.2rem; box-shadow: var(--shadow); }
+    .nr-strip h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.9rem; }
+    .nr-row { display: grid; grid-template-columns: 28px 1fr auto; align-items: baseline; gap: 0.7rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(148,163,184,0.08); }
+    .nr-row .rrank { font-size: 0.82rem; color: var(--text-muted); font-weight: 700; text-align: center; }
+    .nr-row .rname { font-size: 0.88rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nr-row .ramt { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; text-align: left; }
+    .nr-row.missing .rname, .nr-row.missing .ramt, .nr-row.missing .rrank { color: var(--text-muted); }
+    .nr-row.missing .ramt { font-weight: 500; font-size: 0.82rem; }
+    .nr-rows.collapsed .nr-row.nr-tail { display: none; }
+    .nr-more { margin-top: 0.8rem; background: transparent; border: 1px solid var(--card-border); border-radius: 8px; color: var(--text-secondary); padding: 0.45rem 0.8rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit; width: 100%; min-height: 38px; touch-action: manipulation; }
+    .nr-more:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+    .nr-empty { text-align: center; color: var(--text-secondary); padding: 2.5rem 1rem; }
+    @media (min-width: 900px) {
+        .nr-rows { column-count: 2; column-gap: 2.5rem; }
+        .nr-row { break-inside: avoid; }
+        .nr-rows.collapsed .nr-row.nr-tail { display: grid; }
+        .nr-more { display: none; }
+    }
+    @media (max-width: 899px) { .nr-metrics { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 480px) { .nr-metrics { grid-template-columns: 1fr; } .nr-metric .m-value { font-size: 1.6rem; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="rev2-bar">
+    {% if not rev2_single_store %}
+    <div class="rev2-toggle">
+        <a href="?mode=network" class="{% if rev2_mode == 'network' %}active{% endif %}">הרשת שלי</a>
+        <a href="?mode=single" class="{% if rev2_mode == 'single' %}active{% endif %}">סניף בודד</a>
+    </div>
+    {% else %}
+    <div></div>
+    {% endif %}
+
+    {% if rev2_mode == 'single' %}
+    <div class="rev2-storepick">
+        <label for="rev2Store">סניף:</label>
+        <select id="rev2Store">
+            {% for b in rev2_branches %}
+            <option value="{{ b.id }}" {% if b.id == rev2_store %}selected{% endif %}>{{ b.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+</div>
+
+{% if rev2_mode == 'network' %}
+<div class="nr-wrap">
+    <div id="nrBody"><div class="nr-empty">טוען…</div></div>
+</div>
+{% else %}
+{% include '_sales_content.html' %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if rev2_mode == 'network' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+(function () {
+    const body = document.getElementById('nrBody');
+    let trendChart = null;
+    const fmt = v => '₪' + Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
+    const fmtNum = v => Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
+    const dm = iso => { const p = iso.split('-'); return p[2] + '/' + p[1]; };
+
+    function deltaHtml(pct, suffix) {
+        if (pct === null || pct === undefined) return `<span class="nr-delta flat">— אין נתוני השוואה</span>`;
+        const cls = pct > 0 ? 'up' : (pct < 0 ? 'down' : 'flat');
+        const arrow = pct > 0 ? '▲' : (pct < 0 ? '▼' : '◆');
+        const sign = pct > 0 ? '+' : '';
+        return `<span class="nr-delta ${cls}">${arrow} ${sign}${pct.toLocaleString('he-IL', { maximumFractionDigits: 1 })}%</span> ${suffix}`;
+    }
+
+    function renderTrend(series) {
+        const ctx = document.getElementById('nrTrend');
+        if (!ctx) return;
+        const labels = series.map(p => dm(p.date));
+        const data = series.map(p => p.total);
+        if (trendChart) trendChart.destroy();
+        trendChart = new Chart(ctx.getContext('2d'), {
+            type: 'line',
+            data: { labels, datasets: [{ data, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.15)', fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: '#818cf8' }] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { callbacks: { title: items => series[items[0].dataIndex].date, label: item => fmt(item.parsed.y) } } },
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 0, autoSkip: false, callback: (v, i) => (i === 0 || i === labels.length - 1) ? labels[i] : '' } },
+                    y: { display: false, beginAtZero: true },
+                },
+            },
+        });
+    }
+
+    function render(d) {
+        if (!d.date || d.reported === 0) { body.innerHTML = `<div class="nr-empty">אין נתוני הכנסות ליום זה.</div>`; return; }
+        let cov = `<b>${d.reported}</b> מתוך <b>${d.total_branches}</b> סניפים דיווחו`;
+        if (d.missing && d.missing.length) cov += ` · <span class="nr-missing">חסר: ${d.missing.map(m => m.branch_name).join(', ')}</span>`;
+
+        const COLLAPSE = 8;
+        let idx = 0;
+        const reportedRows = d.per_branch.map((b, i) => {
+            const tail = idx >= COLLAPSE ? ' nr-tail' : ''; idx++;
+            return `<div class="nr-row${tail}"><div class="rrank">${i + 1}</div><div class="rname" title="${b.branch_name}">${b.branch_name}</div><div class="ramt">${fmt(b.amount)}</div></div>`;
+        }).join('');
+        const missingRows = (d.missing || []).map(m => {
+            const tail = idx >= COLLAPSE ? ' nr-tail' : ''; idx++;
+            return `<div class="nr-row missing${tail}"><div class="rrank">–</div><div class="rname" title="${m.branch_name}">${m.branch_name}</div><div class="ramt">אין נתונים</div></div>`;
+        }).join('');
+        const tailCount = (d.per_branch.length + (d.missing ? d.missing.length : 0)) - COLLAPSE;
+        const moreBtn = tailCount > 0 ? `<button class="nr-more" id="nrMore">+ ${tailCount} נוספים</button>` : '';
+
+        body.innerHTML = `
+            <div class="nr-metrics">
+                <div class="nr-metric accent"><div class="m-label">סה״כ הכנסות · ${d.date}</div><div class="m-value">${fmt(d.chain_total)}</div><div class="m-sub">${deltaHtml(d.pct_vs_prev, 'מאתמול')}</div></div>
+                <div class="nr-metric"><div class="m-label">ממוצע לסניף</div><div class="m-value">${fmt(d.avg_per_store)}</div><div class="m-sub">${d.reported} סניפים מדווחים</div></div>
+                <div class="nr-metric"><div class="m-label">עסקאות</div><div class="m-value">${fmtNum(d.total_transactions)}</div><div class="m-sub">ממוצע ${fmt(d.avg_basket)} לעסקה</div></div>
+                <div class="nr-metric"><div class="m-label">חודש מתגלגל</div><div class="m-value">${fmt(d.month_to_date_total)}</div><div class="m-sub">${deltaHtml(d.pct_vs_prev_month, 'מהחודש הקודם')}</div></div>
+            </div>
+            <div class="nr-coverage">${cov}</div>
+            <div class="nr-trend"><h2>מגמת הכנסות הרשת — 14 ימים</h2><div class="nr-trend-wrap"><canvas id="nrTrend"></canvas></div></div>
+            <div class="nr-strip"><h2>דירוג סניפים</h2><div class="nr-rows collapsed">${reportedRows}${missingRows}</div>${moreBtn}</div>`;
+
+        renderTrend(d.series_14d || []);
+        const moreEl = document.getElementById('nrMore');
+        if (moreEl) moreEl.addEventListener('click', () => { body.querySelector('.nr-rows').classList.remove('collapsed'); moreEl.remove(); });
+    }
+
+    fetch('/api/network/revenue-v2')
+        .then(r => r.json())
+        .then(d => { if (d.error) { body.innerHTML = `<div class="nr-empty">אין הרשאה.</div>`; return; } render(d); })
+        .catch(() => { body.innerHTML = `<div class="nr-empty">שגיאה בטעינת הנתונים.</div>`; });
+})();
+</script>
+{% else %}
+<script>
+// Store picker → reload the single-store view for the chosen branch.
+(function () {
+    const sel = document.getElementById('rev2Store');
+    if (sel) sel.addEventListener('change', function () {
+        const m = SELECTED_MONTH ? ('&month=' + encodeURIComponent(SELECTED_MONTH)) : '';
+        window.location.href = '/network/revenue-v2?mode=single&store=' + encodeURIComponent(this.value) + m;
+    });
+})();
+</script>
+{% include '_sales_scripts.html' %}
+{% endif %}
+{% endblock %}

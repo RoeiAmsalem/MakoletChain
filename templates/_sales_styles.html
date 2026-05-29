@@ -1,0 +1,155 @@
+<style>
+    .sales-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+    .btn-pdf {
+        font-size: 0.78rem; font-weight: 600; padding: 0.25rem 0.6rem;
+        background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
+        border-radius: 6px; color: #fca5a5; cursor: pointer; font-family: inherit;
+        transition: background 0.15s;
+    }
+    .btn-pdf:hover { background: rgba(239,68,68,0.3); }
+    .btn-pdf:disabled { opacity: 0.3; cursor: default; }
+    /* Monthly department summary tiles (top of /sales). Hero = avg daily %. */
+    .dept-month-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 1rem;
+    }
+    .dept-month-card {
+        background: #1e293b; border: 1px solid #334155;
+        border-top: 3px solid #475569; border-radius: 12px;
+        padding: 1rem 1.25rem 1.1rem;
+    }
+    .dept-month-card[data-code="5"]  { border-top-color: #60a5fa; }
+    .dept-month-card[data-code="83"] { border-top-color: #fbbf24; }
+    .dept-month-card[data-code="2"]  { border-top-color: #4ade80; }
+    .dept-month-head {
+        display: flex; align-items: center; gap: 0.4rem;
+        font-size: 0.85rem; color: #94a3b8; font-weight: 600; margin-bottom: 0.5rem;
+    }
+    .dept-month-icon { font-size: 1rem; }
+    .dept-month-pct {
+        font-size: 1.9rem; font-weight: 700; color: #f1f5f9; line-height: 1.1;
+        direction: ltr; text-align: right;
+    }
+    .dept-month-sub { font-size: 0.78rem; color: #64748b; margin-top: 0.35rem; }
+    .dept-month-sub .dept-month-total { color: #cbd5e1; direction: ltr; font-variant-numeric: tabular-nums; }
+    /* Dept expand chevron + panel — colors match page tokens (cards #1e293b,
+       expanded #172033 = slightly lighter so it reads as nested under the row). */
+    .dept-toggle {
+        background: none; border: 1px solid #334155; border-radius: 6px;
+        width: 28px; height: 28px; cursor: pointer; color: #94a3b8;
+        display: inline-flex; align-items: center; justify-content: center;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+        padding: 0;
+    }
+    .dept-toggle:hover { background: rgba(148,163,184,0.12); color: #f1f5f9; border-color: #475569; }
+    .dept-toggle svg { width: 14px; height: 14px; transition: transform 0.2s; }
+    .dept-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+    .dept-toggle[aria-expanded="true"] { color: #f1f5f9; border-color: #475569; background: rgba(148,163,184,0.08); }
+    tr.dept-panel-row > td { padding: 0; background: #172033; border-top: 1px solid #334155; }
+    .dept-panel { padding: 1rem 1.25rem 1.1rem; }
+    .dept-panel-head {
+        display: flex; align-items: center; gap: 0.5rem; color: #64748b;
+        font-size: 0.85rem; font-weight: 600; margin-bottom: 0.85rem;
+    }
+    .dept-panel-head svg { width: 14px; height: 14px; opacity: 0.9; }
+    .dept-priority-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 0.65rem; margin-bottom: 1rem;
+    }
+    .dept-priority-card {
+        background: #1e293b; border: 1px solid #334155; border-right: 4px solid #475569;
+        border-radius: 8px; padding: 0.75rem 0.9rem;
+    }
+    .dept-priority-card[data-code="5"]  { border-right-color: #60a5fa; }
+    .dept-priority-card[data-code="83"] { border-right-color: #fbbf24; }
+    .dept-priority-card[data-code="2"]  { border-right-color: #4ade80; }
+    .dept-priority-label { font-size: 0.78rem; color: #94a3b8; font-weight: 600; margin-bottom: 0.25rem; }
+    .dept-priority-amount { font-size: 1.15rem; font-weight: 700; color: #f1f5f9; direction: ltr; text-align: right; }
+    .dept-priority-meta { font-size: 0.75rem; color: #64748b; margin-top: 0.2rem; }
+    .dept-rest-title { font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.5rem; }
+    .dept-rest-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1.5rem;
+        padding-top: 0.4rem; border-top: 1px solid rgba(51,65,85,0.7);
+    }
+    .dept-rest-row {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 0.75rem; font-size: 0.85rem; color: #e2e8f0; padding: 0.15rem 0;
+    }
+    .dept-rest-row .dept-rest-amount { color: #cbd5e1; direction: ltr; font-variant-numeric: tabular-nums; }
+    .dept-rest-collapsed {
+        font-size: 0.78rem; color: #64748b; padding: 0.4rem 0 0;
+        grid-column: 1 / -1; cursor: pointer;
+    }
+    .dept-rest-collapsed:hover { color: #94a3b8; }
+    .dept-total-row {
+        display: flex; justify-content: space-between; align-items: center;
+        margin-top: 0.75rem; padding-top: 0.6rem; border-top: 1px solid #334155;
+        font-size: 0.9rem; font-weight: 700;
+    }
+    .dept-total-row .label { color: #94a3b8; }
+    .dept-total-row .amount { color: #4ade80; direction: ltr; }
+    .dept-empty {
+        font-size: 0.85rem; color: #64748b; padding: 0.5rem 0.25rem; text-align: center;
+    }
+    .dept-error {
+        font-size: 0.85rem; color: #fca5a5; padding: 0.5rem 0.25rem; text-align: center;
+    }
+    .dept-loading {
+        font-size: 0.85rem; color: #94a3b8; padding: 0.6rem 0.25rem; text-align: center;
+    }
+    /* PDF Modal */
+    .pdf-overlay {
+        display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+        z-index: 1000; align-items: center; justify-content: center;
+    }
+    .pdf-overlay.open { display: flex; }
+    .pdf-modal {
+        background: #1e293b; border-radius: 12px; max-width: 700px; width: 95%;
+        max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    .pdf-modal-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 1rem 1.25rem; border-bottom: 1px solid #334155;
+    }
+    .pdf-modal-header h3 { font-size: 1rem; color: white; }
+    .pdf-modal-close {
+        background: none; border: none; color: #94a3b8; font-size: 1.5rem;
+        cursor: pointer; padding: 0; line-height: 1;
+    }
+    .pdf-modal-close:hover { color: white; }
+    .pdf-modal-body {
+        overflow-y: auto; padding: 1rem; display: flex; flex-direction: column;
+        align-items: center; gap: 1rem;
+    }
+    .pdf-modal-body img { max-width: 100%; border-radius: 4px; background: white; }
+    .pdf-nav {
+        display: flex; gap: 0.75rem; align-items: center; padding: 0.75rem 1.25rem;
+        border-top: 1px solid #334155; justify-content: center;
+    }
+    .pdf-nav button {
+        font-size: 0.85rem; padding: 0.3rem 0.7rem; background: rgba(255,255,255,0.08);
+        border: 1px solid #334155; border-radius: 6px; color: #94a3b8; cursor: pointer; font-family: inherit;
+    }
+    .pdf-nav button:hover { background: rgba(255,255,255,0.15); color: white; }
+    .pdf-nav button:disabled { opacity: 0.3; cursor: default; }
+    .pdf-nav span { color: #94a3b8; font-size: 0.85rem; }
+    @media (max-width: 768px) {
+        .sales-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .sales-kpis .kpi-card { padding: 0.75rem !important; }
+        .sales-kpis .kpi-value { font-size: 1.15rem !important; }
+        .sales-kpis .kpi-label { font-size: 0.7rem !important; }
+        .sales-kpis .kpi-icon { font-size: 1rem !important; }
+        .section-title { font-size: 1rem !important; }
+        .data-table thead th, .data-table tbody td { padding: 8px 6px; font-size: 0.8rem; }
+        .btn-pdf { min-height: 36px; min-width: 44px; padding: 0.3rem 0.5rem; touch-action: manipulation; }
+        .pdf-modal { max-width: 100%; border-radius: 0; max-height: 100vh; }
+        .pdf-modal-body img { width: 100%; height: auto; }
+        .pdf-nav button { min-height: 44px; min-width: 44px; padding: 0.5rem 1rem; touch-action: manipulation; }
+        .pdf-modal-close { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+        .dept-priority-grid { grid-template-columns: 1fr; gap: 0.5rem; }
+        .dept-rest-grid { grid-template-columns: 1fr; gap: 0.3rem; }
+        .dept-panel { padding: 0.75rem 0.85rem 0.9rem; }
+        .dept-toggle { min-width: 36px; min-height: 36px; touch-action: manipulation; }
+        .dept-priority-amount { font-size: 1rem; }
+    }
+</style>

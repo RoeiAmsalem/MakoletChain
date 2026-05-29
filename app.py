@@ -651,6 +651,62 @@ def network_revenue_page():
     return render_template('network_revenue.html', **ctx)
 
 
+@app.route('/network/revenue-v2')
+@login_required
+def network_revenue_v2_page():
+    """EXPERIMENTAL sandbox — a revenue page with a 'my network' ⇄ 'single
+    store' toggle. Same access model as /sales: any logged-in user, each
+    scoped to their own stores. Aggregate mode is scoped to the viewer's
+    visible branches (admin/ceo → all; manager → theirs). Single mode reuses
+    the existing /sales body via the _sales_* includes for a picked store.
+
+    A single-store user has no aggregate worth showing, so the toggle is
+    hidden and they land directly on their one store.
+    """
+    role = session.get('user_role')
+    user_id = session.get('user_id')
+    visible = _list_visible_branches(user_id, role)
+    single_store = len(visible) <= 1
+
+    if single_store:
+        mode = 'single'
+    else:
+        mode = request.args.get('mode') or session.get('rev2_mode') or 'network'
+        if mode not in ('network', 'single'):
+            mode = 'network'
+        session['rev2_mode'] = mode
+
+    ctx = _page_context('revenue_v2')
+    ctx['rev2_mode'] = mode
+    ctx['rev2_single_store'] = single_store
+    ctx['rev2_branches'] = visible
+
+    if mode == 'single':
+        # Pick the store: ?store= only if the viewer is allowed to see it
+        # (never trust the URL), else their first visible branch.
+        visible_ids = [b['id'] for b in visible]
+        store = request.args.get('store', type=int) or session.get('rev2_store')
+        if store not in visible_ids:
+            store = visible_ids[0] if visible_ids else None
+        session['rev2_store'] = store
+        # Build the exact ctx /sales builds so the reused _sales_* partials
+        # render identically for the picked store.
+        db = get_db()
+        rows = db.execute(
+            "SELECT date, amount, transactions FROM daily_sales "
+            "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date ASC",
+            (store, ctx['selected_month'])
+        ).fetchall()
+        z_reports = [dict(r) for r in rows]
+        ctx['charts_data'] = _sales_charts_data(z_reports)
+        ctx['sales_footer'] = _build_sales_footer(z_reports)
+        ctx['branch_id'] = store
+        ctx['branch_name'] = _branch_name(store) if store else ctx['branch_name']
+        ctx['rev2_store'] = store
+
+    return render_template('revenue_v2.html', **ctx)
+
+
 # ── Sales charts ─────────────────────────────────────────────
 # datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
 _HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
@@ -1528,27 +1584,36 @@ def api_network_revenue():
     role = session.get('user_role')
     if role not in ROLES_ALL_BRANCHES:
         return jsonify({'error': 'forbidden'}), 403
-
-    db = get_db()
     visible = _list_visible_branches(session.get('user_id'), role)
+    return jsonify(_network_revenue_payload(visible, request.args.get('date'), get_db()))
+
+
+def _network_revenue_payload(visible, req_date, db):
+    """Daily chain-revenue payload for a set of visible branches.
+
+    Shared by /api/network/revenue (admin/CEO, all branches) and
+    /api/network/revenue-v2 (any user, scoped to their own stores). The caller
+    is responsible for access control + supplying `visible` — this function
+    only aggregates whatever branches it is handed, so a manager can never see
+    another manager's stores. Source: daily_sales.
+    """
     total_branches = len(visible)
     empty = {
         'date': None, 'chain_total': 0, 'avg_per_store': 0,
         'prev_date': None, 'prev_total': 0, 'pct_vs_prev': None,
         'total_branches': total_branches, 'reported': 0, 'missing': [],
-        'per_branch': [], 'top': None, 'bottom': None, 'series_7d': [],
+        'per_branch': [], 'top': None, 'bottom': None, 'series_14d': [],
     }
     if not visible:
-        return jsonify(empty)
+        return empty
 
     branch_ids = [b['id'] for b in visible]
     names = {b['id']: b['name'] for b in visible}
     ph = ','.join('?' * len(branch_ids))
 
-    # Resolve the date: explicit ?date=YYYY-MM-DD wins (validated), else the
-    # most recent day with any daily_sales row among visible branches.
+    # Resolve the date: explicit YYYY-MM-DD wins (validated), else the most
+    # recent day with any daily_sales row among visible branches.
     sel_date = None
-    req_date = request.args.get('date')
     if req_date:
         try:
             sel_date = datetime.strptime(req_date, '%Y-%m-%d').strftime('%Y-%m-%d')
@@ -1633,7 +1698,7 @@ def api_network_revenue():
         d = (datetime.strptime(start_date, '%Y-%m-%d') + timedelta(days=i)).strftime('%Y-%m-%d')
         series_14d.append({'date': d, 'total': by_day.get(d, 0)})
 
-    return jsonify({
+    return {
         'date': sel_date,
         'chain_total': chain_total,
         'avg_per_store': avg_per_store,
@@ -1652,7 +1717,18 @@ def api_network_revenue():
         'top': per_branch[0] if per_branch else None,
         'bottom': per_branch[-1] if per_branch else None,
         'series_14d': series_14d,
-    })
+    }
+
+
+@app.route('/api/network/revenue-v2')
+@login_required
+def api_network_revenue_v2():
+    """Same daily chain-revenue payload as /api/network/revenue, but for ANY
+    logged-in user — scoped to their OWN visible branches (admin/ceo → all
+    active; manager → only their user_branches). Powers the 'הרשת שלי'
+    aggregate mode of the experimental /network/revenue-v2 page."""
+    visible = _list_visible_branches(session.get('user_id'), session.get('user_role'))
+    return jsonify(_network_revenue_payload(visible, request.args.get('date'), get_db()))
 
 
 @app.route('/api/history')

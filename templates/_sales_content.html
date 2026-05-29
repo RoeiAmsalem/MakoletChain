@@ -1,0 +1,100 @@
+
+<!-- KPI Cards -->
+<section class="sales-kpis" id="sales-kpis">
+    <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
+</section>
+
+<!-- Department monthly summary tiles — avg daily % share of the Z + ₪ total. -->
+<section id="dept-month-tiles" style="display:none; margin-bottom:1.25rem;">
+    <div style="font-size:0.85rem; color:#94a3b8; font-weight:600; margin:0 0.15rem 0.65rem;">
+        מחלקות מובילות — ממוצע יומי לחודש <span id="dept-month-label"></span>
+    </div>
+    <div class="dept-month-grid">
+        <div class="dept-month-card" data-code="5">
+            <div class="dept-month-head"><span class="dept-month-icon">🥛</span><span>חלב</span></div>
+            <div class="dept-month-pct">—</div>
+            <div class="dept-month-sub"><span class="dept-month-total">—</span> סה"כ החודש</div>
+        </div>
+        <div class="dept-month-card" data-code="83">
+            <div class="dept-month-head"><span class="dept-month-icon">🚬</span><span>סיגריות</span></div>
+            <div class="dept-month-pct">—</div>
+            <div class="dept-month-sub"><span class="dept-month-total">—</span> סה"כ החודש</div>
+        </div>
+        <div class="dept-month-card" data-code="2">
+            <div class="dept-month-head"><span class="dept-month-icon">🥬</span><span>ירקות</span></div>
+            <div class="dept-month-pct">—</div>
+            <div class="dept-month-sub"><span class="dept-month-total">—</span> סה"כ החודש</div>
+        </div>
+    </div>
+</section>
+
+<!-- Sales Table -->
+<section class="card">
+    <h2 class="section-title">דוחות Z יומיים – <span id="month-label"></span></h2>
+    <div style="overflow-x:auto">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>תאריך</th>
+                    <th>סכום (₪)</th>
+                    <th>עסקאות</th>
+                    <th>ממוצע לעסקה</th>
+                    <th>מקור</th>
+                    <th>שעת משיכה</th>
+                    <th>PDF</th>
+                    <th style="text-align:center">פירוט</th>
+                </tr>
+            </thead>
+            <tbody id="sales-tbody">
+                <tr><td colspan="8" class="loading"><div class="spinner"></div><span>טוען...</span></td></tr>
+            </tbody>
+            <tfoot id="sales-tfoot">{% if sales_footer %}
+                <tr class="tfoot-total" style="font-weight:700;border-top:2px solid #334155;background:#0f172a">
+                    <td>סה"כ</td>
+                    <td class="money profit" style="direction:ltr;text-align:left;font-weight:700">₪ {{ '{:,.2f}'.format(sales_footer.total_revenue) }}</td>
+                    <td style="text-align:center">{{ sales_footer.total_transactions }}</td>
+                    <td style="text-align:center">₪ {{ sales_footer.avg_basket }}</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>{% endif %}</tfoot>
+        </table>
+    </div>
+</section>
+
+<!-- Sales Charts -->
+<section class="card" style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📊 הכנסות יומיות</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">הכנסה בכל יום של החודש</div>
+    <div style="position:relative;height:240px;"><canvas id="salesDailyChart"></canvas></div>
+</section>
+<section class="card" style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📅 ממוצע לפי יום בשבוע</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">ממוצע הכנסה לכל יום בשבוע — איזה יום באמת חזק</div>
+    <div style="position:relative;height:200px;"><canvas id="salesDowChart"></canvas></div>
+</section>
+<section class="card" style="margin-bottom:1.25rem;">
+    <h2 class="section-title" style="margin-bottom:0.15rem;">📈 הכנסה מצטברת</h2>
+    <div style="font-size:0.8rem;color:#94a3b8;margin-bottom:0.75rem;">סיכום מצטבר מתחילת החודש</div>
+    <div style="position:relative;height:200px;"><canvas id="salesCumChart"></canvas></div>
+</section>
+
+<!-- PDF Preview Modal -->
+<div class="pdf-overlay" id="pdf-overlay" onclick="if(event.target===this)closePdf()">
+    <div class="pdf-modal">
+        <div class="pdf-modal-header">
+            <h3 id="pdf-title">דוח Z</h3>
+            <button class="pdf-modal-close" onclick="closePdf()">&times;</button>
+        </div>
+        <div class="pdf-modal-body" id="pdf-body">
+            <div class="loading"><div class="spinner"></div><span>טוען PDF...</span></div>
+        </div>
+        <div class="pdf-nav">
+            <button id="pdf-prev" onclick="pdfPage(-1)">‹ הקודם</button>
+            <span id="pdf-page-info">עמוד 1</span>
+            <button id="pdf-next" onclick="pdfPage(1)">הבא ›</button>
+        </div>
+    </div>
+</div>
+
