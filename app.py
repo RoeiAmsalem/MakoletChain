@@ -1850,11 +1850,14 @@ def _network_goods_payload(visible, req_month, db):
         [month] + branch_ids
     ).fetchall()
     supplier_total_count = len(sup_rows)
+    # Return ALL suppliers (descending) so the page can expand the long tail
+    # client-side without another fetch; the page shows the top N and hides
+    # the rest behind a toggle.
     top_suppliers = [{
         'supplier': r['s'],
         'amount': round(float(r['t'] or 0), 2),
         'pct': round(float(r['t'] or 0) / chain_goods_total * 100, 1) if chain_goods_total else 0,
-    } for r in sup_rows[:10]]
+    } for r in sup_rows]
 
     return {
         'month': month,

@@ -292,11 +292,12 @@ def main():
                         and gv['reported'] + len(gv['missing']) == total_branches,
                         f"reported={gv['reported']} db={g_reported} missing={[m['branch_name'] for m in gv['missing']]}"))
 
-    # 27. Supplier chart: clean grouping, top-10, sorted desc, pct present, top supplier matches DB.
+    # 27. Supplier chart: ALL suppliers returned (for client-side expand),
+    # sorted desc, pct present, top supplier matches DB.
     sup = gv['top_suppliers']
     sup_sorted = [s['amount'] for s in sup] == sorted([s['amount'] for s in sup], reverse=True)
-    results.append(line("STEP 27 (top suppliers correct)",
-                        len(sup) <= 10 and sup_sorted and gv['supplier_total_count'] == g_sup_count
+    results.append(line("STEP 27 (all suppliers returned, sorted, pct)",
+                        len(sup) == g_sup_count and sup_sorted and gv['supplier_total_count'] == g_sup_count
                         and sup[0]['supplier'] == g_top_sup and 'pct' in sup[0],
                         f"n={len(sup)} total_suppliers={gv['supplier_total_count']} db={g_sup_count} top={sup[0]['supplier']}"))
 
@@ -373,6 +374,15 @@ def main():
     results.append(line("STEP 35 (/goods unchanged: 200 + goods content)",
                         rg.status_code == 200 and 'goods-table' in rg.get_data(as_text=True),
                         f"status={rg.status_code}"))
+
+    # 36. Supplier breakdown: real toggle wiring + 3-tier blue coloring present.
+    as_role('admin', admin_id)
+    gnp = client.get('/network/goods-v2?mode=network').get_data(as_text=True)
+    has_toggle = 'sup-toggle' in gnp and 'sup-tail' in gnp and 'ספקים נוספים' in gnp
+    has_tiers = all(c in gnp for c in ('#3b82f6', '#60a5fa', '#93c5fd'))
+    results.append(line("STEP 36 (supplier toggle wiring + 3-tier blue)",
+                        has_toggle and has_tiers,
+                        f"toggle={has_toggle} tiers={has_tiers}"))
 
     print()
     failed = [i for i, ok in enumerate(results) if not ok]

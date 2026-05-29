@@ -34,8 +34,23 @@
     .sup-fig { font-size: 0.88rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; text-align: left; }
     .sup-fig .sup-pct { color: #93c5fd; font-weight: 600; margin-inline-start: 0.4rem; font-size: 0.82rem; }
     .sup-track { grid-column: 1 / -1; background: rgba(255,255,255,0.05); border-radius: 999px; height: 10px; overflow: hidden; }
-    .sup-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 999px; }
-    .sup-more { margin-top: 0.4rem; font-size: 0.82rem; color: var(--text-secondary); }
+    .sup-fill { height: 100%; border-radius: 999px; }  /* color set per rank tier inline */
+    /* Long-tail toggle — a real clickable bar. */
+    .sup-rows .sup-tail { display: none; }
+    .sup-rows.expanded .sup-tail { display: grid; }
+    .sup-toggle {
+        display: flex; align-items: center; justify-content: space-between; width: 100%;
+        margin-top: 0.7rem; padding: 0.65rem 0.9rem; background: rgba(255,255,255,0.03);
+        border: 1px solid var(--card-border); border-radius: 10px; color: var(--text-secondary);
+        font-family: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+        min-height: 44px; touch-action: manipulation; transition: background 0.12s, color 0.12s;
+    }
+    .sup-toggle:hover { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+    .sup-toggle .sup-toggle-label { display: inline-flex; align-items: center; gap: 0.5rem; }
+    .sup-toggle .chev { display: inline-block; transition: transform 0.18s; color: #60a5fa; font-size: 0.7rem; }
+    .sup-toggle.expanded .chev { transform: rotate(180deg); }
+    .sup-toggle .sup-toggle-total { color: #93c5fd; font-weight: 700; }
+    .sup-toggle.expanded .sup-toggle-total { visibility: hidden; }
 
     /* BAND 3 — ranked store list (roomy, clickable, no bars) */
     .gd-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem 1.4rem; box-shadow: var(--shadow); }
@@ -118,18 +133,35 @@
         let cov = `<b>${d.reported}</b> מתוך <b>${d.total_branches}</b> סניפים דיווחו`;
         if (d.missing && d.missing.length) cov += ` · <span class="gd-missing">חסר: ${d.missing.map(m => m.branch_name).join(', ')}</span>`;
 
-        // Top suppliers — horizontal bars relative to the biggest supplier.
-        const supMax = d.top_suppliers.length ? d.top_suppliers[0].amount : 1;
-        const supHtml = d.top_suppliers.map(s => {
+        // Top suppliers — horizontal bars relative to the biggest supplier,
+        // colored by rank tier (single-hue blue gradient). Top 8 shown; the
+        // rest are collapsed behind a real toggle (data already loaded).
+        const TOP_N = 8;
+        const sups = d.top_suppliers || [];
+        const supMax = sups.length ? sups[0].amount : 1;
+        const tier = i => i < 3 ? { fill: '#3b82f6', text: '#f1f5f9' }
+            : (i < 8 ? { fill: '#60a5fa', text: '#cbd5e1' } : { fill: '#93c5fd', text: '#94a3b8' });
+        const supHtml = sups.map((s, i) => {
             const w = Math.max(2, (s.amount / (supMax || 1)) * 100);
-            return `<div class="sup-row">
-                <div class="sup-name" title="${s.supplier}">${s.supplier}</div>
+            const t = tier(i);
+            const tail = i >= TOP_N ? ' sup-tail' : '';
+            return `<div class="sup-row${tail}">
+                <div class="sup-name" style="color:${t.text}" title="${s.supplier}">${s.supplier}</div>
                 <div class="sup-fig">${fmt(s.amount)}<span class="sup-pct">${s.pct}%</span></div>
-                <div class="sup-track"><div class="sup-fill" style="width:${w.toFixed(1)}%"></div></div>
+                <div class="sup-track"><div class="sup-fill" style="width:${w.toFixed(1)}%;background:${t.fill}"></div></div>
             </div>`;
         }).join('');
-        const supTail = d.supplier_total_count - d.top_suppliers.length;
-        const supMore = supTail > 0 ? `<div class="sup-more">+ ${supTail} ספקים נוספים</div>` : '';
+        const hidden = sups.slice(TOP_N);
+        let supToggle = '';
+        if (hidden.length) {
+            const remTotal = hidden.reduce((a, s) => a + s.amount, 0);
+            const remPct = d.chain_goods_total ? (remTotal / d.chain_goods_total * 100) : 0;
+            supToggle = `<button class="sup-toggle" id="supToggle" aria-expanded="false">
+                <span class="sup-toggle-label"><span class="chev">▾</span><span class="sup-toggle-text">הצג ${hidden.length} ספקים נוספים</span></span>
+                <span class="sup-toggle-total">${fmt(remTotal)} · ${remPct.toFixed(1)}%</span>
+            </button>`;
+        }
+        const supBlock = `<div class="sup-rows" id="supRows">${supHtml}</div>${supToggle}`;
 
         // Ranked store list (no bars), clickable → single mode for that store.
         const COLLAPSE = 8;
@@ -156,11 +188,22 @@
                 <div class="gd-metric"><div class="m-label">ממוצע לסניף</div><div class="m-value">${fmt(d.avg_per_store)}</div><div class="m-sub">${d.reported} סניפים מדווחים</div></div>
             </div>
             <div class="gd-coverage">${cov}</div>
-            <div class="gd-suppliers"><h2>ספקים מובילים — ${d.month}</h2>${supHtml}${supMore}</div>
+            <div class="gd-suppliers"><h2>ספקים מובילים — ${d.month}</h2>${supBlock}</div>
             <div class="gd-strip"><h2>קניות סחורה לפי סניף</h2><div class="gd-rows collapsed">${rows}${missingRows}</div>${moreBtn}</div>`;
 
         const moreEl = document.getElementById('gdMore');
         if (moreEl) moreEl.addEventListener('click', () => { body.querySelector('.gd-rows').classList.remove('collapsed'); moreEl.remove(); });
+
+        // Supplier long-tail expand/collapse (pure client-side, data preloaded).
+        const supToggleEl = document.getElementById('supToggle');
+        if (supToggleEl) supToggleEl.addEventListener('click', () => {
+            const rowsEl = document.getElementById('supRows');
+            const expanded = rowsEl.classList.toggle('expanded');
+            supToggleEl.classList.toggle('expanded', expanded);
+            supToggleEl.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            supToggleEl.querySelector('.sup-toggle-text').textContent =
+                expanded ? 'הצג פחות' : `הצג ${hidden.length} ספקים נוספים`;
+        });
     }
 
     fetch('/api/network/goods-v2' + (MONTH ? ('?month=' + encodeURIComponent(MONTH)) : ''))
