@@ -707,6 +707,55 @@ def network_revenue_v2_page():
     return render_template('revenue_v2.html', **ctx)
 
 
+@app.route('/network/goods-v2')
+@login_required
+def network_goods_v2_page():
+    """EXPERIMENTAL goods sandbox — mirrors /network/revenue-v2 for BilBoy
+    goods spend. Toggle 'הסניפים שלי' (chain aggregate) ⇄ 'סניף בודד'. Same
+    access model as /goods: any logged-in user, scoped to their own stores
+    (admin/ceo → all; manager → theirs). Single mode reuses the /goods body
+    via the _goods_* includes for a picked store. Single-store users get no
+    toggle and land on their store's goods detail."""
+    role = session.get('user_role')
+    user_id = session.get('user_id')
+    visible = _list_visible_branches(user_id, role)
+    single_store = len(visible) <= 1
+
+    if single_store:
+        mode = 'single'
+    else:
+        mode = request.args.get('mode') or session.get('goods2_mode') or 'network'
+        if mode not in ('network', 'single'):
+            mode = 'network'
+        session['goods2_mode'] = mode
+
+    ctx = _page_context('goods_v2')
+    ctx['goods2_mode'] = mode
+    ctx['goods2_single_store'] = single_store
+    ctx['goods2_branches'] = visible
+
+    if mode == 'single':
+        visible_ids = [b['id'] for b in visible]
+        store = request.args.get('store', type=int) or session.get('goods2_store')
+        if store not in visible_ids:
+            store = visible_ids[0] if visible_ids else None
+        session['goods2_store'] = store
+
+        view = request.args.get('view')
+        if view in ('list', 'grouped'):
+            session['goods_view_mode'] = view
+        view_mode = session.get('goods_view_mode', 'list')
+
+        db = get_db()
+        ctx.update(_goods_doc_context(store, ctx['selected_month'], db))
+        ctx['view_mode'] = view_mode
+        ctx['branch_id'] = store
+        ctx['branch_name'] = _branch_name(store) if store else ctx['branch_name']
+        ctx['goods2_store'] = store
+
+    return render_template('goods_v2.html', **ctx)
+
+
 # ── Sales charts ─────────────────────────────────────────────
 # datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
 _HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
@@ -841,19 +890,11 @@ def sales():
     return render_template('sales.html', **ctx)
 
 
-@app.route('/goods')
-@login_required
-def goods():
-    ctx = _page_context('goods')
-    branch_id = ctx['branch_id']
-    month = ctx['selected_month']
-
-    view = request.args.get('view')
-    if view in ('list', 'grouped'):
-        session['goods_view_mode'] = view
-    view_mode = session.get('goods_view_mode', 'list')
-
-    db = get_db()
+def _goods_doc_context(branch_id, month, db):
+    """Build the server-rendered goods-page context (docs, supplier groups,
+    totals) for one branch + month. Shared by /goods and the single-store mode
+    of /network/goods-v2 so the reused _goods_* partials render identically.
+    Does NOT include view_mode — the caller owns that (session-driven)."""
     rows = db.execute(
         "SELECT id, doc_date, supplier, ref_number, amount, doc_type "
         "FROM goods_documents WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ? "
@@ -869,7 +910,6 @@ def goods():
     returns_total = sum(d['amount'] for d in docs if d['doc_type'] in (4, 5))
     count = len(docs)
 
-    # Add before_vat to each doc
     for d in docs:
         d['amount_before_vat'] = round(d['amount'] / 1.17, 2)
 
@@ -886,17 +926,31 @@ def goods():
         g['docs'].append(d)
     groups = sorted(groups_map.values(), key=lambda g: g['total'], reverse=True)
 
-    ctx.update({
+    return {
         'docs': docs,
         'groups': groups,
-        'view_mode': view_mode,
         'total': total,
         'total_before_vat': total_before_vat,
         'invoices_total': invoices_total,
         'delivery_total': delivery_total,
         'returns_total': returns_total,
         'count': count,
-    })
+    }
+
+
+@app.route('/goods')
+@login_required
+def goods():
+    ctx = _page_context('goods')
+
+    view = request.args.get('view')
+    if view in ('list', 'grouped'):
+        session['goods_view_mode'] = view
+    view_mode = session.get('goods_view_mode', 'list')
+
+    db = get_db()
+    ctx.update(_goods_doc_context(ctx['branch_id'], ctx['selected_month'], db))
+    ctx['view_mode'] = view_mode
     return render_template('goods.html', **ctx)
 
 
@@ -1729,6 +1783,100 @@ def api_network_revenue_v2():
     aggregate mode of the experimental /network/revenue-v2 page."""
     visible = _list_visible_branches(session.get('user_id'), session.get('user_role'))
     return jsonify(_network_revenue_payload(visible, request.args.get('date'), get_db()))
+
+
+def _network_goods_payload(visible, req_month, db):
+    """Monthly chain GOODS (BilBoy) payload for a set of visible branches.
+
+    Caller supplies `visible` (access already enforced) so a manager can never
+    see another manager's stores. Returns the chain goods total + average per
+    reporting store, a truthful coverage count, the top-10 suppliers by chain
+    spend (data verified clean — grouped on the canonical `supplier` string),
+    and a per-branch ranked list. Source: goods_documents.
+    """
+    total_branches = len(visible)
+    empty = {
+        'month': None, 'chain_goods_total': 0, 'avg_per_store': 0,
+        'total_branches': total_branches, 'reported': 0, 'missing': [],
+        'per_branch': [], 'top_suppliers': [], 'supplier_total_count': 0,
+    }
+    if not visible:
+        return empty
+
+    branch_ids = [b['id'] for b in visible]
+    names = {b['id']: b['name'] for b in visible}
+    ph = ','.join('?' * len(branch_ids))
+
+    # Resolve month: explicit YYYY-MM wins (validated), else the most recent
+    # month with any goods doc among visible branches, else current month.
+    month = None
+    if req_month:
+        try:
+            month = datetime.strptime(req_month, '%Y-%m').strftime('%Y-%m')
+        except ValueError:
+            month = None
+    if not month:
+        row = db.execute(
+            f"SELECT MAX(strftime('%Y-%m', doc_date)) AS m FROM goods_documents "
+            f"WHERE branch_id IN ({ph})", branch_ids
+        ).fetchone()
+        month = row['m'] if row and row['m'] else _now_il().strftime('%Y-%m')
+
+    rows = db.execute(
+        f"SELECT branch_id, COALESCE(SUM(amount),0) AS amount FROM goods_documents "
+        f"WHERE strftime('%Y-%m', doc_date)=? AND branch_id IN ({ph}) GROUP BY branch_id",
+        [month] + branch_ids
+    ).fetchall()
+
+    per_branch = sorted(
+        [{'branch_id': r['branch_id'],
+          'branch_name': names.get(r['branch_id'], 'סניף לא ידוע'),
+          'amount': round(float(r['amount'] or 0), 2)} for r in rows],
+        key=lambda x: x['amount'], reverse=True
+    )
+    reported_ids = {r['branch_id'] for r in rows}
+    missing = [{'branch_id': b['id'], 'branch_name': b['name']}
+               for b in visible if b['id'] not in reported_ids]
+
+    chain_goods_total = round(sum(r['amount'] for r in per_branch), 2)
+    reported = len(per_branch)
+    avg_per_store = round(chain_goods_total / reported, 2) if reported else 0
+
+    # Top suppliers by chain spend this month (clean canonical strings).
+    sup_rows = db.execute(
+        f"SELECT TRIM(supplier) AS s, COALESCE(SUM(amount),0) AS t FROM goods_documents "
+        f"WHERE strftime('%Y-%m', doc_date)=? AND branch_id IN ({ph}) "
+        f"AND TRIM(COALESCE(supplier,''))<>'' GROUP BY TRIM(supplier) ORDER BY t DESC",
+        [month] + branch_ids
+    ).fetchall()
+    supplier_total_count = len(sup_rows)
+    top_suppliers = [{
+        'supplier': r['s'],
+        'amount': round(float(r['t'] or 0), 2),
+        'pct': round(float(r['t'] or 0) / chain_goods_total * 100, 1) if chain_goods_total else 0,
+    } for r in sup_rows[:10]]
+
+    return {
+        'month': month,
+        'chain_goods_total': chain_goods_total,
+        'avg_per_store': avg_per_store,
+        'total_branches': total_branches,
+        'reported': reported,
+        'missing': missing,
+        'per_branch': per_branch,
+        'top_suppliers': top_suppliers,
+        'supplier_total_count': supplier_total_count,
+    }
+
+
+@app.route('/api/network/goods-v2')
+@login_required
+def api_network_goods_v2():
+    """Monthly chain-goods payload for ANY logged-in user, scoped to their own
+    visible branches (admin/ceo → all active; manager → their stores). Powers
+    the 'הסניפים שלי' aggregate mode of /network/goods-v2."""
+    visible = _list_visible_branches(session.get('user_id'), session.get('user_role'))
+    return jsonify(_network_goods_payload(visible, request.args.get('month'), get_db()))
 
 
 @app.route('/api/history')

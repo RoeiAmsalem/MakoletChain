@@ -1,0 +1,147 @@
+
+<!-- KPI Cards -->
+<section class="goods-kpis">
+    <div class="kpi-card kpi-card--goods">
+        <div class="kpi-header"><span class="kpi-icon">🛒</span><span class="kpi-label">סה"כ סחורה</span></div>
+        <span class="kpi-value" style="color:white">{{ '₪\u202F{:,.2f}'.format(total) }}</span>
+        <span style="font-size:0.8rem;color:rgba(255,255,255,0.6)">{{ count }} מסמכים</span>
+    </div>
+    <div class="kpi-card" style="background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
+        <div class="kpi-header"><span class="kpi-icon">📄</span><span class="kpi-label">חשבוניות</span></div>
+        <span class="kpi-value" style="color:#93c5fd">{{ '₪\u202F{:,.2f}'.format(invoices_total) }}</span>
+    </div>
+    <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
+        <div class="kpi-header"><span class="kpi-icon">🚚</span><span class="kpi-label">תעודות משלוח</span></div>
+        <span class="kpi-value" style="color:#86efac">{{ '₪\u202F{:,.2f}'.format(delivery_total) }}</span>
+    </div>
+    <div class="kpi-card" style="background:linear-gradient(135deg,#7f1d1d,#991b1b);border-color:rgba(239,68,68,0.25)">
+        <div class="kpi-header"><span class="kpi-icon">↩️</span><span class="kpi-label">החזרות / זיכויים</span></div>
+        <span class="kpi-value" style="color:#fca5a5">{{ '₪\u202F{:,.2f}'.format(returns_total) }}</span>
+    </div>
+</section>
+
+<!-- Filter Bar -->
+<section class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem">
+        <h2 class="section-title" style="margin-bottom:0">מסמכי סחורה – {{ month_display }}</h2>
+        <span style="font-size:0.85rem;color:#94a3b8">לפני מע"מ: {{ '₪\u202F{:,.2f}'.format(total_before_vat) }}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem">
+        <div class="filter-bar" style="margin-bottom:0{% if view_mode == 'grouped' %};visibility:hidden{% endif %}">
+            <button class="filter-btn active" onclick="filterDocs('all', this)">הכל ({{ count }})</button>
+            <button class="filter-btn" onclick="filterDocs('invoice', this)">חשבוניות</button>
+            <button class="filter-btn" onclick="filterDocs('delivery', this)">תעודות משלוח</button>
+            <button class="filter-btn" onclick="filterDocs('return', this)">החזרות / זיכויים</button>
+        </div>
+        <div class="view-toggle">
+            <span class="view-toggle-label">תצוגה:</span>
+            <a href="?view=list" class="filter-btn {{ 'active' if view_mode == 'list' else '' }}" style="text-decoration:none">רשימה</a>
+            <a href="?view=grouped" class="filter-btn {{ 'active' if view_mode == 'grouped' else '' }}" style="text-decoration:none">לפי ספק</a>
+        </div>
+    </div>
+
+    {% if docs %}
+    {% if view_mode == 'grouped' %}
+    <div>
+        {% for g in groups %}
+        <details class="supplier-group">
+            <summary>
+                <span class="sg-name">{{ g.supplier }}</span>
+                <span class="sg-count">{{ g.count }} מסמכים</span>
+                <span class="sg-total">₪ {{ '{:,.2f}'.format(g.total) }}</span>
+            </summary>
+            <div class="sg-body">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>תאריך</th>
+                            <th>סוג</th>
+                            <th>אסמכתא</th>
+                            <th>לפני מע"מ</th>
+                            <th>כולל מע"מ</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for d in g.docs %}
+                        <tr>
+                            <td>{{ d.doc_date }}</td>
+                            <td>
+                                {% if d.doc_type == 3 %}
+                                <span class="doc-badge invoice">חשבונית</span>
+                                {% elif d.doc_type == 2 %}
+                                <span class="doc-badge delivery">ת. משלוח</span>
+                                {% elif d.doc_type == 4 %}
+                                <span class="doc-badge credit">חשבונית זיכוי</span>
+                                {% elif d.doc_type == 5 %}
+                                <span class="doc-badge return">ת. החזרה</span>
+                                {% endif %}
+                            </td>
+                            <td style="direction:ltr;text-align:left">{{ d.ref_number }}</td>
+                            <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(d.amount_before_vat) }}</td>
+                            <td class="money" style="direction:ltr;text-align:left;font-weight:600">₪ {{ '{:,.2f}'.format(d.amount) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+        {% endfor %}
+        <div style="margin-top:0.75rem;padding:0.75rem 1rem;background:#0f172a;border:1px solid #334155;border-radius:8px;display:flex;justify-content:space-between;gap:1rem;font-weight:700">
+            <span>סה"כ</span>
+            <span style="direction:ltr">לפני מע"מ: ₪ {{ '{:,.2f}'.format(total_before_vat) }}  •  כולל מע"מ: ₪ {{ '{:,.2f}'.format(total) }}</span>
+        </div>
+    </div>
+    {% else %}
+    <div style="overflow-x:auto">
+        <table class="data-table" id="goods-table">
+            <thead>
+                <tr>
+                    <th>תאריך</th>
+                    <th>ספק</th>
+                    <th>סוג</th>
+                    <th>אסמכתא</th>
+                    <th>לפני מע"מ</th>
+                    <th>כולל מע"מ</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in docs %}
+                <tr data-type="{{ 'invoice' if d.doc_type == 3 else ('delivery' if d.doc_type == 2 else 'return') }}">
+                    <td>{{ d.doc_date }}</td>
+                    <td>{{ d.supplier }}</td>
+                    <td>
+                        {% if d.doc_type == 3 %}
+                        <span class="doc-badge invoice">חשבונית</span>
+                        {% elif d.doc_type == 2 %}
+                        <span class="doc-badge delivery">ת. משלוח</span>
+                        {% elif d.doc_type == 4 %}
+                        <span class="doc-badge credit">חשבונית זיכוי</span>
+                        {% elif d.doc_type == 5 %}
+                        <span class="doc-badge return">ת. החזרה</span>
+                        {% endif %}
+                    </td>
+                    <td style="direction:ltr;text-align:left">{{ d.ref_number }}</td>
+                    <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(d.amount_before_vat) }}</td>
+                    <td class="money" style="direction:ltr;text-align:left;font-weight:600">₪ {{ '{:,.2f}'.format(d.amount) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr class="tfoot-total">
+                    <td colspan="4" style="text-align:right">סה"כ</td>
+                    <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(total_before_vat) }}</td>
+                    <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(total) }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">🛒</div>
+        <h3>אין מסמכי סחורה לחודש זה</h3>
+        <p>מסמכים יסונכרנו אוטומטית מ-BilBoy</p>
+    </div>
+    {% endif %}
+</section>
+

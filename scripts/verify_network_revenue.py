@@ -11,6 +11,7 @@ import sys
 from app import app, get_db
 
 PROBE_DATE = '2026-05-28'  # known good day on staging (17/18 reported)
+GOODS_MONTH = '2026-05'    # known good goods month on staging (17/18 reported)
 
 
 def line(step, ok, detail):
@@ -61,6 +62,32 @@ def main():
             f"SELECT COALESCE(SUM(amount),0) t FROM daily_sales "
             f"WHERE date BETWEEN '2026-05-01' AND ? AND branch_id IN ({ph})",
             [PROBE_DATE] + active_ids).fetchone()['t'] or 0), 2)
+
+        # ── Goods (BilBoy) reconciliation for GOODS_MONTH ──
+        g = db.execute(
+            f"SELECT COALESCE(SUM(amount),0) t, COUNT(DISTINCT branch_id) c "
+            f"FROM goods_documents WHERE strftime('%Y-%m',doc_date)=? AND branch_id IN ({ph})",
+            [GOODS_MONTH] + active_ids).fetchone()
+        g_total = round(float(g['t'] or 0), 2)
+        g_reported = g['c']
+        g_missing = [r['name'] for r in db.execute(
+            f"SELECT name FROM branches WHERE active=1 AND id NOT IN "
+            f"(SELECT DISTINCT branch_id FROM goods_documents WHERE strftime('%Y-%m',doc_date)=?)",
+            [GOODS_MONTH]).fetchall()]
+        g_sup_count = db.execute(
+            f"SELECT COUNT(DISTINCT TRIM(supplier)) n FROM goods_documents "
+            f"WHERE strftime('%Y-%m',doc_date)=? AND branch_id IN ({ph}) AND TRIM(COALESCE(supplier,''))<>''",
+            [GOODS_MONTH] + active_ids).fetchone()['n']
+        g_top_sup = db.execute(
+            f"SELECT TRIM(supplier) s, SUM(amount) t FROM goods_documents "
+            f"WHERE strftime('%Y-%m',doc_date)=? AND branch_id IN ({ph}) "
+            f"GROUP BY TRIM(supplier) ORDER BY t DESC LIMIT 1",
+            [GOODS_MONTH] + active_ids).fetchone()['s']
+        # Per-branch goods totals (for click-through assertions)
+        g_branch_total = {r['branch_id']: round(float(r['t'] or 0), 2) for r in db.execute(
+            f"SELECT branch_id, SUM(amount) t FROM goods_documents "
+            f"WHERE strftime('%Y-%m',doc_date)=? AND branch_id IN ({ph}) GROUP BY branch_id",
+            [GOODS_MONTH] + active_ids).fetchall()}
 
     client = app.test_client()
 
@@ -245,6 +272,107 @@ def main():
         results.append(line("STEP 24 (manager opens own store, foreign store blocked)",
                             f'const BRANCH_ID = {own};' in rown and not foreign_rendered,
                             f"own_ok={f'const BRANCH_ID = {own};' in rown} foreign_leaked={foreign_rendered}"))
+
+    # ══════════ /network/goods-v2 (experimental goods sandbox) ══════════
+    def money(v):  # matches _goods_content KPI: '₪ {:,.2f}'
+        return '₪ {:,.2f}'.format(v)
+
+    # 25. Admin goods API: 200, all branches, reconciles to goods_documents SUM.
+    as_role('admin', admin_id)
+    gv = client.get(f'/api/network/goods-v2?month={GOODS_MONTH}').get_json()
+    g_sum_rows = round(sum(b['amount'] for b in gv['per_branch']), 2)
+    results.append(line("STEP 25 (goods API admin reconciles)",
+                        gv['total_branches'] == total_branches and gv['chain_goods_total'] == g_total
+                        and g_sum_rows == g_total,
+                        f"total_branches={gv['total_branches']} chain={gv['chain_goods_total']} db={g_total} rows={g_sum_rows}"))
+
+    # 26. Coverage count + missing branch truthful.
+    results.append(line("STEP 26 (goods coverage accurate)",
+                        gv['reported'] == g_reported and {m['branch_name'] for m in gv['missing']} == set(g_missing)
+                        and gv['reported'] + len(gv['missing']) == total_branches,
+                        f"reported={gv['reported']} db={g_reported} missing={[m['branch_name'] for m in gv['missing']]}"))
+
+    # 27. Supplier chart: clean grouping, top-10, sorted desc, pct present, top supplier matches DB.
+    sup = gv['top_suppliers']
+    sup_sorted = [s['amount'] for s in sup] == sorted([s['amount'] for s in sup], reverse=True)
+    results.append(line("STEP 27 (top suppliers correct)",
+                        len(sup) <= 10 and sup_sorted and gv['supplier_total_count'] == g_sup_count
+                        and sup[0]['supplier'] == g_top_sup and 'pct' in sup[0],
+                        f"n={len(sup)} total_suppliers={gv['supplier_total_count']} db={g_sup_count} top={sup[0]['supplier']}"))
+
+    # 28. Per-branch ranked list sorted desc.
+    g_amounts = [b['amount'] for b in gv['per_branch']]
+    results.append(line("STEP 28 (goods store list sorted desc)",
+                        g_amounts == sorted(g_amounts, reverse=True),
+                        f"first={g_amounts[0] if g_amounts else None} last={g_amounts[-1] if g_amounts else None}"))
+
+    # 29. CEO goods API: 200, all branches.
+    if ceo_id:
+        as_role('ceo', ceo_id)
+        gc = client.get(f'/api/network/goods-v2?month={GOODS_MONTH}')
+        results.append(line("STEP 29 (goods API ceo 200 + all branches)",
+                            gc.status_code == 200 and gc.get_json()['total_branches'] == total_branches,
+                            f"status={gc.status_code} total={gc.get_json()['total_branches']}"))
+
+    # 30. Multi-store manager goods API: scoped to own stores only.
+    if multi_mgr:
+        as_role('manager', multi_mgr)
+        gm = client.get(f'/api/network/goods-v2?month={GOODS_MONTH}').get_json()
+        seen = {b['branch_id'] for b in gm['per_branch']} | {m['branch_id'] for m in gm['missing']}
+        results.append(line("STEP 30 (goods API manager scoped to own stores)",
+                            gm['total_branches'] == len(multi_branches) and seen.issubset(multi_branches),
+                            f"total={gm['total_branches']} own={len(multi_branches)} leak={seen - multi_branches}"))
+
+    # 31. Admin goods network page renders dashboard + toggle + clickable rows.
+    as_role('admin', admin_id)
+    gp = client.get('/network/goods-v2?mode=network').get_data(as_text=True)
+    results.append(line("STEP 31 (goods network page renders + rows clickable)",
+                        'gdBody' in gp and 'class="gd-toggle"' in gp
+                        and 'mode=single&store=' in gp and 'a.gd-row' in gp,
+                        f"dashboard={'gdBody' in gp}"))
+
+    # 32. Click a reporting branch → single GOODS mode shows THAT branch's real /goods content.
+    a_id = gv['per_branch'][0]['branch_id']
+    b_id = gv['per_branch'][1]['branch_id']
+    ga = client.get(f'/network/goods-v2?mode=single&store={a_id}&month={GOODS_MONTH}').get_data(as_text=True)
+    gb = client.get(f'/network/goods-v2?mode=single&store={b_id}&month={GOODS_MONTH}').get_data(as_text=True)
+    a_ok = 'goods-table' in ga and money(g_branch_total[a_id]) in ga
+    b_ok = money(g_branch_total[b_id]) in gb
+    results.append(line("STEP 32 (click branch → its real /goods content)",
+                        a_ok and b_ok and g_branch_total[a_id] != g_branch_total[b_id],
+                        f"a_ok={a_ok} b_ok={b_ok} distinct_totals={g_branch_total[a_id] != g_branch_total[b_id]}"))
+
+    # 33. Single-store manager: no toggle, lands on goods detail.
+    if single_mgr:
+        as_role('manager', single_mgr)
+        gsp = client.get('/network/goods-v2').get_data(as_text=True)
+        gs_toggle_absent = 'class="gd-toggle"' not in gsp
+        results.append(line("STEP 33 (single-store manager: no toggle, goods detail)",
+                            gs_toggle_absent and 'goods-table' in gsp,
+                            f"toggle_absent={gs_toggle_absent} goods_content={'goods-table' in gsp}"))
+
+    # 34. Manager foreign store blocked: a foreign store's goods total must not
+    # leak (route falls back to the manager's own branch).
+    if multi_mgr:
+        # Pick a foreign branch with a distinctive non-zero total not shared by
+        # any of the manager's own branches (so the check is unambiguous).
+        own_totals = {g_branch_total.get(b) for b in multi_branches}
+        foreign = next((b for b in active_ids
+                        if b not in multi_branches and b in g_branch_total
+                        and g_branch_total[b] not in own_totals), None)
+        as_role('manager', multi_mgr)
+        gfp = client.get(f'/network/goods-v2?mode=single&store={foreign}&month={GOODS_MONTH}').get_data(as_text=True)
+        foreign_shown = foreign is not None and money(g_branch_total[foreign]) in gfp
+        results.append(line("STEP 34 (manager foreign goods store blocked)",
+                            not foreign_shown,
+                            f"foreign={foreign} foreign_leaked={foreign_shown}"))
+
+    # 35. EXISTING /goods still renders (include refactor didn't break it).
+    as_role('admin', admin_id)
+    rg = client.get('/goods')
+    results.append(line("STEP 35 (/goods unchanged: 200 + goods content)",
+                        rg.status_code == 200 and 'goods-table' in rg.get_data(as_text=True),
+                        f"status={rg.status_code}"))
 
     print()
     failed = [i for i, ok in enumerate(results) if not ok]

@@ -1,0 +1,11 @@
+<script>
+function filterDocs(type, btn) {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const rows = document.querySelectorAll('#goods-table tbody tr');
+    rows.forEach(row => {
+        if (type === 'all') { row.style.display = ''; }
+        else { row.style.display = row.dataset.type === type ? '' : 'none'; }
+    });
+}
+</script>
