@@ -2,7 +2,10 @@
 {% block title %}הכנסות רשת - קופה שקופה{% endblock %}
 {% block head %}
 <style>
-    .nr-wrap { max-width: 760px; margin: 0 auto; }
+    /* Use the full app-shell width (.main-content is 1400px). On narrow
+       viewports everything collapses to the single-column mobile layout
+       verified at 390px. */
+    .nr-wrap { width: 100%; max-width: 1400px; margin: 0 auto; }
 
     .nr-head {
         display: flex; align-items: center; justify-content: space-between;
@@ -25,56 +28,64 @@
     }
     .nr-date-ctl button:hover { background: rgba(255,255,255,0.07); color: var(--text-primary); }
 
+    /* ── Layout grid ── mobile: single stacked column. ≥900px: hero (left,
+       wide) + side panel (right), with the ranked strip spanning full width
+       underneath. */
+    .nr-grid { display: flex; flex-direction: column; gap: 1rem; }
+
     /* HERO */
     .nr-hero {
-        position: relative; background: var(--card); border: 1px solid var(--card-border);
-        border-radius: var(--radius); padding: 1.4rem 1.5rem; margin-bottom: 1rem;
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); padding: 1.4rem 1.5rem;
         box-shadow: var(--shadow);
+        display: flex; flex-direction: column; gap: 0.7rem; align-items: flex-start;
     }
-    .nr-spark { position: absolute; top: 1rem; inset-inline-start: 1.25rem; opacity: 0.9; }
+    .nr-hero-main { min-width: 0; }
     .nr-hero-label { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.2rem; }
     .nr-hero-total {
-        font-size: 2.9rem; font-weight: 800; color: var(--text-light);
+        font-size: 3rem; font-weight: 800; color: var(--text-light);
         line-height: 1.05; letter-spacing: -1px;
     }
-    .nr-hero-sub { margin-top: 0.55rem; font-size: 0.92rem; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; align-items: center; }
+    .nr-hero-sub { margin-top: 0.55rem; font-size: 0.95rem; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; align-items: center; }
     .nr-delta { font-weight: 700; }
     .nr-delta.up { color: var(--profit); }
     .nr-delta.down { color: var(--loss); }
     .nr-delta.flat { color: var(--text-muted); }
+    .nr-spark { order: -1; width: 130px; height: auto; display: block; }
 
-    /* COVERAGE */
+    /* SIDE PANEL (coverage + callouts) */
+    .nr-side { display: flex; flex-direction: column; gap: 1rem; }
     .nr-coverage {
-        font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;
-        padding: 0.6rem 0.85rem; background: rgba(255,255,255,0.03);
-        border: 1px solid var(--card-border); border-radius: 8px;
+        font-size: 0.88rem; color: var(--text-secondary);
+        padding: 0.7rem 0.9rem; background: rgba(255,255,255,0.03);
+        border: 1px solid var(--card-border); border-radius: 10px;
     }
     .nr-coverage b { color: var(--text-primary); }
     .nr-coverage .nr-missing { color: #f59e0b; }
 
-    /* TOP/BOTTOM callouts */
-    .nr-callouts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-bottom: 1rem; }
+    .nr-callouts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
     .nr-callout {
         background: var(--card); border: 1px solid var(--card-border);
-        border-radius: 10px; padding: 0.8rem 0.9rem;
+        border-radius: 10px; padding: 0.85rem 0.95rem;
     }
     .nr-callout .lbl { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
-    .nr-callout .nm { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
-    .nr-callout .amt { font-size: 0.95rem; font-weight: 700; margin-top: 0.15rem; }
+    .nr-callout .nm { font-size: 0.98rem; font-weight: 700; color: var(--text-primary); }
+    .nr-callout .amt { font-size: 1rem; font-weight: 700; margin-top: 0.15rem; }
     .nr-callout.top { border-color: var(--profit-border); }
     .nr-callout.top .amt { color: var(--profit); }
     .nr-callout.bottom .amt { color: var(--text-secondary); }
 
     /* RANKED STRIP */
-    .nr-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.1rem; }
-    .nr-strip h2 { font-size: 0.92rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.8rem; }
-    .nr-row { display: grid; grid-template-columns: 130px 1fr auto; align-items: center; gap: 0.7rem; padding: 0.32rem 0; }
-    .nr-row .rname { font-size: 0.85rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .nr-bar-track { background: rgba(255,255,255,0.05); border-radius: 999px; height: 12px; overflow: hidden; }
+    .nr-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.2rem; }
+    .nr-strip h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.9rem; }
+    .nr-row { display: grid; grid-template-columns: 130px 1fr auto; align-items: center; gap: 0.7rem; padding: 0.34rem 0; }
+    .nr-row .rname { font-size: 0.86rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nr-bar-track { background: rgba(255,255,255,0.05); border-radius: 999px; height: 13px; overflow: hidden; }
     .nr-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #818cf8); border-radius: 999px; }
-    .nr-row .ramt { font-size: 0.85rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+    .nr-row .ramt { font-size: 0.86rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+    .nr-rows.collapsed .nr-row.nr-tail { display: none; }
     .nr-more {
-        margin-top: 0.7rem; background: transparent; border: 1px solid var(--card-border);
+        margin-top: 0.8rem; background: transparent; border: 1px solid var(--card-border);
         border-radius: 8px; color: var(--text-secondary); padding: 0.45rem 0.8rem;
         font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit; width: 100%;
         min-height: 38px; touch-action: manipulation;
@@ -83,10 +94,32 @@
 
     .nr-empty { text-align: center; color: var(--text-secondary); padding: 2.5rem 1rem; }
 
+    /* ── Wide desktop (≥900px) ── two-up top region + 2-column store strip ── */
+    @media (min-width: 900px) {
+        .nr-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+            grid-template-rows: auto auto;
+            gap: 1rem 1.25rem; align-items: stretch;
+        }
+        .nr-hero  { grid-column: 1; grid-row: 1; flex-direction: row; align-items: center; justify-content: space-between; gap: 1.5rem; }
+        .nr-side  { grid-column: 2; grid-row: 1; }
+        .nr-strip { grid-column: 1 / -1; grid-row: 2; }
+
+        .nr-hero-total { font-size: 3.4rem; }
+        .nr-spark { order: 0; width: 320px; flex-shrink: 0; }
+
+        /* All branches in two column-major columns (ranks 1→N down the left,
+           then continuing down the right) — every store visible, no scroll. */
+        .nr-rows { column-count: 2; column-gap: 2.5rem; }
+        .nr-row { break-inside: avoid; }
+        .nr-rows.collapsed .nr-row.nr-tail { display: grid; }  /* reveal all when wide */
+        .nr-more { display: none; }
+    }
+
     @media (max-width: 480px) {
-        .nr-hero { padding-top: 2.6rem; }
-        .nr-spark { top: 0.9rem; }
-        .nr-hero-total { font-size: 2.3rem; }
+        .nr-hero { padding: 1.2rem; }
+        .nr-hero-total { font-size: 2.4rem; }
         .nr-callouts { grid-template-columns: 1fr; }
         .nr-row { grid-template-columns: 92px 1fr auto; gap: 0.5rem; }
         .nr-row .rname { font-size: 0.8rem; }
@@ -127,14 +160,14 @@
     function sparkline(series) {
         const vals = series.map(p => p.total);
         const max = Math.max(...vals, 1);
-        const W = 96, H = 30, n = vals.length;
+        const W = 320, H = 64, n = vals.length;
         if (n < 2) return '';
         const step = W / (n - 1);
-        const pts = vals.map((v, i) => `${(i * step).toFixed(1)},${(H - (v / max) * (H - 4) - 2).toFixed(1)}`).join(' ');
+        const pts = vals.map((v, i) => `${(i * step).toFixed(1)},${(H - (v / max) * (H - 10) - 5).toFixed(1)}`).join(' ');
         const last = pts.split(' ').pop().split(',');
-        return `<svg class="nr-spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">
-            <polyline fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="${pts}"/>
-            <circle cx="${last[0]}" cy="${last[1]}" r="2.4" fill="#818cf8"/>
+        return `<svg class="nr-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <polyline fill="none" stroke="#6366f1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${pts}"/>
+            <circle cx="${last[0]}" cy="${last[1]}" r="4.5" fill="#818cf8"/>
         </svg>`;
     }
 
@@ -160,13 +193,13 @@
             cov += ` · <span class="nr-missing">חסרים: ${names}</span>`;
         }
 
-        // Ranked strip
+        // Ranked strip — collapse the tail past 8 on narrow; CSS reveals all at ≥900px.
         const top = d.per_branch[0] ? d.per_branch[0].amount : 1;
         const COLLAPSE = 8;
         const rowsHtml = d.per_branch.map((b, i) => {
             const w = Math.max(2, (b.amount / (top || 1)) * 100);
-            const hidden = i >= COLLAPSE ? ' style="display:none" data-tail="1"' : '';
-            return `<div class="nr-row"${hidden}>
+            const tail = i >= COLLAPSE ? ' nr-tail' : '';
+            return `<div class="nr-row${tail}">
                 <div class="rname" title="${b.branch_name}">${i + 1}. ${b.branch_name}</div>
                 <div class="nr-bar-track"><div class="nr-bar-fill" style="width:${w.toFixed(1)}%"></div></div>
                 <div class="ramt">${fmt(b.amount)}</div>
@@ -191,27 +224,33 @@
             </div>` : '';
 
         body.innerHTML = `
-            <div class="nr-hero">
-                ${sparkline(d.series_7d)}
-                <div class="nr-hero-label">סך הכנסות הרשת · ${d.date}</div>
-                <div class="nr-hero-total">${fmt(d.chain_total)}</div>
-                <div class="nr-hero-sub">
-                    ${deltaHtml(d.pct_vs_prev)}
-                    <span>ממוצע לסניף ${fmt(d.avg_per_store)}</span>
+            <div class="nr-grid">
+                <div class="nr-hero">
+                    ${sparkline(d.series_7d)}
+                    <div class="nr-hero-main">
+                        <div class="nr-hero-label">סך הכנסות הרשת · ${d.date}</div>
+                        <div class="nr-hero-total">${fmt(d.chain_total)}</div>
+                        <div class="nr-hero-sub">
+                            ${deltaHtml(d.pct_vs_prev)}
+                            <span>ממוצע לסניף ${fmt(d.avg_per_store)}</span>
+                        </div>
+                    </div>
                 </div>
-            </div>
-            <div class="nr-coverage">${cov}</div>
-            ${callouts}
-            <div class="nr-strip">
-                <h2>דירוג סניפים</h2>
-                ${rowsHtml}
-                ${moreBtn}
+                <div class="nr-side">
+                    <div class="nr-coverage">${cov}</div>
+                    ${callouts}
+                </div>
+                <div class="nr-strip">
+                    <h2>דירוג סניפים</h2>
+                    <div class="nr-rows collapsed">${rowsHtml}</div>
+                    ${moreBtn}
+                </div>
             </div>`;
 
         const moreEl = document.getElementById('nrMore');
         if (moreEl) {
             moreEl.addEventListener('click', () => {
-                body.querySelectorAll('[data-tail]').forEach(el => el.style.display = 'grid');
+                body.querySelector('.nr-rows').classList.remove('collapsed');
                 moreEl.remove();
             });
         }
