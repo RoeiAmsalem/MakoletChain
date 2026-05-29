@@ -11,6 +11,30 @@
     }
     .btn-pdf:hover { background: rgba(239,68,68,0.3); }
     .btn-pdf:disabled { opacity: 0.3; cursor: default; }
+    /* Monthly department summary tiles (top of /sales). Hero = avg daily %. */
+    .dept-month-grid {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        gap: 1rem;
+    }
+    .dept-month-card {
+        background: #1e293b; border: 1px solid #334155;
+        border-top: 3px solid #475569; border-radius: 12px;
+        padding: 1rem 1.25rem 1.1rem;
+    }
+    .dept-month-card[data-code="5"]  { border-top-color: #60a5fa; }
+    .dept-month-card[data-code="83"] { border-top-color: #fbbf24; }
+    .dept-month-card[data-code="2"]  { border-top-color: #4ade80; }
+    .dept-month-head {
+        display: flex; align-items: center; gap: 0.4rem;
+        font-size: 0.85rem; color: #94a3b8; font-weight: 600; margin-bottom: 0.5rem;
+    }
+    .dept-month-icon { font-size: 1rem; }
+    .dept-month-pct {
+        font-size: 1.9rem; font-weight: 700; color: #f1f5f9; line-height: 1.1;
+        direction: ltr; text-align: right;
+    }
+    .dept-month-sub { font-size: 0.78rem; color: #64748b; margin-top: 0.35rem; }
+    .dept-month-sub .dept-month-total { color: #cbd5e1; direction: ltr; font-variant-numeric: tabular-nums; }
     /* Dept expand chevron + panel — colors match page tokens (cards #1e293b,
        expanded #172033 = slightly lighter so it reads as nested under the row). */
     .dept-toggle {
@@ -139,6 +163,30 @@
 <!-- KPI Cards -->
 <section class="sales-kpis" id="sales-kpis">
     <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
+</section>
+
+<!-- Department monthly summary tiles — avg daily % share of the Z + ₪ total. -->
+<section id="dept-month-tiles" style="display:none; margin-bottom:1.25rem;">
+    <div style="font-size:0.85rem; color:#94a3b8; font-weight:600; margin:0 0.15rem 0.65rem;">
+        מחלקות מובילות — ממוצע יומי לחודש <span id="dept-month-label"></span>
+    </div>
+    <div class="dept-month-grid">
+        <div class="dept-month-card" data-code="5">
+            <div class="dept-month-head"><span class="dept-month-icon">🥛</span><span>חלב</span></div>
+            <div class="dept-month-pct">—</div>
+            <div class="dept-month-sub"><span class="dept-month-total">—</span> סה"כ החודש</div>
+        </div>
+        <div class="dept-month-card" data-code="83">
+            <div class="dept-month-head"><span class="dept-month-icon">🚬</span><span>סיגריות</span></div>
+            <div class="dept-month-pct">—</div>
+            <div class="dept-month-sub"><span class="dept-month-total">—</span> סה"כ החודש</div>
+        </div>
+        <div class="dept-month-card" data-code="2">
+            <div class="dept-month-head"><span class="dept-month-icon">🥬</span><span>ירקות</span></div>
+            <div class="dept-month-pct">—</div>
+            <div class="dept-month-sub"><span class="dept-month-total">—</span> סה"כ החודש</div>
+        </div>
+    </div>
 </section>
 
 <!-- Sales Table -->
@@ -574,7 +622,32 @@ function closePdf() {
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closePdf(); });
 
+// ── Monthly department summary tiles ───────────────────────────────────────
+// Hero = average daily % share of the Z across the month; sub = ₪ total.
+// Hidden entirely when no qualifying day has dept data for the month.
+async function loadDeptMonthTiles() {
+    const section = document.getElementById('dept-month-tiles');
+    try {
+        const res = await fetch(`/api/department-sales-monthly?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) { section.style.display = 'none'; return; }
+        const d = await res.json();
+        if (!d.days_counted || !d.tiles) { section.style.display = 'none'; return; }
+        document.getElementById('dept-month-label').textContent = monthLabel;
+        for (const t of d.tiles) {
+            const card = section.querySelector(`.dept-month-card[data-code="${t.code}"]`);
+            if (!card) continue;
+            card.querySelector('.dept-month-pct').textContent =
+                (t.avg_pct === null || t.avg_pct === undefined) ? '—' : `${t.avg_pct.toFixed(1)}%`;
+            card.querySelector('.dept-month-total').textContent = formatMoney(t.total);
+        }
+        section.style.display = 'block';
+    } catch (err) {
+        section.style.display = 'none';
+    }
+}
+
 loadSales();
+loadDeptMonthTiles();
 
 // ── Sales charts (server-rendered; red/blue decided in backend) ──
 const SALES_CHARTS = {{ charts_data | tojson }};

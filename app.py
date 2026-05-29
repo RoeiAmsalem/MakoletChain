@@ -1245,6 +1245,101 @@ def api_department_sales():
     })
 
 
+# Department tiles shown at the top of /sales — same 3 depts as the (now
+# removed) home tiles, but each tile's hero number is the AVERAGE DAILY
+# PERCENTAGE of that dept's share of the day's Z, across the selected month.
+# Codes/colors mirror the per-day expand panel in sales.html.
+SALES_DEPT_TILES: list[dict] = [
+    {'code': 5,  'label': 'חלב',     'icon': '🥛', 'accent': '#60a5fa'},
+    {'code': 83, 'label': 'סיגריות', 'icon': '🚬', 'accent': '#fbbf24'},
+    {'code': 2,  'label': 'ירקות',   'icon': '🥬', 'accent': '#4ade80'},
+]
+
+
+@app.route('/api/department-sales-monthly')
+@login_required
+def api_department_sales_monthly():
+    """Per-dept monthly summary for /sales: average daily % + ₪ total.
+
+    For the selected branch + month, the hero number per dept is the
+    EQUAL-WEIGHT AVERAGE of each qualifying day's percentage
+    (dept_amount / day_Z_total * 100) — NOT month-total / month-total.
+
+    A "qualifying day" is one that has a real Z (daily_sales row, amount > 0,
+    non-provisional source) AND has z_department_sales rows (proving the 902
+    was actually parsed for that day). Days with no Z, closed-day sentinels,
+    or days where the 902 was never fetched are excluded entirely — they are
+    NOT counted as 0%. A day that DID parse a 902 but has no row for a given
+    dept counts as 0% for that dept (genuine zero — other depts were itemized
+    that day, so this one simply sold nothing).
+
+    Response:
+      {
+        "branch_id": 127, "month": "2026-05", "days_counted": 21,
+        "tiles": [{"code": 5, "label": "חלב", "icon": "🥛",
+                   "accent": "#60a5fa", "avg_pct": 18.3, "total": 87654.32}, ...]
+      }
+    """
+    branch_id = get_branch_id()
+    month = request.args.get('month') or session.get('selected_month')
+    db = get_db()
+
+    # Qualifying days: real Z (amount > 0, non-provisional) that also has a
+    # parsed 902 (at least one z_department_sales row that day).
+    day_rows = db.execute(
+        "SELECT ds.date AS date, ds.amount AS z_total FROM daily_sales ds "
+        "WHERE ds.branch_id=? AND strftime('%Y-%m', ds.date)=? "
+        "AND ds.amount > 0 AND ds.source NOT IN ('live_provisional', 'provisional') "
+        "AND EXISTS (SELECT 1 FROM z_department_sales z "
+        "            WHERE z.branch_id=ds.branch_id AND z.date=ds.date) "
+        "ORDER BY ds.date ASC",
+        (branch_id, month)
+    ).fetchall()
+    qualifying = {r['date']: r['z_total'] for r in day_rows}
+
+    # Per-dept amount per qualifying day, for the 3 tile codes only.
+    codes = [t['code'] for t in SALES_DEPT_TILES]
+    placeholders = ','.join('?' * len(codes))
+    dept_rows = db.execute(
+        f"SELECT date, dept_code, amount FROM z_department_sales "
+        f"WHERE branch_id=? AND strftime('%Y-%m', date)=? "
+        f"AND dept_code IN ({placeholders})",
+        (branch_id, month, *codes)
+    ).fetchall()
+    # {code: {date: amount}}
+    by_code: dict[int, dict] = {c: {} for c in codes}
+    for r in dept_rows:
+        if r['date'] in qualifying:
+            by_code[r['dept_code']][r['date']] = r['amount']
+
+    tiles = []
+    for t in SALES_DEPT_TILES:
+        per_day = by_code[t['code']]
+        total = 0.0
+        pct_sum = 0.0
+        for date, z_total in qualifying.items():
+            amt = per_day.get(date, 0.0) or 0.0
+            total += amt
+            if z_total and z_total > 0:
+                pct_sum += amt / z_total * 100
+        avg_pct = round(pct_sum / len(qualifying), 1) if qualifying else None
+        tiles.append({
+            'code': t['code'],
+            'label': t['label'],
+            'icon': t['icon'],
+            'accent': t['accent'],
+            'avg_pct': avg_pct,
+            'total': round(total, 2),
+        })
+
+    return jsonify({
+        'branch_id': branch_id,
+        'month': month,
+        'days_counted': len(qualifying),
+        'tiles': tiles,
+    })
+
+
 @app.route('/api/network-overview')
 @login_required
 def api_network_overview():
