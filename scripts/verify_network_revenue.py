@@ -32,14 +32,21 @@ def main():
         admin_id = admin['id'] if admin else 1
         mgr_id = mgr['id'] if mgr else None
 
-        # Independent reconciliation total for PROBE_DATE
+        # Independent reconciliation totals for PROBE_DATE
         ph = ','.join('?' * len(active_ids))
         recon = db.execute(
-            f"SELECT COALESCE(SUM(amount),0) t, COUNT(DISTINCT branch_id) c "
+            f"SELECT COALESCE(SUM(amount),0) t, COALESCE(SUM(transactions),0) txn, "
+            f"COUNT(DISTINCT branch_id) c "
             f"FROM daily_sales WHERE date=? AND branch_id IN ({ph})",
             [PROBE_DATE] + active_ids).fetchone()
         recon_total = round(float(recon['t'] or 0), 2)
+        recon_txn = int(recon['txn'] or 0)
         recon_count = recon['c']
+        # Month-to-date (2026-05-01 → PROBE_DATE)
+        recon_mtd = round(float(db.execute(
+            f"SELECT COALESCE(SUM(amount),0) t FROM daily_sales "
+            f"WHERE date BETWEEN '2026-05-01' AND ? AND branch_id IN ({ph})",
+            [PROBE_DATE] + active_ids).fetchone()['t'] or 0), 2)
 
     client = app.test_client()
 
@@ -82,9 +89,25 @@ def main():
     results.append(line("STEP 7 (missing branches named)", len(missing_names) > 0 or recon_count == total_branches,
                         f"missing={missing_names}"))
 
-    series_ok = len(d['series_7d']) == 7 and d['series_7d'][-1]['date'] == PROBE_DATE
-    results.append(line("STEP 8 (7-day sparkline series)", series_ok,
-                        f"len={len(d['series_7d'])} last={d['series_7d'][-1]['date'] if d['series_7d'] else None}"))
+    series_ok = len(d['series_14d']) == 14 and d['series_14d'][-1]['date'] == PROBE_DATE
+    results.append(line("STEP 8 (14-day trend series)", series_ok,
+                        f"len={len(d['series_14d'])} last={d['series_14d'][-1]['date'] if d['series_14d'] else None}"))
+
+    # 8b. New metrics reconcile
+    results.append(line("STEP 8b (transactions reconcile)",
+                        d['total_transactions'] == recon_txn,
+                        f"api={d['total_transactions']} db={recon_txn}"))
+    exp_basket = round(d['chain_total'] / recon_txn, 2) if recon_txn else 0
+    results.append(line("STEP 8c (avg basket = total/txns)",
+                        d['avg_basket'] == exp_basket,
+                        f"api={d['avg_basket']} expected={exp_basket}"))
+    exp_avg_store = round(d['chain_total'] / d['reported'], 2) if d['reported'] else 0
+    results.append(line("STEP 8d (avg per store = total/reporting)",
+                        d['avg_per_store'] == exp_avg_store,
+                        f"api={d['avg_per_store']} expected={exp_avg_store}"))
+    results.append(line("STEP 8e (month-to-date reconciles)",
+                        d['month_to_date_total'] == recon_mtd,
+                        f"api={d['month_to_date_total']} db={recon_mtd}"))
 
     # 9. Default date = most recent day with data (no date param)
     r2 = client.get('/api/network/revenue')

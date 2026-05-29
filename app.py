@@ -1571,7 +1571,8 @@ def api_network_revenue():
 
     # Per-branch rows for the selected day (only branches WITH a row).
     rows = db.execute(
-        f"SELECT branch_id, COALESCE(SUM(amount),0) AS amount "
+        f"SELECT branch_id, COALESCE(SUM(amount),0) AS amount, "
+        f"COALESCE(SUM(transactions),0) AS txn "
         f"FROM daily_sales WHERE date=? AND branch_id IN ({ph}) "
         f"GROUP BY branch_id",
         [sel_date] + branch_ids
@@ -1591,27 +1592,56 @@ def api_network_revenue():
     reported = len(per_branch)
     avg_per_store = round(chain_total / reported, 2) if reported else 0
 
+    total_transactions = int(sum(int(r['txn'] or 0) for r in rows))
+    avg_basket = round(chain_total / total_transactions, 2) if total_transactions else 0
+
     prev_date = db.execute("SELECT date(?, '-1 day') AS d", (sel_date,)).fetchone()['d']
     prev_total = _day_total(prev_date)
     pct_vs_prev = round((chain_total - prev_total) / prev_total * 100, 1) if prev_total > 0 else None
 
-    # 7-day chain-total sparkline ending on sel_date (zero-filled).
-    start_date = (datetime.strptime(sel_date, '%Y-%m-%d') - timedelta(days=6)).strftime('%Y-%m-%d')
+    # Rolling month-to-date (month-start → sel_date) vs the same span of the
+    # previous month (fair partial-vs-partial comparison, day clamped).
+    sd = datetime.strptime(sel_date, '%Y-%m-%d').date()
+    month_start = sd.replace(day=1)
+    py, pm = (sd.year, sd.month - 1) if sd.month > 1 else (sd.year - 1, 12)
+    prev_start = date(py, pm, 1)
+    prev_end = date(py, pm, min(sd.day, calendar.monthrange(py, pm)[1]))
+
+    def _range_total(d0, d1):
+        r = db.execute(
+            f"SELECT COALESCE(SUM(amount),0) AS t FROM daily_sales "
+            f"WHERE date BETWEEN ? AND ? AND branch_id IN ({ph})",
+            [d0.isoformat(), d1.isoformat()] + branch_ids
+        ).fetchone()
+        return round(float(r['t'] or 0), 2)
+
+    month_to_date_total = _range_total(month_start, sd)
+    prev_month_total = _range_total(prev_start, prev_end)
+    pct_vs_prev_month = (round((month_to_date_total - prev_month_total) / prev_month_total * 100, 1)
+                         if prev_month_total > 0 else None)
+
+    # 14-day chain-total trend ending on sel_date (zero-filled).
+    start_date = (datetime.strptime(sel_date, '%Y-%m-%d') - timedelta(days=13)).strftime('%Y-%m-%d')
     series_rows = db.execute(
         f"SELECT date, COALESCE(SUM(amount),0) AS t FROM daily_sales "
         f"WHERE date BETWEEN ? AND ? AND branch_id IN ({ph}) GROUP BY date",
         [start_date, sel_date] + branch_ids
     ).fetchall()
     by_day = {r['date']: round(float(r['t'] or 0), 2) for r in series_rows}
-    series_7d = []
-    for i in range(7):
+    series_14d = []
+    for i in range(14):
         d = (datetime.strptime(start_date, '%Y-%m-%d') + timedelta(days=i)).strftime('%Y-%m-%d')
-        series_7d.append({'date': d, 'total': by_day.get(d, 0)})
+        series_14d.append({'date': d, 'total': by_day.get(d, 0)})
 
     return jsonify({
         'date': sel_date,
         'chain_total': chain_total,
         'avg_per_store': avg_per_store,
+        'total_transactions': total_transactions,
+        'avg_basket': avg_basket,
+        'month_to_date_total': month_to_date_total,
+        'prev_month_total': prev_month_total,
+        'pct_vs_prev_month': pct_vs_prev_month,
         'prev_date': prev_date,
         'prev_total': prev_total,
         'pct_vs_prev': pct_vs_prev,
@@ -1621,7 +1651,7 @@ def api_network_revenue():
         'per_branch': per_branch,
         'top': per_branch[0] if per_branch else None,
         'bottom': per_branch[-1] if per_branch else None,
-        'series_7d': series_7d,
+        'series_14d': series_14d,
     })
 
 
