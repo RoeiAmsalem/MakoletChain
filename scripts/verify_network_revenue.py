@@ -187,17 +187,19 @@ def main():
 
         # 17. Multi-store manager page → toggle shown.
         rmp = client.get('/network/revenue-v2').get_data(as_text=True)
+        toggle_in_rmp = 'class="rev2-toggle"' in rmp
         results.append(line("STEP 17 (multi-store manager sees toggle)",
-                            'rev2-toggle' in rmp and 'הרשת שלי' in rmp and 'סניף בודד' in rmp,
-                            f"toggle_present={'rev2-toggle' in rmp}"))
+                            toggle_in_rmp and 'הרשת שלי' in rmp and 'סניף בודד' in rmp,
+                            f"toggle_present={toggle_in_rmp}"))
 
     # 18. Single-store manager page → NO toggle, lands on single store w/ reused /sales content.
     if single_mgr:
         as_role('manager', single_mgr)
         rsp = client.get('/network/revenue-v2').get_data(as_text=True)
+        toggle_absent = 'class="rev2-toggle"' not in rsp
         results.append(line("STEP 18 (single-store manager: no toggle, single mode)",
-                            'rev2-toggle' not in rsp and 'sales-tfoot' in rsp,
-                            f"toggle_absent={'rev2-toggle' not in rsp} sales_content={'sales-tfoot' in rsp}"))
+                            toggle_absent and 'sales-tfoot' in rsp,
+                            f"toggle_absent={toggle_absent} sales_content={'sales-tfoot' in rsp}"))
 
         # 19. Single manager v2 API still scoped to his 1 store.
         dsv = client.get('/api/network/revenue-v2').get_json()
@@ -216,7 +218,7 @@ def main():
     # 21. v2 admin network mode renders aggregate dashboard + toggle.
     rv2p = client.get('/network/revenue-v2').get_data(as_text=True)
     results.append(line("STEP 21 (v2 admin network mode renders)",
-                        'nrBody' in rv2p and 'rev2-toggle' in rv2p and 'revenue-v2' in rv2p,
+                        'nrBody' in rv2p and 'class="rev2-toggle"' in rv2p and 'revenue-v2' in rv2p,
                         f"dashboard={'nrBody' in rv2p}"))
 
     print()
