@@ -14,48 +14,47 @@
 
     .ev-wrap { width: 100%; max-width: 1400px; margin: 0 auto; }
 
-    /* BAND 1 — two metric cards */
-    .ev-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 0.85rem; }
+    /* BAND 1 — three metric cards */
+    .ev-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 1rem; }
     .ev-metric { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.1rem 1.2rem; box-shadow: var(--shadow); border-top: 3px solid var(--card-border); }
     .ev-metric.accent { border-top-color: #a855f7; }
     .ev-metric .m-label { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem; }
     .ev-metric .m-value { font-size: 2rem; font-weight: 800; color: var(--text-light); line-height: 1.1; letter-spacing: -0.5px; }
     .ev-metric .m-sub { margin-top: 0.4rem; font-size: 0.82rem; color: var(--text-secondary); }
+    .ev-metric .m-caption { margin-top: 0.3rem; font-size: 0.72rem; color: var(--text-muted); font-style: italic; }
 
-    .ev-coverage { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 1rem; padding: 0.7rem 0.9rem; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 10px; }
-    .ev-coverage b { color: var(--text-primary); }
-    .ev-coverage .ev-pending { color: #c084fc; }
-
-    /* BAND 2 — ranked store list (roomy, clickable, no bars, two-column) */
+    /* BAND 2 — active stores (the hero; roomy full-width clickable rows) */
     .ev-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem 1.4rem; box-shadow: var(--shadow); }
     .ev-strip h2 { font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin: 0 0 1.1rem; }
-    .ev-row { display: grid; grid-template-columns: 34px 1fr auto 18px; align-items: center; gap: 0.85rem; padding: 0.85rem 0.6rem; border-bottom: 1px solid rgba(148,163,184,0.1); border-radius: 8px; transition: background 0.12s; }
+    .ev-row { display: grid; grid-template-columns: 34px 1fr auto 18px; align-items: center; gap: 0.85rem; padding: 0.95rem 0.6rem; border-bottom: 1px solid rgba(148,163,184,0.1); border-radius: 8px; transition: background 0.12s; }
     a.ev-row { text-decoration: none; cursor: pointer; }
     a.ev-row:hover { background: rgba(255,255,255,0.05); }
     a.ev-row:active { background: rgba(255,255,255,0.08); }
-    .ev-row .rrank { font-size: 0.95rem; color: var(--text-muted); font-weight: 700; text-align: center; }
-    .ev-row .rname { font-size: 1.02rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .ev-row .ramt { font-size: 1.05rem; font-weight: 800; color: var(--text-primary); white-space: nowrap; text-align: left; letter-spacing: -0.3px; }
-    .ev-row .rsub { font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
+    .ev-row .rrank { font-size: 1.05rem; color: #c084fc; font-weight: 700; text-align: center; }
+    .ev-row .rname { font-size: 1.08rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ev-row .ramt { font-size: 1.12rem; font-weight: 800; color: var(--text-primary); white-space: nowrap; text-align: left; letter-spacing: -0.3px; }
+    .ev-row .rsub { font-size: 0.74rem; color: var(--text-muted); font-weight: 600; }
     .ev-row .rchev { color: var(--text-muted); font-size: 1rem; text-align: center; opacity: 0.6; }
     a.ev-row:hover .rchev { opacity: 1; color: #c084fc; }
-    .ev-row.missing { opacity: 0.6; }
-    .ev-row.missing .rname, .ev-row.missing .ramt, .ev-row.missing .rrank { color: var(--text-muted); }
-    .ev-row.missing .ramt { font-weight: 500; font-size: 0.85rem; }
-    .ev-rows.collapsed .ev-row.ev-tail { display: none; }
-    .ev-more { margin-top: 0.8rem; background: transparent; border: 1px solid var(--card-border); border-radius: 8px; color: var(--text-secondary); padding: 0.45rem 0.8rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit; width: 100%; min-height: 38px; touch-action: manipulation; }
-    .ev-more:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+
+    /* BAND 3 — onboarding worklist (amber; compact 3-across, clickable) */
+    .ev-worklist { background: var(--card); border: 1px solid rgba(245,158,11,0.35); border-radius: var(--radius); padding: 1.25rem 1.4rem; margin-top: 1rem; box-shadow: var(--shadow); }
+    .ev-worklist h2 { font-size: 1.05rem; font-weight: 700; color: #fde68a; margin: 0 0 0.25rem; }
+    .ev-worklist .wl-sub { font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 1rem; }
+    .ev-wlgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.7rem; }
+    .ev-wl { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.8rem 0.9rem; background: rgba(245,158,11,0.05); border: 1px solid rgba(245,158,11,0.2); border-radius: 10px; text-decoration: none; transition: background 0.12s, border-color 0.12s; min-height: 44px; touch-action: manipulation; }
+    .ev-wl:hover { background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.45); }
+    .ev-wl .wl-name { font-size: 0.92rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ev-wl .wl-pending { font-size: 0.78rem; color: #fbbf24; font-weight: 600; }
+    .ev-wl .wl-pending.zero { color: var(--text-muted); }
+
     .ev-empty { text-align: center; color: var(--text-secondary); padding: 2.5rem 1rem; }
 
-    @media (min-width: 900px) {
-        .ev-rows { column-count: 2; column-gap: 2.5rem; }
-        .ev-row { break-inside: avoid; }
-        .ev-rows.collapsed .ev-row.ev-tail { display: grid; }
-        .ev-more { display: none; }
-    }
+    @media (max-width: 768px) { .ev-wlgrid { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 480px) {
         .ev-metrics { grid-template-columns: 1fr; }
         .ev-metric .m-value { font-size: 1.7rem; }
+        .ev-wlgrid { grid-template-columns: 1fr; }
     }
 </style>
 {% endblock %}
@@ -102,55 +101,68 @@
     const storeHref = id => `/network/employees-v2?mode=single&store=${encodeURIComponent(id)}`
         + (MONTH ? ('&month=' + encodeURIComponent(MONTH)) : '');
 
+    // ── Healthy labor-cost % threshold — UNSET, pending Roei's call. ──
+    // When set to e.g. { green: 22, amber: 28 } the labor% card colors:
+    // green at/below .green, amber at/above .amber, neutral in between.
+    // While null the value stays neutral (no guessed threshold).
+    const HEALTHY_LABOR_PCT = null;
+    function laborColor(pct) {
+        if (HEALTHY_LABOR_PCT == null || pct == null) return null;
+        if (pct <= HEALTHY_LABOR_PCT.green) return '#22c55e';
+        if (pct >= HEALTHY_LABOR_PCT.amber) return '#f59e0b';
+        return null;
+    }
+
     function render(d) {
         if (!d.month || d.reported === 0) {
             body.innerHTML = `<div class="ev-empty">אין סניפים עם עובדים מוגדרים.</div>`;
             return;
         }
 
-        // Coverage — three tiers: configured (reported), and the rest with a
-        // truthful "no employees configured" + "ממתינים לשיוך" hint where pending>0.
-        let cov = `<b>${d.reported}</b> מתוך <b>${d.total_branches}</b> סניפים עם נתוני עובדים`;
-        const miss = d.missing || [];
-        if (miss.length) {
-            const pend = miss.filter(m => m.pending > 0).length;
-            cov += ` · ${miss.length} ללא עובדים מוגדרים`;
-            if (pend) cov += ` (<span class="ev-pending">${pend} ממתינים לשיוך</span>)`;
-        }
+        // ── BAND 1 — three metric cards ──
+        const pctStr = d.labor_pct == null ? '—' : d.labor_pct.toFixed(1) + '%';
+        const lc = laborColor(d.labor_pct);
+        const pctStyle = lc ? ` style="color:${lc}"` : '';
+        // Placeholder caption — replaced by the threshold legend once set.
+        const pctCaption = HEALTHY_LABOR_PCT == null
+            ? 'טווח בריא — ייקבע'
+            : `בריא ≤${HEALTHY_LABOR_PCT.green}% · גבוה ≥${HEALTHY_LABOR_PCT.amber}%`;
+        const metrics = `
+            <div class="ev-metrics">
+                <div class="ev-metric accent"><div class="m-label">סה״כ שכר — החודש</div><div class="m-value">${fmt(d.chain_salary_total)}</div><div class="m-sub">${d.reported} סניפים מדווחים</div></div>
+                <div class="ev-metric"><div class="m-label">ממוצע לסניף</div><div class="m-value">${fmt(d.avg_per_store)}</div><div class="m-sub">${d.month}</div></div>
+                <div class="ev-metric"><div class="m-label">עלות שכר מהכנסות</div><div class="m-value"${pctStyle}>${pctStr}</div><div class="m-sub">${d.labor_pct_stores} סניפים עם שכר והכנסות</div><div class="m-caption">${pctCaption}</div></div>
+            </div>`;
 
-        // Ranked store list (no bars), clickable → single mode for that store.
-        const COLLAPSE = 8;
-        let idx = 0;
-        const rows = d.per_branch.map((b, i) => {
-            const tail = idx >= COLLAPSE ? ' ev-tail' : ''; idx++;
-            const sub = `${b.emp_count} עובדים · ${Math.round(b.hours)} שעות`;
-            return `<a class="ev-row${tail}" href="${storeHref(b.branch_id)}" title="פתח את ${b.branch_name}">
+        // ── BAND 2 — active stores (hero), ranked desc by salary, clickable ──
+        const rows = (d.per_branch || []).map((b, i) =>
+            `<a class="ev-row" href="${storeHref(b.branch_id)}" title="פתח את ${b.branch_name}">
                 <div class="rrank">${i + 1}</div>
-                <div><div class="rname">${b.branch_name}</div><div class="rsub">${sub}</div></div>
+                <div><div class="rname">${b.branch_name}</div><div class="rsub">${b.emp_count} עובדים · ${Math.round(b.hours)} שעות</div></div>
                 <div class="ramt">${fmt(b.salary)}</div>
                 <div class="rchev">‹</div>
-            </a>`;
-        }).join('');
-        const missingRows = miss.map(m => {
-            const tail = idx >= COLLAPSE ? ' ev-tail' : ''; idx++;
-            const note = m.pending > 0
-                ? `אין עובדים · <span class="ev-pending">${m.pending} ממתינים לשיוך</span>`
-                : 'אין עובדים מוגדרים';
-            return `<div class="ev-row missing${tail}"><div class="rrank">–</div><div class="rname" title="${m.branch_name}">${m.branch_name}</div><div class="ramt">${note}</div><div class="rchev"></div></div>`;
-        }).join('');
-        const tailCount = (d.per_branch.length + miss.length) - COLLAPSE;
-        const moreBtn = tailCount > 0 ? `<button class="ev-more" id="evMore">+ ${tailCount} נוספים</button>` : '';
+            </a>`).join('');
+        const active = `<div class="ev-strip"><h2>עלות שכר לפי סניף — סניפים פעילים</h2><div class="ev-rows">${rows}</div></div>`;
 
-        body.innerHTML = `
-            <div class="ev-metrics">
-                <div class="ev-metric accent"><div class="m-label">סה״כ שכר — החודש</div><div class="m-value">${fmt(d.chain_salary_total)}</div><div class="m-sub">${d.month}</div></div>
-                <div class="ev-metric"><div class="m-label">ממוצע לסניף</div><div class="m-value">${fmt(d.avg_per_store)}</div><div class="m-sub">${d.reported} סניפים עם עובדים</div></div>
-            </div>
-            <div class="ev-coverage">${cov}</div>
-            <div class="ev-strip"><h2>עלות שכר לפי סניף</h2><div class="ev-rows collapsed">${rows}${missingRows}</div>${moreBtn}</div>`;
+        // ── BAND 3 — onboarding worklist (amber), biggest backlog first ──
+        const miss = d.missing || [];
+        let worklist = '';
+        if (miss.length) {
+            const cards = miss.map(m => {
+                const zero = m.pending > 0 ? '' : ' zero';
+                return `<a class="ev-wl" href="${storeHref(m.branch_id)}" title="הגדר עובדים — ${m.branch_name}">
+                    <div class="wl-name">${m.branch_name}</div>
+                    <div class="wl-pending${zero}">${m.pending} ממתינים</div>
+                </a>`;
+            }).join('');
+            worklist = `<div class="ev-worklist">
+                <h2>${miss.length} סניפים ממתינים להגדרת עובדים</h2>
+                <div class="wl-sub">ממוין לפי גודל ההצטברות — הקליקו כדי לשייך עובדים</div>
+                <div class="ev-wlgrid">${cards}</div>
+            </div>`;
+        }
 
-        const moreEl = document.getElementById('evMore');
-        if (moreEl) moreEl.addEventListener('click', () => { body.querySelector('.ev-rows').classList.remove('collapsed'); moreEl.remove(); });
+        body.innerHTML = metrics + active + worklist;
     }
 
     fetch('/api/network/employees-v2' + (MONTH ? ('?month=' + encodeURIComponent(MONTH)) : ''))

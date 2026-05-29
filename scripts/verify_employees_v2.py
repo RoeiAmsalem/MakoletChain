@@ -50,6 +50,11 @@ html = r.get_data(as_text=True)
 check('admin network page 200', r.status_code == 200, f'(got {r.status_code})')
 check('toggle present', 'הסניפים שלי' in html and 'סניף בודד' in html)
 check('evBody mount present', 'id="evBody"' in html)
+# Redesign markers (client-side template literals appear in served HTML)
+check('3rd metric card (labor %) present', 'עלות שכר מהכנסות' in html)
+check('active-stores hero card title present', 'סניפים פעילים' in html)
+check('onboarding worklist card present', 'ממתינים להגדרת עובדים' in html)
+check('threshold constant present + unset', 'const HEALTHY_LABOR_PCT = null;' in html)
 
 r = client.get('/api/network/employees-v2?month=2026-05')
 d = json.loads(r.get_data(as_text=True))
@@ -63,9 +68,26 @@ check('admin api chain total > 0', d.get('chain_salary_total', 0) > 0,
       f"(₪{d.get('chain_salary_total')})")
 check('admin api avg = total/reported', d.get('avg_per_store') ==
       round(d['chain_salary_total'] / d['reported'], 2))
+
+# ── labor % — present, scoped to stores with BOTH salary AND revenue, reconciles ──
+both = [b for b in d['per_branch'] if b.get('salary', 0) > 0 and b.get('revenue', 0) > 0]
+exp_sal = round(sum(b['salary'] for b in both), 2)
+exp_rev = round(sum(b['revenue'] for b in both), 2)
+exp_pct = round(exp_sal / exp_rev * 100, 1) if exp_rev else None
+check('labor_pct present', d.get('labor_pct') is not None, f"(got {d.get('labor_pct')})")
+check('labor_pct_stores = #stores with both salary+revenue', d.get('labor_pct_stores') == len(both),
+      f"(api {d.get('labor_pct_stores')} vs {len(both)})")
+check('labor_pct reconciles (salary÷revenue of same store set)', d.get('labor_pct') == exp_pct,
+      f"(api {d.get('labor_pct')}% vs computed {exp_pct}% = ₪{exp_sal}/₪{exp_rev})")
+check('chain_revenue matches qualifying-store revenue sum', d.get('chain_revenue') == exp_rev,
+      f"(api ₪{d.get('chain_revenue')} vs ₪{exp_rev})")
+
 miss = d.get('missing', [])
 check('admin api missing = 15', len(miss) == 15, f'(got {len(miss)})')
 check('admin api missing carry pending counts', any(m.get('pending', 0) > 0 for m in miss))
+check('worklist sorted by pending desc', [m['pending'] for m in miss] ==
+      sorted((m['pending'] for m in miss), reverse=True),
+      f"(got {[m['pending'] for m in miss]})")
 
 # ── ADMIN single mode — real /employees content for a store WITH data ──
 r = client.get('/network/employees-v2?mode=single&store=126&month=2026-05')

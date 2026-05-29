@@ -1975,13 +1975,22 @@ def _network_employees_payload(visible, req_month, db):
     ).fetchall()
     emp_count = {r['branch_id']: r['c'] for r in emp_rows}
 
-    # Pending name matches per branch (for the "ממתינים לשיוך" hint).
+    # Pending name matches per branch (for the onboarding worklist backlog).
     pend_rows = db.execute(
         f"SELECT branch_id, COUNT(*) AS c FROM employee_match_pending "
         f"WHERE branch_id IN ({ph}) GROUP BY branch_id",
         branch_ids
     ).fetchall()
     pending_count = {r['branch_id']: r['c'] for r in pend_rows}
+
+    # Monthly revenue per branch (for the labor-cost-% metric). Sourced from
+    # daily_sales so it ties to /sales and the home page.
+    rev_rows = db.execute(
+        f"SELECT branch_id, COALESCE(SUM(amount),0) AS rev FROM daily_sales "
+        f"WHERE strftime('%Y-%m', date)=? AND branch_id IN ({ph}) GROUP BY branch_id",
+        [month] + branch_ids
+    ).fetchall()
+    revenue = {r['branch_id']: float(r['rev'] or 0) for r in rev_rows}
 
     reported, missing = [], []
     for b in visible:
@@ -1994,6 +2003,7 @@ def _network_employees_payload(visible, req_month, db):
                 'salary': round(float(sal['amount'] or 0), 2),
                 'hours': round(float(sal['hours'] or 0), 2),
                 'emp_count': emp_count.get(bid, 0),
+                'revenue': round(revenue.get(bid, 0), 2),
             })
         else:
             missing.append({
@@ -2003,14 +2013,31 @@ def _network_employees_payload(visible, req_month, db):
             })
 
     reported.sort(key=lambda x: x['salary'], reverse=True)
+    # Worklist: biggest onboarding backlog first; 0-pending stores fall last.
+    missing.sort(key=lambda x: x['pending'], reverse=True)
+
     chain_salary_total = round(sum(r['salary'] for r in reported), 2)
     n = len(reported)
     avg_per_store = round(chain_salary_total / n, 2) if n else 0
+
+    # Labor cost % — chain salary ÷ chain revenue. To make the ratio reconcile,
+    # numerator and denominator use the SAME store set: only stores that have
+    # BOTH salary > 0 AND revenue > 0 this month. A store with salary but no
+    # imported revenue (or vice-versa) would distort the ratio, so it is
+    # excluded from both sides. `labor_pct_stores` reports how many qualified.
+    ratio_rows = [r for r in reported if r['salary'] > 0 and r['revenue'] > 0]
+    ratio_salary = round(sum(r['salary'] for r in ratio_rows), 2)
+    chain_revenue = round(sum(r['revenue'] for r in ratio_rows), 2)
+    labor_pct = round(ratio_salary / chain_revenue * 100, 1) if chain_revenue > 0 else None
 
     return {
         'month': month,
         'chain_salary_total': chain_salary_total,
         'avg_per_store': avg_per_store,
+        'labor_pct': labor_pct,
+        'labor_pct_salary': ratio_salary,
+        'chain_revenue': chain_revenue,
+        'labor_pct_stores': len(ratio_rows),
         'total_branches': total_branches,
         'reported': n,
         'per_branch': reported,
