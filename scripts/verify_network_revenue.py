@@ -216,10 +216,35 @@ def main():
                         f"status={rs.status_code} sales_content={'sales-tfoot' in rsb}"))
 
     # 21. v2 admin network mode renders aggregate dashboard + toggle.
-    rv2p = client.get('/network/revenue-v2').get_data(as_text=True)
+    as_role('admin', admin_id)
+    rv2p = client.get('/network/revenue-v2?mode=network').get_data(as_text=True)
     results.append(line("STEP 21 (v2 admin network mode renders)",
                         'nrBody' in rv2p and 'class="rev2-toggle"' in rv2p and 'revenue-v2' in rv2p,
                         f"dashboard={'nrBody' in rv2p}"))
+
+    # 22. Network-mode rows are wired to single-store links (clickable).
+    results.append(line("STEP 22 (ranked rows link to single mode)",
+                        'mode=single&store=' in rv2p and 'a.nr-row' in rv2p,
+                        f"link_wiring={'mode=single&store=' in rv2p}"))
+
+    # 23. Clicking a reporting branch → single mode for THAT exact branch (real /sales content).
+    target = d['per_branch'][0]['branch_id']  # top reporting store
+    rclick = client.get(f'/network/revenue-v2?mode=single&store={target}').get_data(as_text=True)
+    results.append(line("STEP 23 (click branch → its single-store detail)",
+                        f'const BRANCH_ID = {target};' in rclick and 'sales-tfoot' in rclick,
+                        f"branch_id_rendered={f'const BRANCH_ID = {target};' in rclick}"))
+
+    # 24. Manager can open OWN store; a foreign store falls back to one of theirs (no cross-tenant).
+    if multi_mgr:
+        own = sorted(multi_branches)[0]
+        foreign = next((b for b in active_ids if b not in multi_branches), None)
+        as_role('manager', multi_mgr)
+        rown = client.get(f'/network/revenue-v2?mode=single&store={own}').get_data(as_text=True)
+        rforeign = client.get(f'/network/revenue-v2?mode=single&store={foreign}').get_data(as_text=True)
+        foreign_rendered = f'const BRANCH_ID = {foreign};' in rforeign
+        results.append(line("STEP 24 (manager opens own store, foreign store blocked)",
+                            f'const BRANCH_ID = {own};' in rown and not foreign_rendered,
+                            f"own_ok={f'const BRANCH_ID = {own};' in rown} foreign_leaked={foreign_rendered}"))
 
     print()
     failed = [i for i, ok in enumerate(results) if not ok]

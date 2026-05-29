@@ -41,14 +41,25 @@
     .nr-trend { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.2rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
     .nr-trend h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.7rem; }
     .nr-trend-wrap { position: relative; height: 120px; width: 100%; }
-    .nr-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.2rem; box-shadow: var(--shadow); }
-    .nr-strip h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.9rem; }
-    .nr-row { display: grid; grid-template-columns: 28px 1fr auto; align-items: baseline; gap: 0.7rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(148,163,184,0.08); }
-    .nr-row .rrank { font-size: 0.82rem; color: var(--text-muted); font-weight: 700; text-align: center; }
-    .nr-row .rname { font-size: 0.88rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .nr-row .ramt { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); white-space: nowrap; text-align: left; }
+    .nr-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem 1.4rem; box-shadow: var(--shadow); }
+    .nr-strip h2 { font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin: 0 0 1.1rem; }
+    /* Ranked rows — the main content of the network view: roomy + tappable. */
+    .nr-row {
+        display: grid; grid-template-columns: 34px 1fr auto 18px; align-items: center;
+        gap: 0.85rem; padding: 0.85rem 0.6rem; border-bottom: 1px solid rgba(148,163,184,0.1);
+        border-radius: 8px; transition: background 0.12s;
+    }
+    a.nr-row { text-decoration: none; cursor: pointer; }
+    a.nr-row:hover { background: rgba(255,255,255,0.05); }
+    a.nr-row:active { background: rgba(255,255,255,0.08); }
+    .nr-row .rrank { font-size: 0.95rem; color: var(--text-muted); font-weight: 700; text-align: center; }
+    .nr-row .rname { font-size: 1.02rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nr-row .ramt { font-size: 1.05rem; font-weight: 800; color: var(--text-primary); white-space: nowrap; text-align: left; letter-spacing: -0.3px; }
+    .nr-row .rchev { color: var(--text-muted); font-size: 1rem; text-align: center; opacity: 0.6; }
+    a.nr-row:hover .rchev { opacity: 1; color: var(--accent); }
+    .nr-row.missing { opacity: 0.65; }
     .nr-row.missing .rname, .nr-row.missing .ramt, .nr-row.missing .rrank { color: var(--text-muted); }
-    .nr-row.missing .ramt { font-weight: 500; font-size: 0.82rem; }
+    .nr-row.missing .ramt { font-weight: 500; font-size: 0.9rem; }
     .nr-rows.collapsed .nr-row.nr-tail { display: none; }
     .nr-more { margin-top: 0.8rem; background: transparent; border: 1px solid var(--card-border); border-radius: 8px; color: var(--text-secondary); padding: 0.45rem 0.8rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit; width: 100%; min-height: 38px; touch-action: manipulation; }
     .nr-more:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
@@ -102,7 +113,10 @@
 <script>
 (function () {
     const body = document.getElementById('nrBody');
+    const MONTH = {{ selected_month | tojson }};
     let trendChart = null;
+    const storeHref = id => `/network/revenue-v2?mode=single&store=${encodeURIComponent(id)}`
+        + (MONTH ? ('&month=' + encodeURIComponent(MONTH)) : '');
     const fmt = v => '₪' + Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
     const fmtNum = v => Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
     const dm = iso => { const p = iso.split('-'); return p[2] + '/' + p[1]; };
@@ -144,11 +158,16 @@
         let idx = 0;
         const reportedRows = d.per_branch.map((b, i) => {
             const tail = idx >= COLLAPSE ? ' nr-tail' : ''; idx++;
-            return `<div class="nr-row${tail}"><div class="rrank">${i + 1}</div><div class="rname" title="${b.branch_name}">${b.branch_name}</div><div class="ramt">${fmt(b.amount)}</div></div>`;
+            return `<a class="nr-row${tail}" href="${storeHref(b.branch_id)}" title="פתח את ${b.branch_name}">
+                <div class="rrank">${i + 1}</div>
+                <div class="rname">${b.branch_name}</div>
+                <div class="ramt">${fmt(b.amount)}</div>
+                <div class="rchev">‹</div>
+            </a>`;
         }).join('');
         const missingRows = (d.missing || []).map(m => {
             const tail = idx >= COLLAPSE ? ' nr-tail' : ''; idx++;
-            return `<div class="nr-row missing${tail}"><div class="rrank">–</div><div class="rname" title="${m.branch_name}">${m.branch_name}</div><div class="ramt">אין נתונים</div></div>`;
+            return `<div class="nr-row missing${tail}"><div class="rrank">–</div><div class="rname" title="${m.branch_name}">${m.branch_name}</div><div class="ramt">אין נתונים</div><div class="rchev"></div></div>`;
         }).join('');
         const tailCount = (d.per_branch.length + (d.missing ? d.missing.length : 0)) - COLLAPSE;
         const moreBtn = tailCount > 0 ? `<button class="nr-more" id="nrMore">+ ${tailCount} נוספים</button>` : '';
