@@ -756,6 +756,51 @@ def network_goods_v2_page():
     return render_template('goods_v2.html', **ctx)
 
 
+@app.route('/network/employees-v2')
+@login_required
+def network_employees_v2_page():
+    """EXPERIMENTAL employees sandbox — mirrors /network/goods-v2 for chain
+    labor. Toggle 'הסניפים שלי' (chain aggregate) ⇄ 'סניף בודד'. Same access
+    model as /employees: any logged-in user, scoped to their own stores
+    (admin/ceo → all; manager → theirs). Single mode reuses the /employees body
+    via the _employees_* includes for a picked store. Single-store users get no
+    toggle and land on their store's employee detail."""
+    role = session.get('user_role')
+    user_id = session.get('user_id')
+    visible = _list_visible_branches(user_id, role)
+    single_store = len(visible) <= 1
+
+    if single_store:
+        mode = 'single'
+    else:
+        mode = request.args.get('mode') or session.get('emp2_mode') or 'network'
+        if mode not in ('network', 'single'):
+            mode = 'network'
+        session['emp2_mode'] = mode
+
+    ctx = _page_context('employees_v2')
+    ctx['emp2_mode'] = mode
+    ctx['emp2_single_store'] = single_store
+    ctx['emp2_branches'] = visible
+
+    if mode == 'single':
+        visible_ids = [b['id'] for b in visible]
+        store = request.args.get('store', type=int) or session.get('emp2_store')
+        if store not in visible_ids:
+            store = visible_ids[0] if visible_ids else None
+        session['emp2_store'] = store
+        # The reused _employees_* partials are fully client-side: they fetch
+        # /api/employees + /api/labor-cost-ratio using BRANCH_ID. Both honor
+        # ?branch_id= with server-side access validation, so setting branch_id
+        # in ctx is all that's needed — a manager can never pull another
+        # store's data even if they edit the URL.
+        ctx['branch_id'] = store
+        ctx['branch_name'] = _branch_name(store) if store else ctx['branch_name']
+        ctx['emp2_store'] = store
+
+    return render_template('employees_v2.html', **ctx)
+
+
 # ── Sales charts ─────────────────────────────────────────────
 # datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
 _HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
@@ -1880,6 +1925,107 @@ def api_network_goods_v2():
     the 'הסניפים שלי' aggregate mode of /network/goods-v2."""
     visible = _list_visible_branches(session.get('user_id'), session.get('user_role'))
     return jsonify(_network_goods_payload(visible, request.args.get('month'), get_db()))
+
+
+def _network_employees_payload(visible, req_month, db):
+    """Monthly chain LABOR payload for a set of visible branches.
+
+    Caller supplies `visible` (access already enforced). Hero metric is total
+    salary cost this month via the single source of truth
+    (`_calculate_salary_cost`), so every number ties to /employees + home.
+
+    Three coverage tiers (the chain is sparse — most new stores have no
+    employees configured yet):
+      - reported   : branches with active employees configured. Ranked desc by
+                     salary, clickable through to single mode.
+      - missing    : branches with NO active employees. Greyed, non-clickable.
+                     `pending` counts unreviewed name matches — a store with
+                     pending > 0 is one onboarding step from data, distinct
+                     from a genuinely empty store.
+    Source: employee_hours (via _calculate_salary_cost) + employees + pending.
+    """
+    total_branches = len(visible)
+    empty = {
+        'month': None, 'chain_salary_total': 0, 'avg_per_store': 0,
+        'total_branches': total_branches, 'reported': 0,
+        'per_branch': [], 'missing': [],
+    }
+    if not visible:
+        return empty
+
+    # Resolve month: explicit YYYY-MM wins (validated), else current month.
+    month = None
+    if req_month:
+        try:
+            month = datetime.strptime(req_month, '%Y-%m').strftime('%Y-%m')
+        except ValueError:
+            month = None
+    if not month:
+        month = _now_il().strftime('%Y-%m')
+
+    branch_ids = [b['id'] for b in visible]
+    names = {b['id']: b['name'] for b in visible}
+    ph = ','.join('?' * len(branch_ids))
+
+    # Active-employee count per branch (configured = has data tier).
+    emp_rows = db.execute(
+        f"SELECT branch_id, COUNT(*) AS c FROM employees "
+        f"WHERE active = 1 AND branch_id IN ({ph}) GROUP BY branch_id",
+        branch_ids
+    ).fetchall()
+    emp_count = {r['branch_id']: r['c'] for r in emp_rows}
+
+    # Pending name matches per branch (for the "ממתינים לשיוך" hint).
+    pend_rows = db.execute(
+        f"SELECT branch_id, COUNT(*) AS c FROM employee_match_pending "
+        f"WHERE branch_id IN ({ph}) GROUP BY branch_id",
+        branch_ids
+    ).fetchall()
+    pending_count = {r['branch_id']: r['c'] for r in pend_rows}
+
+    reported, missing = [], []
+    for b in visible:
+        bid = b['id']
+        if emp_count.get(bid, 0) > 0:
+            sal = _calculate_salary_cost(bid, month)
+            reported.append({
+                'branch_id': bid,
+                'branch_name': names.get(bid, 'סניף לא ידוע'),
+                'salary': round(float(sal['amount'] or 0), 2),
+                'hours': round(float(sal['hours'] or 0), 2),
+                'emp_count': emp_count.get(bid, 0),
+            })
+        else:
+            missing.append({
+                'branch_id': bid,
+                'branch_name': names.get(bid, 'סניף לא ידוע'),
+                'pending': pending_count.get(bid, 0),
+            })
+
+    reported.sort(key=lambda x: x['salary'], reverse=True)
+    chain_salary_total = round(sum(r['salary'] for r in reported), 2)
+    n = len(reported)
+    avg_per_store = round(chain_salary_total / n, 2) if n else 0
+
+    return {
+        'month': month,
+        'chain_salary_total': chain_salary_total,
+        'avg_per_store': avg_per_store,
+        'total_branches': total_branches,
+        'reported': n,
+        'per_branch': reported,
+        'missing': missing,
+    }
+
+
+@app.route('/api/network/employees-v2')
+@login_required
+def api_network_employees_v2():
+    """Monthly chain-labor payload for ANY logged-in user, scoped to their own
+    visible branches (admin/ceo → all active; manager → their stores). Powers
+    the 'הסניפים שלי' aggregate mode of /network/employees-v2."""
+    visible = _list_visible_branches(session.get('user_id'), session.get('user_role'))
+    return jsonify(_network_employees_payload(visible, request.args.get('month'), get_db()))
 
 
 @app.route('/api/history')

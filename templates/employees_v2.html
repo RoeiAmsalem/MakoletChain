@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}עובדים רשת (ניסיוני) - קופה שקופה{% endblock %}
+{% block head %}
+{% if emp2_mode == 'single' %}{% include '_employees_styles.html' %}{% endif %}
+<style>
+    /* ── Toggle + store picker (employees sandbox; purple accent #a855f7) ── */
+    .ev-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .ev-toggle { display: inline-flex; background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); border-radius: 999px; padding: 4px; gap: 4px; }
+    .ev-toggle a { text-decoration: none; color: var(--text-secondary); border-radius: 999px; padding: 7px 18px; font-size: 0.85rem; font-weight: 600; min-height: 36px; display: inline-flex; align-items: center; touch-action: manipulation; }
+    .ev-toggle a.active { background: #a855f7; color: #faf5ff; }
+    .ev-storepick { display: flex; align-items: center; gap: 0.5rem; }
+    .ev-storepick label { font-size: 0.85rem; color: var(--text-secondary); }
+    .ev-storepick select { background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.45rem 0.7rem; color: var(--text-primary); font-size: 0.88rem; font-family: inherit; color-scheme: dark; min-height: 38px; }
+
+    .ev-wrap { width: 100%; max-width: 1400px; margin: 0 auto; }
+
+    /* BAND 1 — two metric cards */
+    .ev-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 0.85rem; }
+    .ev-metric { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.1rem 1.2rem; box-shadow: var(--shadow); border-top: 3px solid var(--card-border); }
+    .ev-metric.accent { border-top-color: #a855f7; }
+    .ev-metric .m-label { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem; }
+    .ev-metric .m-value { font-size: 2rem; font-weight: 800; color: var(--text-light); line-height: 1.1; letter-spacing: -0.5px; }
+    .ev-metric .m-sub { margin-top: 0.4rem; font-size: 0.82rem; color: var(--text-secondary); }
+
+    .ev-coverage { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 1rem; padding: 0.7rem 0.9rem; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 10px; }
+    .ev-coverage b { color: var(--text-primary); }
+    .ev-coverage .ev-pending { color: #c084fc; }
+
+    /* BAND 2 — ranked store list (roomy, clickable, no bars, two-column) */
+    .ev-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem 1.4rem; box-shadow: var(--shadow); }
+    .ev-strip h2 { font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin: 0 0 1.1rem; }
+    .ev-row { display: grid; grid-template-columns: 34px 1fr auto 18px; align-items: center; gap: 0.85rem; padding: 0.85rem 0.6rem; border-bottom: 1px solid rgba(148,163,184,0.1); border-radius: 8px; transition: background 0.12s; }
+    a.ev-row { text-decoration: none; cursor: pointer; }
+    a.ev-row:hover { background: rgba(255,255,255,0.05); }
+    a.ev-row:active { background: rgba(255,255,255,0.08); }
+    .ev-row .rrank { font-size: 0.95rem; color: var(--text-muted); font-weight: 700; text-align: center; }
+    .ev-row .rname { font-size: 1.02rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ev-row .ramt { font-size: 1.05rem; font-weight: 800; color: var(--text-primary); white-space: nowrap; text-align: left; letter-spacing: -0.3px; }
+    .ev-row .rsub { font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
+    .ev-row .rchev { color: var(--text-muted); font-size: 1rem; text-align: center; opacity: 0.6; }
+    a.ev-row:hover .rchev { opacity: 1; color: #c084fc; }
+    .ev-row.missing { opacity: 0.6; }
+    .ev-row.missing .rname, .ev-row.missing .ramt, .ev-row.missing .rrank { color: var(--text-muted); }
+    .ev-row.missing .ramt { font-weight: 500; font-size: 0.85rem; }
+    .ev-rows.collapsed .ev-row.ev-tail { display: none; }
+    .ev-more { margin-top: 0.8rem; background: transparent; border: 1px solid var(--card-border); border-radius: 8px; color: var(--text-secondary); padding: 0.45rem 0.8rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: inherit; width: 100%; min-height: 38px; touch-action: manipulation; }
+    .ev-more:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+    .ev-empty { text-align: center; color: var(--text-secondary); padding: 2.5rem 1rem; }
+
+    @media (min-width: 900px) {
+        .ev-rows { column-count: 2; column-gap: 2.5rem; }
+        .ev-row { break-inside: avoid; }
+        .ev-rows.collapsed .ev-row.ev-tail { display: grid; }
+        .ev-more { display: none; }
+    }
+    @media (max-width: 480px) {
+        .ev-metrics { grid-template-columns: 1fr; }
+        .ev-metric .m-value { font-size: 1.7rem; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ev-bar">
+    {% if not emp2_single_store %}
+    <div class="ev-toggle">
+        <a href="?mode=network" class="{% if emp2_mode == 'network' %}active{% endif %}">הסניפים שלי</a>
+        <a href="?mode=single" class="{% if emp2_mode == 'single' %}active{% endif %}">סניף בודד</a>
+    </div>
+    {% else %}
+    <div></div>
+    {% endif %}
+
+    {% if emp2_mode == 'single' %}
+    <div class="ev-storepick">
+        <label for="evStore">סניף:</label>
+        <select id="evStore">
+            {% for b in emp2_branches %}
+            <option value="{{ b.id }}" {% if b.id == emp2_store %}selected{% endif %}>{{ b.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+</div>
+
+{% if emp2_mode == 'network' %}
+<div class="ev-wrap">
+    <div id="evBody"><div class="ev-empty">טוען…</div></div>
+</div>
+{% else %}
+{% include '_employees_content.html' %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if emp2_mode == 'network' %}
+<script>
+(function () {
+    const body = document.getElementById('evBody');
+    const MONTH = {{ selected_month | tojson }};
+    const fmt = v => '₪' + Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
+    const storeHref = id => `/network/employees-v2?mode=single&store=${encodeURIComponent(id)}`
+        + (MONTH ? ('&month=' + encodeURIComponent(MONTH)) : '');
+
+    function render(d) {
+        if (!d.month || d.reported === 0) {
+            body.innerHTML = `<div class="ev-empty">אין סניפים עם עובדים מוגדרים.</div>`;
+            return;
+        }
+
+        // Coverage — three tiers: configured (reported), and the rest with a
+        // truthful "no employees configured" + "ממתינים לשיוך" hint where pending>0.
+        let cov = `<b>${d.reported}</b> מתוך <b>${d.total_branches}</b> סניפים עם נתוני עובדים`;
+        const miss = d.missing || [];
+        if (miss.length) {
+            const pend = miss.filter(m => m.pending > 0).length;
+            cov += ` · ${miss.length} ללא עובדים מוגדרים`;
+            if (pend) cov += ` (<span class="ev-pending">${pend} ממתינים לשיוך</span>)`;
+        }
+
+        // Ranked store list (no bars), clickable → single mode for that store.
+        const COLLAPSE = 8;
+        let idx = 0;
+        const rows = d.per_branch.map((b, i) => {
+            const tail = idx >= COLLAPSE ? ' ev-tail' : ''; idx++;
+            const sub = `${b.emp_count} עובדים · ${Math.round(b.hours)} שעות`;
+            return `<a class="ev-row${tail}" href="${storeHref(b.branch_id)}" title="פתח את ${b.branch_name}">
+                <div class="rrank">${i + 1}</div>
+                <div><div class="rname">${b.branch_name}</div><div class="rsub">${sub}</div></div>
+                <div class="ramt">${fmt(b.salary)}</div>
+                <div class="rchev">‹</div>
+            </a>`;
+        }).join('');
+        const missingRows = miss.map(m => {
+            const tail = idx >= COLLAPSE ? ' ev-tail' : ''; idx++;
+            const note = m.pending > 0
+                ? `אין עובדים · <span class="ev-pending">${m.pending} ממתינים לשיוך</span>`
+                : 'אין עובדים מוגדרים';
+            return `<div class="ev-row missing${tail}"><div class="rrank">–</div><div class="rname" title="${m.branch_name}">${m.branch_name}</div><div class="ramt">${note}</div><div class="rchev"></div></div>`;
+        }).join('');
+        const tailCount = (d.per_branch.length + miss.length) - COLLAPSE;
+        const moreBtn = tailCount > 0 ? `<button class="ev-more" id="evMore">+ ${tailCount} נוספים</button>` : '';
+
+        body.innerHTML = `
+            <div class="ev-metrics">
+                <div class="ev-metric accent"><div class="m-label">סה״כ שכר — החודש</div><div class="m-value">${fmt(d.chain_salary_total)}</div><div class="m-sub">${d.month}</div></div>
+                <div class="ev-metric"><div class="m-label">ממוצע לסניף</div><div class="m-value">${fmt(d.avg_per_store)}</div><div class="m-sub">${d.reported} סניפים עם עובדים</div></div>
+            </div>
+            <div class="ev-coverage">${cov}</div>
+            <div class="ev-strip"><h2>עלות שכר לפי סניף</h2><div class="ev-rows collapsed">${rows}${missingRows}</div>${moreBtn}</div>`;
+
+        const moreEl = document.getElementById('evMore');
+        if (moreEl) moreEl.addEventListener('click', () => { body.querySelector('.ev-rows').classList.remove('collapsed'); moreEl.remove(); });
+    }
+
+    fetch('/api/network/employees-v2' + (MONTH ? ('?month=' + encodeURIComponent(MONTH)) : ''))
+        .then(r => r.json())
+        .then(d => { if (d.error) { body.innerHTML = `<div class="ev-empty">אין הרשאה.</div>`; return; } render(d); })
+        .catch(() => { body.innerHTML = `<div class="ev-empty">שגיאה בטעינת הנתונים.</div>`; });
+})();
+</script>
+{% else %}
+{% include '_employees_scripts.html' %}
+<script>
+(function () {
+    const sel = document.getElementById('evStore');
+    if (sel) sel.addEventListener('change', function () {
+        const m = SELECTED_MONTH ? ('&month=' + encodeURIComponent(SELECTED_MONTH)) : '';
+        window.location.href = '/network/employees-v2?mode=single&store=' + encodeURIComponent(this.value) + m;
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

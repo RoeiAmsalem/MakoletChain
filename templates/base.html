@@ -53,6 +53,7 @@
             {% if session.get('user_role') in ('admin', 'ceo') %}
             <li><a href="/network/revenue-v2" class="{% if active_page == 'revenue_v2' %}active{% endif %}">הכנסות רשת</a></li>
             <li><a href="/network/goods-v2" class="{% if active_page == 'goods_v2' %}active{% endif %}">סחורה רשת</a></li>
+            <li><a href="/network/employees-v2" class="{% if active_page == 'employees_v2' %}active{% endif %}">עובדים רשת</a></li>
             {% endif %}
             {% if session.get('user_role') == 'admin' %}
             <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
@@ -103,6 +104,7 @@
         {% if session.get('user_role') in ('admin', 'ceo') %}
         <a href="/network/revenue-v2" class="{% if active_page == 'revenue_v2' %}active{% endif %}">הכנסות רשת</a>
         <a href="/network/goods-v2" class="{% if active_page == 'goods_v2' %}active{% endif %}">סחורה רשת</a>
+        <a href="/network/employees-v2" class="{% if active_page == 'employees_v2' %}active{% endif %}">עובדים רשת</a>
         {% endif %}
         {% if session.get('user_role') == 'admin' %}
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>

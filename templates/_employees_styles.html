@@ -1,0 +1,194 @@
+<style>
+    .emp-kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    @media (max-width: 768px) { .emp-kpi-grid { grid-template-columns: 1fr; } }
+
+    .emp-kpi { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow); }
+    .emp-kpi-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600; margin-bottom: 0.5rem; }
+    .emp-kpi-value { font-size: 1.6rem; font-weight: 700; color: var(--text-primary); }
+    .emp-kpi-sub { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem; }
+    .status-badge { font-size: 0.75rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; margin-right: 0.5rem; }
+    .badge-approved { background: rgba(34,197,94,0.2); color: #86efac; }
+    .badge-estimated { background: rgba(245,158,11,0.2); color: #fde68a; }
+    .badge-api { background: rgba(34,197,94,0.2); color: #86efac; }
+    .badge-verified { background: rgba(34,197,94,0.25); color: #86efac; }
+    .badge-discrepancy { background: rgba(239,68,68,0.2); color: #fca5a5; }
+    .badge-none { background: rgba(100,116,139,0.2); color: #94a3b8; }
+
+    /* Employee cards grid */
+    .emp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+
+    .emp-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 0.5rem; position: relative; transition: border-color 0.15s; }
+    .emp-card:hover { border-color: rgba(99,102,241,0.4); }
+    .emp-card.no-rate { border-right: 3px solid #f59e0b; }
+
+    .emp-card-top { display: flex; align-items: center; gap: 0.75rem; }
+    .emp-avatar { width: 40px; height: 40px; border-radius: 50%; background: rgba(99,102,241,0.2); color: #a5b4fc; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 700; flex-shrink: 0; }
+    .emp-card-name { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
+    .emp-card-meta { font-size: 0.78rem; color: var(--text-secondary); }
+
+    .role-badge { font-size: 0.7rem; font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 4px; background: rgba(100,116,139,0.2); color: #94a3b8; }
+    .role-badge.morning { background: rgba(251,191,36,0.15); color: #fde68a; }
+    .role-badge.evening { background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    .role-badge.manager { background: rgba(34,197,94,0.15); color: #86efac; }
+
+    .emp-card-stats { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.82rem; color: var(--text-secondary); }
+    .emp-card-rate { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
+
+    .emp-card-actions { display: flex; gap: 0.4rem; margin-top: auto; padding-top: 0.5rem; border-top: 1px solid var(--card-border); }
+    .btn-sm { background: rgba(255,255,255,0.06); border: 1px solid var(--card-border); border-radius: 6px; padding: 0.3rem 0.6rem; color: var(--text-secondary); cursor: pointer; font-size: 0.75rem; font-family: inherit; transition: background 0.15s, color 0.15s; }
+    .btn-sm:hover { background: rgba(255,255,255,0.12); color: white; }
+    .btn-sm.danger:hover { background: rgba(239,68,68,0.15); color: #fca5a5; }
+
+    /* Add employee button */
+    .emp-card-add { border: 2px dashed var(--card-border); display: flex; align-items: center; justify-content: center; min-height: 140px; cursor: pointer; color: var(--text-muted); font-size: 0.9rem; font-weight: 600; transition: border-color 0.15s, color 0.15s; }
+    .emp-card-add:hover { border-color: rgba(99,102,241,0.4); color: #a5b4fc; }
+
+    /* Section card */
+    .section-card { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow); margin-bottom: 1.5rem; }
+    .section-card h2 { font-size: 1.1rem; font-weight: 700; margin-bottom: 1rem; }
+    .no-data-msg { color: var(--text-muted); text-align: center; padding: 2rem; font-size: 0.9rem; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-overlay.open { display: flex; }
+    .modal-box { background: var(--surface); border: 1px solid var(--card-border); border-radius: var(--radius); width: 90%; max-width: 400px; }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; border-bottom: 1px solid var(--card-border); }
+    .modal-header h3 { font-size: 1rem; font-weight: 700; }
+    .modal-close { background: none; border: none; color: var(--text-secondary); font-size: 1.25rem; cursor: pointer; padding: 0.25rem; }
+    .modal-body { padding: 1.25rem; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.35rem; }
+    .form-group input, .form-group select { width: 100%; padding: 0.5rem 0.75rem; background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); border-radius: 6px; color: var(--text-primary); font-family: inherit; font-size: 0.9rem; }
+    .form-group input:focus, .form-group select:focus { outline: none; border-color: rgba(99,102,241,0.5); }
+    .role-toggle { display: flex; gap: 0.5rem; }
+    .role-toggle label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); padding: 0.35rem 0.7rem; border-radius: 6px; border: 1px solid var(--card-border); transition: all 0.15s; }
+    .role-toggle input { display: none; }
+    .role-toggle input:checked + span { color: var(--text-primary); }
+    .role-toggle label:has(input:checked) { border-color: rgba(99,102,241,0.5); background: rgba(99,102,241,0.1); }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.25rem; }
+    .btn-primary { background: rgba(99,102,241,0.3); border: 1px solid rgba(99,102,241,0.4); border-radius: 8px; padding: 0.5rem 1.25rem; color: #c7d2fe; cursor: pointer; font-family: inherit; font-size: 0.85rem; font-weight: 600; transition: background 0.15s; }
+    .btn-primary:hover { background: rgba(99,102,241,0.45); }
+    .btn-cancel { background: rgba(255,255,255,0.06); border: 1px solid var(--card-border); border-radius: 8px; padding: 0.5rem 1.25rem; color: var(--text-secondary); cursor: pointer; font-family: inherit; font-size: 0.85rem; font-weight: 600; }
+    .btn-cancel:hover { background: rgba(255,255,255,0.12); }
+
+    /* Pending matches */
+    .pending-row { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--card-border); flex-wrap: wrap; }
+    .pending-row:last-child { border-bottom: none; }
+    .pending-info { flex: 1; min-width: 200px; }
+    .pending-csv-name { font-weight: 700; color: var(--text-primary); font-size: 0.9rem; }
+    .pending-meta { font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.15rem; }
+    .pending-arrow { color: var(--text-muted); font-size: 1.2rem; }
+    .pending-suggestion { font-size: 0.85rem; color: #a5b4fc; }
+    .pending-actions { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+    .pending-actions select { background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); border-radius: 6px; padding: 0.3rem 0.5rem; color: var(--text-primary); font-family: inherit; font-size: 0.78rem; }
+    .btn-approve { background: rgba(34,197,94,0.2); border: 1px solid rgba(34,197,94,0.3); border-radius: 6px; padding: 0.3rem 0.6rem; color: #86efac; cursor: pointer; font-size: 0.75rem; font-family: inherit; font-weight: 600; }
+    .btn-approve:hover { background: rgba(34,197,94,0.35); }
+    .btn-reject { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.25); border-radius: 6px; padding: 0.3rem 0.6rem; color: #fca5a5; cursor: pointer; font-size: 0.75rem; font-family: inherit; font-weight: 600; }
+    .btn-reject:hover { background: rgba(239,68,68,0.3); }
+    .btn-new { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.25); border-radius: 6px; padding: 0.3rem 0.6rem; color: #a5b4fc; cursor: pointer; font-size: 0.75rem; font-family: inherit; font-weight: 600; }
+    .btn-new:hover { background: rgba(99,102,241,0.3); }
+
+    /* Toast */
+    .toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+    .toast.show { opacity: 1; }
+    .toast.success { background: #065f46; color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+    .toast.error { background: #7f1d1d; color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+
+    /* Chart info tooltips */
+    .chart-info { position: relative; display: inline-block; cursor: pointer; font-size: 1rem; line-height: 1; margin-inline-start: 0.4rem; vertical-align: middle; user-select: none; opacity: 0.65; transition: opacity 0.15s; }
+    .chart-info:hover, .chart-info.open { opacity: 1; }
+    .chart-info::after {
+        content: attr(data-tooltip);
+        position: absolute; top: 100%; right: 0; margin-top: 0.5rem;
+        background: #1e293b; border: 1px solid #475569; border-radius: 8px;
+        padding: 0.75rem 1rem; font-size: 0.85rem; color: #e2e8f0;
+        white-space: normal; width: max-content; max-width: min(280px, calc(100vw - 2rem)); z-index: 100;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        line-height: 1.5; text-align: right; direction: rtl; font-weight: 400;
+        display: none; pointer-events: none;
+    }
+    .chart-info:hover::after, .chart-info.open::after { display: block; }
+
+    /* Prevent horizontal scroll. Use `clip` (not `hidden`) on html so the
+       sticky navbar isn't broken by a new scroll container on the html element. */
+    html { overflow-x: clip; max-width: 100vw; }
+    body { overflow-x: clip; max-width: 100vw; }
+
+    /* ── Mobile optimizations ── */
+    @media (max-width: 768px) {
+        /* Info icons — subtle inline, bigger tap area */
+        .chart-info {
+            position: static;
+            font-size: 1.15rem;
+            opacity: 0.8;
+            padding: 0.25rem;
+            margin-inline-start: 0.3rem;
+        }
+
+        /* Tooltip — fixed to TOP of viewport, prominent with dim overlay */
+        .chart-info::after {
+            position: fixed; top: 1rem; bottom: auto; right: 1rem; left: 1rem;
+            margin: 0; width: auto; max-width: none;
+            padding: 1.25rem 1.5rem; font-size: 1rem; line-height: 1.6;
+            background: #1e293b; border: 2px solid #818cf8; border-radius: 12px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.6), 0 0 0 100vmax rgba(0,0,0,0.4);
+            animation: tooltip-slide-down 0.25s ease-out;
+            z-index: 1000;
+        }
+
+        @keyframes tooltip-slide-down {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Pattern A — page wrapper */
+        h2 { font-size: 1.05rem !important; }
+
+        /* Pattern B — KPI tiles */
+        .emp-kpi-grid { grid-template-columns: repeat(3, 1fr) !important; gap: 0.5rem; }
+        .emp-kpi { padding: 0.75rem !important; }
+        .emp-kpi-value { font-size: 1.2rem !important; }
+        .emp-kpi-label { font-size: 0.68rem !important; }
+        .emp-kpi-sub { font-size: 0.7rem !important; }
+
+        /* Pattern G — employee card grid */
+        .emp-grid { grid-template-columns: 1fr !important; gap: 0.75rem; }
+        .emp-card { padding: 0.75rem !important; }
+        .emp-card-add { min-height: 60px !important; }
+
+        /* Pattern H — tap targets */
+        .btn-sm { min-height: 44px; min-width: 44px; padding: 0.5rem 0.75rem !important; font-size: 0.85rem !important; touch-action: manipulation; }
+        .btn-approve, .btn-reject, .btn-new { min-height: 44px; padding: 0.5rem 0.75rem !important; font-size: 0.82rem !important; touch-action: manipulation; }
+        .btn-primary, .btn-cancel { min-height: 44px; font-size: 0.9rem !important; touch-action: manipulation; }
+
+        /* Pattern F — modals */
+        .modal-box { max-height: 95vh; }
+        .form-group input, .form-group select { font-size: 16px !important; }
+
+        /* Pending rows — stack on mobile */
+        .pending-row { flex-direction: column; align-items: stretch !important; gap: 0.5rem; }
+        .pending-info { min-width: unset !important; }
+        .pending-actions { justify-content: flex-start; }
+        .pending-arrow { display: none; }
+
+        /* Banners — stack button rows */
+        #unknown-list > div, #csv-only-list > div, #disc-list > div {
+            flex-direction: column !important;
+            align-items: stretch !important;
+        }
+        #unknown-list > div > div:last-child,
+        #csv-only-list > div > div:last-child,
+        #disc-list > div > div:last-child {
+            display: flex; gap: 0.5rem;
+        }
+        #unknown-list button, #csv-only-list button, #disc-list button {
+            flex: 1; min-height: 44px; font-size: 0.85rem !important;
+        }
+
+        /* History table scrollable */
+        .data-table { min-width: 500px; }
+
+        /* Donut center text smaller on mobile */
+        #chart-salary { max-height: 250px; }
+    }
+</style>

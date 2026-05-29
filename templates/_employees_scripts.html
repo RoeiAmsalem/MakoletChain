@@ -1,0 +1,581 @@
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="{{ static_v('js/charts.js') }}"></script>
+<script>
+'use strict';
+const SELECTED_MONTH = {{ selected_month | tojson }};
+const BRANCH_ID = {{ branch_id | tojson }};
+const BRANCH_NAME = {{ branch_name | tojson }};
+const monthLabel = {{ month_display | tojson }};
+
+document.getElementById('month-label').textContent = monthLabel;
+
+let ALL_EMPLOYEES = [];
+let hoursChart = null, salaryChart = null, laborChart = null;
+
+const CHART_COLORS = ['#22c55e','#14b8a6','#06b6d4','#818cf8','#c084fc'];
+const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+
+function renderHoursChart(employees) {
+    const sorted = employees.filter(e => e.hours > 0).sort((a, b) => b.hours - a.hours);
+    if (!sorted.length) { document.getElementById('charts-row').style.display = 'none'; return; }
+    document.getElementById('charts-row').style.display = '';
+    const ctx = document.getElementById('chart-hours');
+    if (hoursChart) hoursChart.destroy();
+    const maxHours = Math.max(...sorted.map(e => e.hours));
+    hoursChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: sorted.map(e => e.name),
+            datasets: [{
+                data: sorted.map(e => e.hours),
+                backgroundColor: (ctx2) => {
+                    const chart = ctx2.chart;
+                    const {ctx: c, chartArea} = chart;
+                    if (!chartArea) return 'rgba(34,197,94,0.7)';
+                    const grad = c.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+                    grad.addColorStop(0, 'rgba(34,197,94,0.5)');
+                    grad.addColorStop(1, 'rgba(34,197,94,0.85)');
+                    return grad;
+                },
+                borderColor: '#22c55e',
+                borderWidth: 1,
+                borderRadius: 6,
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: tip => {
+                            const emp = sorted[tip.dataIndex];
+                            const sal = emp.salary > 0 ? emp.salary : (emp.hours * (emp.hourly_rate || 0));
+                            return `שעות: ${emp.hours.toFixed(1)} | שכר: ${formatMoney(sal)}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    suggestedMax: maxHours * 1.08,
+                    grid: { color: 'rgba(148,163,184,0.08)' },
+                    ticks: { color: '#94a3b8', font: { size: 10 } },
+                    border: { color: '#334155' }
+                },
+                y: {
+                    grid: { display: false },
+                    ticks: { color: '#e2e8f0', font: { size: isMobile() ? 10 : 12, weight: '600' } },
+                    border: { display: false }
+                }
+            }
+        },
+        plugins: [{
+            id: 'barLabels',
+            afterDatasetsDraw(chart) {
+                const { ctx: c } = chart;
+                chart.data.datasets[0].data.forEach((v, i) => {
+                    const bar = chart.getDatasetMeta(0).data[i];
+                    const barWidth = bar.x - chart.chartArea.left;
+                    const inside = barWidth > 60;
+                    c.save();
+                    c.fillStyle = inside ? '#fff' : '#f1f5f9';
+                    c.font = 'bold 11px sans-serif';
+                    c.textBaseline = 'middle';
+                    if (inside) {
+                        c.textAlign = 'right';
+                        c.fillText(v.toFixed(1) + 'h', bar.x - 6, bar.y);
+                    } else {
+                        c.textAlign = 'left';
+                        c.fillText(v.toFixed(1) + 'h', bar.x + 6, bar.y);
+                    }
+                    c.restore();
+                });
+            }
+        }]
+    });
+}
+
+function renderSalaryDonut(employees) {
+    const withSalary = employees.filter(e => {
+        const sal = e.salary > 0 ? e.salary : (e.hours * (e.hourly_rate || 0));
+        return sal > 0;
+    }).sort((a, b) => {
+        const sa = a.salary > 0 ? a.salary : (a.hours * (a.hourly_rate || 0));
+        const sb = b.salary > 0 ? b.salary : (b.hours * (b.hourly_rate || 0));
+        return sb - sa;
+    });
+    if (!withSalary.length) return;
+    const salaries = withSalary.map(e => e.salary > 0 ? e.salary : (e.hours * (e.hourly_rate || 0)));
+    const total = salaries.reduce((s, v) => s + v, 0);
+    const ctx = document.getElementById('chart-salary');
+    if (salaryChart) salaryChart.destroy();
+    salaryChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: withSalary.map(e => e.name),
+            datasets: [{
+                data: salaries,
+                backgroundColor: withSalary.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
+                borderWidth: 0,
+                hoverOffset: 8
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            cutout: '60%',
+            plugins: {
+                legend: {
+                    position: isMobile() ? 'bottom' : 'right', rtl: true,
+                    labels: {
+                        color: '#ffffff',
+                        font: { size: isMobile() ? 12 : 16, weight: '600' },
+                        padding: isMobile() ? 8 : 14,
+                        boxWidth: isMobile() ? 12 : 18,
+                        boxHeight: isMobile() ? 12 : 18,
+                        usePointStyle: true,
+                        generateLabels: chart => chart.data.labels.map((name, i) => {
+                            const val = chart.data.datasets[0].data[i];
+                            const pct = total > 0 ? ((val / total) * 100).toFixed(0) : 0;
+                            return { text: `${name} — ${formatMoney(val)} (${pct}%)`, fillStyle: CHART_COLORS[i % CHART_COLORS.length], fontColor: '#ffffff', hidden: false, index: i };
+                        })
+                    }
+                },
+                tooltip: {
+                    rtl: true,
+                    callbacks: {
+                        label: tip => {
+                            const val = tip.parsed;
+                            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+                            return ` ${tip.label}: ${formatMoney(val)} (${pct}%)`;
+                        }
+                    }
+                }
+            }
+        },
+        plugins: [{
+            id: 'centerText',
+            afterDraw(chart) {
+                const { ctx: c, chartArea } = chart;
+                if (!chartArea) return;
+                const cx = (chartArea.left + chartArea.right) / 2;
+                const cy = (chartArea.top + chartArea.bottom) / 2;
+                c.save(); c.textAlign = 'center'; c.textBaseline = 'middle';
+                const mob = isMobile();
+                c.fillStyle = '#ffffff'; c.font = mob ? 'bold 16px sans-serif' : 'bold 22px sans-serif';
+                c.fillText(formatMoney(total), cx, cy - (mob ? 8 : 10));
+                c.fillStyle = '#cbd5e1'; c.font = mob ? '10px sans-serif' : '12px sans-serif';
+                c.fillText('סה״כ שכר', cx, cy + (mob ? 10 : 14));
+                c.restore();
+            }
+        }]
+    });
+}
+
+async function renderLaborChart() {
+    try {
+        const res = await fetch(`/api/labor-cost-ratio?branch_id=${BRANCH_ID}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const withData = data.filter(d => d.income > 0);
+        if (!withData.length) return;
+        document.getElementById('labor-chart-section').style.display = '';
+        const ctx = document.getElementById('chart-labor');
+        if (laborChart) laborChart.destroy();
+        laborChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: withData.map(d => { const [y, m] = d.month.split('-'); return `${parseInt(m)}/${y}`; }),
+                datasets: [{
+                    data: withData.map(d => d.ratio),
+                    borderColor: '#f59e0b',
+                    backgroundColor: (ctx2) => {
+                        const chart = ctx2.chart;
+                        const {ctx: c, chartArea} = chart;
+                        if (!chartArea) return 'rgba(245,158,11,0.1)';
+                        const grad = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+                        grad.addColorStop(0, 'rgba(245,158,11,0.25)');
+                        grad.addColorStop(1, 'rgba(245,158,11,0.02)');
+                        return grad;
+                    },
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 6,
+                    pointBackgroundColor: '#f59e0b',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    borderWidth: 2.5
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        rtl: true,
+                        callbacks: {
+                            title: tips => {
+                                const d = withData[tips[0].dataIndex];
+                                const [y, m] = d.month.split('-');
+                                const monthNames = ['','ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+                                return `${monthNames[parseInt(m)]} ${y}`;
+                            },
+                            label: tip => {
+                                const d = withData[tip.dataIndex];
+                                return ` ${d.ratio}% — ${formatMoney(d.salary)} מתוך ${formatMoney(d.income)}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8', font: { size: 12 } }, border: { color: '#334155' } },
+                    y: {
+                        title: { display: true, text: '% שכר/הכנסות', color: '#64748b', font: { size: 11 } },
+                        grid: { color: 'rgba(148,163,184,0.08)' },
+                        ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + '%' },
+                        border: { color: '#334155' },
+                        beginAtZero: true
+                    }
+                }
+            },
+            plugins: [{
+                id: 'benchmarkLine',
+                beforeDraw(chart) {
+                    const yScale = chart.scales.y;
+                    const yPos = yScale.getPixelForValue(10);
+                    if (yPos < yScale.top || yPos > yScale.bottom) return;
+                    const { ctx: c } = chart;
+                    c.save();
+                    c.setLineDash([6, 4]);
+                    c.strokeStyle = 'rgba(239,68,68,0.5)';
+                    c.lineWidth = 1.5;
+                    c.beginPath();
+                    c.moveTo(chart.chartArea.left, yPos);
+                    c.lineTo(chart.chartArea.right, yPos);
+                    c.stroke();
+                    c.fillStyle = 'rgba(239,68,68,0.7)';
+                    c.font = '10px sans-serif';
+                    c.textAlign = 'left';
+                    c.fillText('שיעור מומלץ 10%', chart.chartArea.left + 4, yPos - 6);
+                    c.restore();
+                }
+            }, {
+                id: 'valueLabels',
+                afterDatasetsDraw(chart) {
+                    const { ctx: c } = chart;
+                    const meta = chart.getDatasetMeta(0);
+                    meta.data.forEach((point, i) => {
+                        const val = withData[i].ratio;
+                        c.save();
+                        c.fillStyle = '#f59e0b';
+                        c.font = 'bold 11px sans-serif';
+                        c.textAlign = 'center';
+                        c.textBaseline = 'bottom';
+                        c.fillText(val + '%', point.x, point.y - 10);
+                        c.restore();
+                    });
+                }
+            }]
+        });
+    } catch (err) { console.error('Labor chart error:', err); }
+}
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    setTimeout(() => t.className = 'toast', 3000);
+}
+
+function getRoleBadgeClass(role) {
+    if (role === 'בוקר') return 'morning';
+    if (role === 'ערב') return 'evening';
+    if (role === 'מנהל') return 'manager';
+    return '';
+}
+
+function getInitials(name) {
+    const words = name.trim().split(/\s+/);
+    if (words.length >= 2) return words[0][0] + words[1][0];
+    return name[0] || '?';
+}
+
+function renderCards(employees, csvProcessed) {
+    const grid = document.getElementById('emp-grid');
+    let html = '';
+
+    employees.forEach(emp => {
+        const noRate = !emp.hourly_rate || emp.hourly_rate <= 0;
+        const initials = getInitials(emp.name);
+        const roleCls = getRoleBadgeClass(emp.role);
+        const hasHours = emp.hours > 0;
+        const salary = emp.salary > 0 ? formatMoney(emp.salary) : (hasHours && emp.hourly_rate > 0 ? formatMoney(emp.hours * emp.hourly_rate) : '—');
+
+        html += `<div class="emp-card${noRate ? ' no-rate' : ''}">
+            <div class="emp-card-top">
+                <div class="emp-avatar">${initials}</div>
+                <div>
+                    <div class="emp-card-name">${emp.name}</div>
+                    <span class="role-badge ${roleCls}">${emp.role || 'ערב'}</span>
+                </div>
+            </div>
+            <div class="emp-card-stats">
+                <div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'לא דווחו שעות באביב — בדוק שהעובד מופיע באביב POS'}
+                ${hasHours && (emp.hours_source === 'aviv_api' || emp.hours_source === 'aviv_report') ? ' <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">API</span>' : ''}
+                </div>
+                <div class="emp-card-rate">${emp.hourly_rate > 0 ? '₪' + Number(emp.hourly_rate.toFixed(2)) + '/שעה' : '<span style="color:#f59e0b">לא הוגדר תעריף</span>'}</div>
+                ${hasHours && salary !== '—' ? `<div>שכר: ${salary}</div>` : ''}
+            </div>
+            <div class="emp-card-actions">
+                <button class="btn-sm" onclick="openEdit(${emp.id})">ערוך</button>
+                <button class="btn-sm danger" onclick="deleteEmployee(${emp.id}, '${emp.name.replace(/'/g, "\\'")}')">מחק</button>
+            </div>
+        </div>`;
+    });
+
+    // Add employee card
+    html += `<div class="emp-card-add" onclick="openAdd()">+ הוסף עובד</div>`;
+    grid.innerHTML = html;
+}
+
+async function loadEmployees() {
+    try {
+        const res = await fetch(`/api/employees?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        ALL_EMPLOYEES = d.employees || [];
+
+        // KPI tiles
+        document.getElementById('kpi-hours').textContent = (d.hours_this_month || 0).toFixed(1);
+        if (d.hours_updated_at) {
+            const dt = new Date(d.hours_updated_at);
+            const fmtDate = dt.toLocaleDateString('he-IL');
+            const fmtTime = dt.toLocaleTimeString('he-IL', {hour:'2-digit', minute:'2-digit'});
+            document.getElementById('kpi-hours-sub').textContent = `עדכון אחרון: ${fmtDate} ${fmtTime}`;
+        } else {
+            document.getElementById('kpi-hours-sub').textContent = '';
+        }
+
+        document.getElementById('kpi-salary').textContent = formatMoney(d.salary_cost || 0);
+        const badgeEl = document.getElementById('kpi-salary-badge');
+        if (d.salary_source === 'api' || d.salary_source === 'api+csv') {
+            badgeEl.innerHTML = '<span class="status-badge badge-api">API</span>'
+                + `<div style="margin-top:0.2rem">${(d.salary_hours || 0).toFixed(1)} שעות עד כה</div>`;
+        } else if (d.salary_cost > 0) {
+            badgeEl.innerHTML = `<div style="margin-top:0.2rem">${(d.salary_hours || 0).toFixed(1)} שעות</div>`;
+        } else {
+            badgeEl.innerHTML = '<div style="margin-top:0.2rem;color:var(--text-muted)">אין נתונים</div>';
+        }
+
+        const activeCount = ALL_EMPLOYEES.length;
+        const withRates = ALL_EMPLOYEES.filter(e => e.hourly_rate > 0).length;
+        document.getElementById('kpi-count').textContent = activeCount;
+        document.getElementById('kpi-rates-sub').textContent = `${withRates} עם תעריף מוגדר`;
+
+        // Cards
+        renderCards(ALL_EMPLOYEES, d.csv_processed);
+
+        // Charts
+        renderHoursChart(ALL_EMPLOYEES);
+        renderSalaryDonut(ALL_EMPLOYEES);
+
+        // History table
+        if (d.history && d.history.length) {
+            const tbody = document.getElementById('history-tbody');
+            tbody.innerHTML = d.history.map(h => {
+                const [y, m] = h.month.split('-');
+                const label = `${parseInt(m)}/${y}`;
+                let srcBadge;
+                if (h.source === 'api_verified' || h.source === 'api' || h.source === 'api_neq_csv' || h.source === 'api+csv') {
+                    srcBadge = '<span class="status-badge badge-api" style="font-size:0.75rem">API</span>';
+                } else if (h.source === 'csv') {
+                    srcBadge = '<span class="status-badge badge-api" style="font-size:0.75rem">CSV (היסטורי)</span>';
+                } else {
+                    srcBadge = '<span class="status-badge badge-none" style="font-size:0.75rem">—</span>';
+                }
+                return `<tr>
+                    <td>${label}</td>
+                    <td style="direction:ltr;text-align:left">${h.hours > 0 ? h.hours.toFixed(1) : '—'}</td>
+                    <td>${h.salary > 0 ? formatMoney(h.salary) : '—'}</td>
+                    <td>${h.avg_rate > 0 ? '₪' + h.avg_rate.toFixed(2) : '—'}</td>
+                    <td>${srcBadge}</td>
+                </tr>`;
+            }).join('');
+        }
+    } catch (err) {
+        console.error(err);
+        document.getElementById('kpi-section').innerHTML = '<p style="color:#ef4444;grid-column:1/-1">שגיאה בטעינת נתונים.</p>';
+    }
+}
+
+function openAdd() {
+    document.getElementById('modal-title').textContent = 'הוסף עובד';
+    document.getElementById('edit-id').value = '';
+    document.getElementById('emp-name').value = '';
+    document.getElementById('emp-rate').value = '';
+    document.querySelector('input[name="emp-role"][value="ערב"]').checked = true;
+    document.getElementById('emp-modal').classList.add('open');
+    document.getElementById('emp-name').focus();
+}
+
+function openEdit(id) {
+    const emp = ALL_EMPLOYEES.find(e => e.id === id);
+    if (!emp) return;
+    document.getElementById('modal-title').textContent = 'ערוך עובד';
+    document.getElementById('edit-id').value = id;
+    document.getElementById('emp-name').value = emp.name;
+    document.getElementById('emp-rate').value = emp.hourly_rate || '';
+    const roleRadio = document.querySelector(`input[name="emp-role"][value="${emp.role || 'ערב'}"]`);
+    if (roleRadio) roleRadio.checked = true;
+    document.getElementById('emp-modal').classList.add('open');
+}
+
+function closeModal() {
+    document.getElementById('emp-modal').classList.remove('open');
+}
+
+async function saveEmployee() {
+    const editId = document.getElementById('edit-id').value;
+    const name = document.getElementById('emp-name').value.trim();
+    const role = document.querySelector('input[name="emp-role"]:checked')?.value || 'ערב';
+    const hourly_rate = parseFloat(document.getElementById('emp-rate').value) || 0;
+
+    if (!name) { showToast('נא למלא שם עובד', 'error'); return; }
+
+    try {
+        let url, method;
+        if (editId) {
+            url = `/api/employees/${editId}`;
+            method = 'PUT';
+        } else {
+            url = '/api/employees';
+            method = 'POST';
+        }
+        const res = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, role, hourly_rate })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'שגיאה');
+        closeModal();
+        showToast(editId ? 'עובד עודכן' : 'עובד נוסף', 'success');
+        loadEmployees();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function deleteEmployee(id, name) {
+    if (!await mkConfirm({ type: 'danger', title: 'מחיקת עובד', message: `האם למחוק את ${name}? פעולה זו לא הפיכה.`, confirmText: 'מחק' })) return;
+    try {
+        const res = await fetch(`/api/employees/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('עובד נמחק', 'success');
+        loadEmployees();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+// Yellow low-confidence pending-section render — invoked from the partial's
+// loadPendingMatches() with the filtered pending rows + employees list.
+function renderPendingSection(pending, allEmps) {
+    const section = document.getElementById('pending-section');
+    if (!section) return;
+    if (!pending.length) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = '';
+
+    const list = document.getElementById('pending-list');
+    list.innerHTML = pending.map(p => {
+        const opts = allEmps.map(e =>
+            `<option value="${e.id}" ${e.id === p.suggested_employee_id ? 'selected' : ''}>${e.name} (₪${e.hourly_rate}/שעה)</option>`
+        ).join('');
+
+        const srcLabel = (p.source === 'aviv_api' || p.source === 'aviv_report') ? 'Aviv' : 'CSV';
+        return `<div class="pending-row" id="pending-${p.id}">
+            <div class="pending-info">
+                <div class="pending-csv-name">${p.csv_name}</div>
+                <div class="pending-meta">${p.hours.toFixed(1)} שעות · ${srcLabel} · ${p.confidence === 'low' ? 'התאמה חלשה' : 'לא זוהה'}</div>
+            </div>
+            <span class="pending-arrow">&larr;</span>
+            <div class="pending-suggestion">
+                ${p.suggested_name ? p.suggested_name + '?' : 'אין הצעה'}
+            </div>
+            <div class="pending-actions">
+                <select id="reassign-${p.id}">${opts}</select>
+                <button class="btn-approve" onclick="approvePending(${p.id})">אשר</button>
+                <button class="btn-approve" onclick="reassignPending(${p.id})" style="background:rgba(99,102,241,0.2);border-color:rgba(99,102,241,0.3);color:#a5b4fc;">שייך</button>
+                <button class="btn-new" onclick="openNewFromPending(${p.id}, '${p.csv_name.replace(/'/g, "\\'")}')">+ חדש</button>
+                <button class="btn-reject" onclick="rejectPending(${p.id})">דחה</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function approvePending(id) {
+    try {
+        const res = await fetch(`/api/employee-match-pending/${id}/approve`, { method: 'POST' });
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('שעות אושרו ונשמרו', 'success');
+        document.getElementById(`pending-${id}`).remove();
+        loadEmployees();
+    } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function rejectPending(id) {
+    if (!await mkConfirm({ type: 'warning', title: 'דחיית שעות', message: 'לדחות את השעות? לא יישמרו במערכת.', confirmText: 'דחה' })) return;
+    try {
+        const res = await fetch(`/api/employee-match-pending/${id}/reject`, { method: 'POST' });
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('שעות נדחו', 'success');
+        document.getElementById(`pending-${id}`).remove();
+    } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function reassignPending(id) {
+    const select = document.getElementById(`reassign-${id}`);
+    const employeeId = parseInt(select.value);
+    if (!employeeId) { showToast('בחר עובד', 'error'); return; }
+    try {
+        const res = await fetch(`/api/employee-match-pending/${id}/reassign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ employee_id: employeeId })
+        });
+        if (!res.ok) throw new Error('שגיאה');
+        showToast('שעות שויכו לעובד', 'success');
+        document.getElementById(`pending-${id}`).remove();
+        loadEmployees();
+    } catch (err) { showToast(err.message, 'error'); }
+}
+
+// DISABLED 2026-04-18: loadDiscrepancies() and resolveDisc() removed — CSV path retired in favor of API-only
+// openNewFromPending / dismissUnknown / closeNewModal / saveNewFromPending /
+// cleanEmployeeName live in templates/_unknown_employees_banner.html (partial).
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// Click-toggle tooltips for mobile (Pattern I)
+document.addEventListener('click', e => {
+    const info = e.target.closest('.chart-info');
+    if (info) {
+        e.stopPropagation();
+        document.querySelectorAll('.chart-info.open').forEach(o => { if (o !== info) o.classList.remove('open'); });
+        info.classList.toggle('open');
+    } else {
+        document.querySelectorAll('.chart-info.open').forEach(el => el.classList.remove('open'));
+    }
+});
+
+loadEmployees();
+loadPendingMatches();
+// DISABLED 2026-04-18: loadDiscrepancies() removed — CSV path retired
+renderLaborChart();
+</script>

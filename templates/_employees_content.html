@@ -1,0 +1,121 @@
+
+<!-- KPI Tiles -->
+<section class="emp-kpi-grid" id="kpi-section">
+    <div class="emp-kpi">
+        <div class="emp-kpi-label">שעות החודש</div>
+        <div class="emp-kpi-value" id="kpi-hours">—</div>
+        <div class="emp-kpi-sub" id="kpi-hours-sub"></div>
+    </div>
+    <div class="emp-kpi">
+        <div class="emp-kpi-label">עלות שכר</div>
+        <div class="emp-kpi-value" id="kpi-salary">—</div>
+        <div class="emp-kpi-sub" id="kpi-salary-badge"></div>
+    </div>
+    <div class="emp-kpi">
+        <div class="emp-kpi-label">עובדים פעילים</div>
+        <div class="emp-kpi-value" id="kpi-count">—</div>
+        <div class="emp-kpi-sub" id="kpi-rates-sub"></div>
+    </div>
+</section>
+
+<!-- Section title -->
+<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+    <h2 style="font-size:1.1rem; font-weight:700;">עובדים – <span id="month-label"></span></h2>
+</div>
+
+{% include '_unknown_employees_banner.html' %}
+
+<!-- Discrepancies Banner — DISABLED 2026-04-18: CSV path retired in favor of API-only -->
+<!-- CSV-Only Employees Banner — DISABLED 2026-04-18: CSV path retired in favor of API-only -->
+
+<!-- Employee Cards Grid -->
+<section class="emp-grid" id="emp-grid">
+    <div class="loading" style="grid-column:1/-1"><div class="spinner"></div><span>טוען...</span></div>
+</section>
+
+<!-- Pending Matches -->
+<section class="section-card" id="pending-section" style="display:none; border: 1px solid rgba(245,158,11,0.3);">
+    <h2 style="color:#fde68a;">התאמות ממתינות לאישור</h2>
+    <p style="font-size:0.82rem; color:var(--text-secondary); margin-bottom:1rem;">
+        עובדים מ-Aviv שלא זוהו אוטומטית — נדרש אישור ידני
+    </p>
+    <div id="pending-list"></div>
+</section>
+
+<!-- Charts Row: Hours per employee + Salary donut -->
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem;" id="charts-row">
+    <div class="section-card" style="margin-bottom:0;">
+        <h2 style="font-size:0.95rem; font-weight:700; margin-bottom:0.75rem;">שעות לעובד<span class="chart-info" data-tooltip="כמה שעות כל עובד עבד החודש עד עכשיו. ממוין לפי מספר שעות — מהעובד עם הכי הרבה שעות לעובד עם הכי מעט.">&#8505;&#65039;</span></h2>
+        <div style="position:relative; height:220px;"><canvas id="chart-hours"></canvas></div>
+    </div>
+    <div class="section-card" style="margin-bottom:0;">
+        <h2 style="font-size:0.95rem; font-weight:700; margin-bottom:0.75rem;">פילוח שכר<span class="chart-info" data-tooltip="חלוקת עלות השכר בין העובדים החודש. כל פרוסה מייצגת עובד, והגודל מראה כמה מעלות השכר החודשית שלו. במרכז — סך עלות השכר כולה.">&#8505;&#65039;</span></h2>
+        <div style="position:relative; height:220px;"><canvas id="chart-salary"></canvas></div>
+    </div>
+</div>
+<style>
+@media (max-width: 768px) { #charts-row { grid-template-columns: 1fr !important; } }
+</style>
+
+<!-- Labor Cost % Chart -->
+<section class="section-card" id="labor-chart-section" style="display:none;">
+    <h2 style="font-size:1rem; font-weight:700; color:#ffffff; margin-bottom:1rem;">עלות שכר כאחוז מההכנסות — 6 חודשים<span class="chart-info" data-tooltip="עלות השכר מתוך ההכנסות. לדוגמה: אם ההכנסה החודשית היא ₪100,000 ועלות השכר היא ₪5,000, האחוז הוא 5%. ככל שהאחוז נמוך יותר — המכולת רווחית יותר. תחום בריא הוא 5%–10%.">&#8505;&#65039;</span></h2>
+    <div style="position:relative; height:220px; width:100%;"><canvas id="chart-labor"></canvas></div>
+</section>
+
+<!-- History Table -->
+<section class="section-card">
+    <h2>היסטוריית שכר — 6 חודשים אחרונים</h2>
+    <div style="overflow-x:auto">
+        <table class="data-table" id="history-table">
+            <thead>
+                <tr>
+                    <th>חודש</th>
+                    <th>שעות</th>
+                    <th>עלות שכר</th>
+                    <th>תעריף ממוצע</th>
+                    <th>מקור</th>
+                </tr>
+            </thead>
+            <tbody id="history-tbody">
+                <tr><td colspan="5" class="no-data-msg">טוען...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<!-- Add/Edit Modal -->
+<div class="modal-overlay" id="emp-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3 id="modal-title">הוסף עובד</h3>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="edit-id">
+            <div class="form-group">
+                <label>שם עובד</label>
+                <input type="text" id="emp-name" placeholder="שם מלא">
+            </div>
+            <div class="form-group">
+                <label>תפקיד</label>
+                <div class="role-toggle">
+                    <label><input type="radio" name="emp-role" value="בוקר"><span>בוקר</span></label>
+                    <label><input type="radio" name="emp-role" value="ערב" checked><span>ערב</span></label>
+                    <label><input type="radio" name="emp-role" value="מנהל"><span>מנהל</span></label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>תעריף שעתי (₪)</label>
+                <input type="number" id="emp-rate" placeholder="0" min="0" step="0.5">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal()">ביטול</button>
+                <button class="btn-primary" id="modal-save-btn" onclick="saveEmployee()">שמור</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
