@@ -57,7 +57,7 @@ def run_hourly_alerts():
     # Health warnings are routine + per-branch → buffer into one digest. The
     # per-hour _should_alert throttle stays as a second layer.
     from utils.notify import batch_start, batch_flush
-    batch_start("Hourly health")
+    batch_start("Hourly health", verb="flagged")
     for branch in branches:
         bid = branch['id']
         bname = branch['name']
