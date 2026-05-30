@@ -231,22 +231,22 @@ def cleanup_orphaned_runs():
 
 
 def run_aviv_report_all(include_previous_month: bool = False):
-    """Run aviv employer-report agent for all active branches with 30s jitter."""
-    import time
-    from agents.aviv_employees_report import run_for_branch
-    branches = get_active_branches()
-    log.info("=== Aviv employer-report run started for %d branches "
-             "(include_previous_month=%s) ===", len(branches), include_previous_month)
-    for idx, bid in enumerate(branches):
-        if idx > 0:
-            time.sleep(30)  # jitter to avoid thundering Aviv
-        log.info("Aviv employer-report for branch %d", bid)
-        try:
-            result = run_for_branch(bid, include_previous_month=include_previous_month)
-            log.info("Branch %d aviv_report: %s", bid, result)
-        except Exception as e:
-            log.error("Branch %d aviv_report failed: %s", bid, e)
-    log.info("=== Aviv employer-report run complete ===")
+    """Run aviv employer-report agent for all active branches.
+
+    Thin shim over agents.aviv_employees_report.run_all_branches(), which owns
+    the AVIV_EMP_USE_CHAIN chain login (one token reused across branches), the
+    branch iteration, the 30s between-branch jitter, and per-branch error
+    catching. Previously this reimplemented a per-store loop that never passed
+    chain_token — so chain-only stores (NULL per-store creds) errored nightly
+    with "No Aviv credentials".
+    """
+    from agents.aviv_employees_report import run_all_branches
+    log.info("=== Aviv employer-report run started "
+             "(include_previous_month=%s) ===", include_previous_month)
+    results = run_all_branches(include_previous_month=include_previous_month)
+    ok = sum(1 for r in results if r.get('ok'))
+    log.info("=== Aviv employer-report run complete: %d/%d ok ===",
+             ok, len(results))
 
 
 def run_aviv_report_current():

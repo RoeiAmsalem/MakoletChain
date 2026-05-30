@@ -61,6 +61,12 @@ class AuthExpired(Exception):
 RETRY_BACKOFF_SECONDS = 30
 RETRY_MAX_ATTEMPTS = 3
 
+# Between-branch jitter in run_all_branches so report-301 pulls don't hammer
+# Aviv back-to-back. Lives in the agent (not the scheduler) so both scheduled
+# and CLI runs get it. First branch runs immediately; each subsequent branch
+# waits this long.
+JITTER_SECONDS = 30
+
 
 def _http_with_retry(method, url, **kwargs):
     """Retry on 4xx (except 401) / 5xx. 30s backoff. Max 3 attempts.
@@ -428,6 +434,7 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
     from the branches table (chain-account mode).
     """
     today = today or date.today()
+    auth_path = 'chain' if chain_token is not None else 'per_store'
     t0 = time.time()
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -486,7 +493,8 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
                 (msg, round(time.time() - t0, 2), run_id))
             conn.commit()
             log.info("branch=%d %s", branch_id, msg)
-            return {'ok': True, 'skipped': True, 'reason': 'pos_offline'}
+            return {'ok': True, 'skipped': True, 'reason': 'pos_offline',
+                    'branch_id': branch_id, 'auth_path': auth_path}
 
         find_employer_report_id(reports)  # raises if missing
 
@@ -553,7 +561,7 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
             except Exception:
                 pass
 
-        return {'ok': True, **agg}
+        return {'ok': True, 'branch_id': branch_id, 'auth_path': auth_path, **agg}
 
     except Exception as e:
         log.exception('aviv_report failed for branch %d', branch_id)
@@ -612,7 +620,9 @@ def run_all_branches(include_previous_month: bool = False) -> list[dict]:
                     for bid in bids]
 
     results: list[dict] = []
-    for bid in bids:
+    for idx, bid in enumerate(bids):
+        if idx > 0:
+            time.sleep(JITTER_SECONDS)  # anti-thundering jitter between branches
         try:
             results.append(run_for_branch(
                 bid, include_previous_month=include_previous_month,
