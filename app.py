@@ -3437,8 +3437,11 @@ def admin_branches():
         is_chain = (bd.get('aviv_branch_id') is not None
                     and bd['aviv_branch_id'] not in excluded)
         bd['is_chain_store'] = is_chain
-        bd['needs_setup'] = is_chain and not (
-            bd['has_bilboy'] and bd['has_franchise'] and bd['has_manager'])
+        # Status keys on DATA-SOURCE config only (Aviv id + BilBoy), matching
+        # the Aviv#/BilBoy ✓ columns. is_chain already guarantees aviv_branch_id.
+        # Manager assignment (user_branches) is a SEPARATE concern and must NOT
+        # drive configured/unconfigured — chain stores are admin-only by design.
+        bd['needs_setup'] = is_chain and not bd['has_bilboy']
         branches.append(bd)
         if is_chain and bd.get('active'):
             chain_stores.append({
