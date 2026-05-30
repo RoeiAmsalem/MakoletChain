@@ -53,8 +53,11 @@ DEFAULT_DB = os.path.join(REPO_ROOT, 'db', 'makolet_chain.db')
 DEMO_BRANCH_ID = 9999
 DEMO_NAME = 'מכולת הדגמה'
 DEMO_CITY = 'הדגמה'
-DEMO_EMAIL = 'demo@makoletchain.com'
-DEMO_USER_NAME = 'משתמש הדגמה'
+# NOTE: demo@makoletchain.com is already taken by migration 009's chain-wide
+# "Demo CEO" (role=ceo, sees ALL branches). We deliberately use a DISTINCT email
+# so this scoped manager never collides with it.
+DEMO_EMAIL = 'demo-store@makoletchain.com'
+DEMO_USER_NAME = 'מנהל מכולת הדגמה'
 # Deliberately unusable hash: werkzeug.check_password_hash returns False for a
 # malformed hash (no exception), so login is impossible until set_user_password.py
 # is run. Keeps any real password out of code/git.
@@ -280,8 +283,13 @@ def seed_account(conn):
     }, ucols, or_ignore=True)
     uid = conn.execute('SELECT id FROM users WHERE LOWER(email)=LOWER(?)',
                        (DEMO_EMAIL,)).fetchone()[0]
-    # Scope strictly to the demo branch: remove any prior links for THIS user
-    # only, then link 9999. (Never touches other users' user_branches.)
+    # Safety: branch 9999 must belong to NO ONE but the demo manager. Remove any
+    # link of branch 9999 to a different user (e.g. an earlier mis-seed that
+    # attached 9999 to the migration-009 Demo CEO). Scoped to branch 9999 only —
+    # never unlinks a real branch from a real user.
+    conn.execute('DELETE FROM user_branches WHERE branch_id = ? AND user_id != ?',
+                 (DEMO_BRANCH_ID, uid))
+    # Scope the demo manager strictly to the demo branch.
     conn.execute('DELETE FROM user_branches WHERE user_id = ?', (uid,))
     conn.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)',
                  (uid, DEMO_BRANCH_ID))
