@@ -7,8 +7,11 @@ throwaway test user — leaves no trace. Read-only against real users.
 
 Run on the server:  venv/bin/python scripts/verify_user_deactivation.py
 """
+import os
 import sqlite3
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import app, DB_PATH
 
