@@ -873,14 +873,19 @@ def run_aviv_live_chain(force: bool = False,
             response = _fetch_multi_status(token, aviv_ids)
         except Exception as e:
             log.error('chain REST call failed (no Playwright fallback): %s', e)
+            # Critical + systemic: single login/POST failing kills the whole tick
+            # for every branch. dedup_key collapses repeat ticks during an outage.
             notify('❌ Aviv Live (chain)',
-                   f'Chain status call failed; this tick skipped. {_friendly_error(e)}')
+                   f'Chain status call failed; this tick skipped. {_friendly_error(e)}',
+                   critical=True, dedup_key="aviv_chain_auth")
             return {'success': False, 'error': str(e)[:200]}
 
         # ── per-branch fan-out ───────────────────────────────────────────
         by_aviv_response = {row.get('branch'): row for row in response
                             if isinstance(row, dict) and row.get('branch') is not None}
+        from utils.notify import batch_start, batch_flush
         results: list[dict] = []
+        batch_start("Aviv Live (chain)", total=len(aviv_ids))
         for aviv_id in aviv_ids:
             branch = by_aviv[aviv_id]
             bid = branch['id']
@@ -930,6 +935,7 @@ def run_aviv_live_chain(force: bool = False,
                 notify(f'❌ Aviv Live — {name}', _friendly_error(e))
                 results.append({'branch_id': bid, 'ok': False, 'error': str(e)[:200]})
 
+        batch_flush(failed=sum(1 for r in results if not r['ok']))
         return {'success': True,
                 'branches': len(results),
                 'ok': sum(1 for r in results if r['ok']),
