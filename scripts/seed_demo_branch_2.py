@@ -17,7 +17,8 @@ updated or deleted):
                           integration credentials forced NULL (copied from 9999,
                           which already has them NULL). name = "מכולת הדגמה 2".
   * data copy 9999→9998 — daily_sales, goods_documents, fixed_expenses,
-                          employees, employee_hours, employee_match_pending.
+                          employees, employee_hours, employee_match_pending,
+                          z_department_sales (the department breakdown tiles).
                           DELETE 9998's rows then INSERT…SELECT from 9999 with
                           branch_id rewritten (schema-introspecting: all columns
                           except the autoincrement id are copied verbatim).
@@ -79,6 +80,7 @@ CREDENTIAL_COLS = [
 COPY_TABLES = [
     'daily_sales', 'goods_documents', 'fixed_expenses',
     'employees', 'employee_hours', 'employee_match_pending',
+    'z_department_sales',
 ]
 
 

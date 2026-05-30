@@ -31,7 +31,9 @@ CREDENTIAL_COLS = [
     'franchise_supplier', 'aviv_branch_id', 'bilboy_branch_id', 'iec_token',
 ]
 COPY_TABLES = ['daily_sales', 'goods_documents', 'fixed_expenses',
-               'employees', 'employee_hours', 'employee_match_pending']
+               'employees', 'employee_hours', 'employee_match_pending',
+               'z_department_sales']
+SURFACED_DEPTS = (5, 83, 2)  # חלב / סיגריות / ירקות — must render on home + /sales
 
 fails = 0
 
@@ -83,6 +85,17 @@ def main():
               (bid, today)).fetchone()
         check(f'live tile today for {bid} = 4000', r is not None and r['amount'] == 4000.0,
               f"row={dict(r) if r else None}")
+
+    # 5b. department tiles: latest demo day has all 3 surfaced depts, both branches
+    for bid in (ID, SRC_ID):
+        latest = q('SELECT MAX(date) FROM z_department_sales WHERE branch_id=?',
+                   (bid,)).fetchone()[0]
+        codes = [r[0] for r in q(
+            'SELECT dept_code FROM z_department_sales WHERE branch_id=? AND date=?',
+            (bid, latest)).fetchall()] if latest else []
+        ok = all(c in codes for c in SURFACED_DEPTS)
+        check(f'dept tiles (5/83/2) present for {bid} on {latest}', ok,
+              f"codes={sorted(codes)}")
 
     # 6. demo user scope EXACTLY {9998, 9999}
     u = q('SELECT id, role FROM users WHERE LOWER(email)=LOWER(?)', (EMAIL,)).fetchone()

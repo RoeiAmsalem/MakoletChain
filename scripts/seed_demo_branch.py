@@ -304,6 +304,58 @@ def seed_fixed_expenses(conn):
     return n
 
 
+# Demo department breakdown. Codes/names mirror real branch 126's Aviv-902
+# departments EXACTLY so the home tiles (חלב=5, סיגריות=83, ירקות=2) and the
+# /sales monthly cards render identically. pct = share of that day's Z total;
+# the three surfaced depts lead, the rest fill the breakdown panel believably.
+# Shares sum to ~0.62 (the remaining ~38% is the long tail not itemized here).
+DEMO_DEPARTMENTS = [
+    # (dept_code, dept_name, share_of_day, qty_per_1000_amount)
+    (5,  'מקרר-מוצרי חלב ותחליפים', 0.155, 70),   # חלב  ≈ ₪2,300/day @ 15k
+    (83, 'מוצרי טבק',               0.075, 14),   # סיגריות ≈ ₪1,100/day
+    (2,  'ירקות פירות',             0.087, 110),  # ירקות ≈ ₪1,300/day (by weight)
+    (9,  'חטיפים ומתוקים',          0.048, 60),
+    (6,  'משקאות קלים',             0.041, 55),
+    (1,  'מכולת יבשה',              0.035, 40),
+    (8,  'קפ"ק',                    0.033, 25),
+    (7,  'קפואים',                  0.024, 20),
+    (4,  'מאפים',                   0.020, 30),
+    (3,  'בשר ועוף',                0.019, 12),
+    (10, 'ניקיון',                  0.014, 10),
+]
+
+
+def seed_departments(conn):
+    """Per-day per-department demo rows in z_department_sales for every demo
+    daily_sales day, so the department tiles/cards render like real branches.
+
+    Idempotent: DELETE 9999's rows then reinsert (PK branch_id,date,dept_code).
+    Amounts are a deterministic share of each day's Z total (RNG-jittered) and
+    rounded to ₪10 — believable and stable across re-runs (fixed seed)."""
+    zcols = cols(conn, 'z_department_sales')
+    conn.execute('DELETE FROM z_department_sales WHERE branch_id = ?', (DEMO_BRANCH_ID,))
+    days = conn.execute(
+        'SELECT date, amount FROM daily_sales WHERE branch_id = ? ORDER BY date',
+        (DEMO_BRANCH_ID,)).fetchall()
+    n = 0
+    for day in days:
+        d, day_amt = day['date'], day['amount']
+        for code, name, share, qty_per_k in DEMO_DEPARTMENTS:
+            jitter = RNG.uniform(0.9, 1.1)
+            amount = round(day_amt * share * jitter / 10) * 10
+            if amount <= 0:
+                continue
+            qty = round(amount / 1000 * qty_per_k, 1)
+            insert_dict(conn, 'z_department_sales', {
+                'branch_id': DEMO_BRANCH_ID, 'date': d, 'dept_code': code,
+                'dept_name': name, 'amount': amount, 'qty': qty,
+            }, zcols, or_ignore=True)
+            n += 1
+    print(f"[demo] z_department_sales: {n} rows across {len(days)} days "
+          f"({len(DEMO_DEPARTMENTS)} depts incl. surfaced 5/83/2)")
+    return n
+
+
 def seed_account(conn):
     ucols = cols(conn, 'users')
     # Create the demo manager iff absent (preserve any password already set).
@@ -370,6 +422,7 @@ def main():
         seed_employee_hours(conn)
         seed_pending(conn)
         seed_fixed_expenses(conn)
+        seed_departments(conn)
         seed_account(conn)
         copy_zpdf(conn)
         conn.commit()
