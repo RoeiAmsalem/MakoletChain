@@ -4167,7 +4167,9 @@ def api_admin_branch_update(branch_id):
 @app.route('/admin/users')
 @_admin_required
 def admin_users():
-    return render_template('admin_users.html', **_page_context('admin'))
+    return render_template('admin_users.html',
+                           current_user_id=session.get('user_id'),
+                           **_page_context('admin'))
 
 
 def _z_status_rows(db, target_date):
@@ -4304,6 +4306,37 @@ def api_admin_user_create():
         (name, email, pw_hash, role))
     db.commit()
     return jsonify({'ok': True, 'user_id': cur.lastrowid, 'role': role}), 201
+
+
+@app.route('/api/admin/users/<int:user_id>/active', methods=['POST'])
+@_admin_required
+def api_admin_user_set_active(user_id):
+    """Reversibly (de)activate a user account — sets users.active 0/1 ONLY.
+
+    NEVER deletes the row and never touches user_branches; reactivation
+    restores access fully. active=0 blocks login + all data access because the
+    login + password-reset queries require `active = 1`. Admin-only via
+    _admin_required (ceo/manager → 403). An admin CANNOT deactivate their own
+    currently-logged-in account (would lock themselves out) — enforced
+    server-side, not just hidden in the UI.
+    """
+    data = request.get_json(silent=True) or {}
+    active = data.get('active')
+    if active not in (0, 1, True, False):
+        return jsonify({'error': 'active must be 0 or 1'}), 400
+    active = 1 if active in (1, True) else 0
+
+    db = get_db()
+    user = db.execute('SELECT id, email FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not user:
+        return jsonify({'error': 'user not found'}), 404
+
+    if active == 0 and user_id == session.get('user_id'):
+        return jsonify({'error': 'cannot deactivate your own account'}), 403
+
+    db.execute('UPDATE users SET active = ? WHERE id = ?', (active, user_id))
+    db.commit()
+    return jsonify({'ok': True, 'user_id': user_id, 'active': active})
 
 
 @app.route('/api/admin/users/<int:user_id>/branches', methods=['POST'])

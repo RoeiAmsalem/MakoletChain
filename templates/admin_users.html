@@ -25,6 +25,12 @@
     .create-user-grid button { background:var(--accent); border:none; border-radius:6px; padding:0.5rem 0.9rem; color:white; font-size:0.85rem; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity 0.15s; }
     .create-user-grid button:hover { opacity:0.85; }
     .badge-inactive { background:rgba(239,68,68,0.2); color:#fca5a5; padding:2px 8px; border-radius:999px; font-size:0.72rem; font-weight:700; }
+    .user-card.inactive { opacity:0.5; }
+    .toggle-active-btn { margin-right:auto; background:rgba(255,255,255,0.06); border:1px solid var(--card-border); border-radius:6px; padding:0.3rem 0.75rem; color:var(--text-secondary); font-size:0.78rem; font-weight:600; cursor:pointer; font-family:inherit; transition:all 0.15s; }
+    .toggle-active-btn:hover { background:rgba(255,255,255,0.1); color:white; }
+    .toggle-active-btn.deactivate:hover { border-color:#f87171; color:#fca5a5; }
+    .toggle-active-btn.activate { border-color:rgba(34,197,94,0.4); color:#86efac; }
+    .toggle-active-btn.activate:hover { background:rgba(34,197,94,0.15); }
     .admin-note { font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem; font-style:italic; }
     .branch-pills { display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem; align-items:center; }
     .branch-pill { display:inline-flex; align-items:center; gap:0.3rem; background:rgba(255,255,255,0.06); border:1px solid var(--card-border); border-radius:999px; padding:0.2rem 0.6rem; font-size:0.78rem; color:var(--text-secondary); }
@@ -88,6 +94,7 @@
 <script>
 let ALL_USERS = [];
 let ALL_BRANCHES = [];
+const CURRENT_USER_ID = {{ current_user_id | tojson }};
 
 async function loadData() {
     const [usersRes, branchesRes] = await Promise.all([
@@ -121,7 +128,15 @@ function renderCard(u) {
     } else {
         roleBadge = '<span class="role-badge role-manager">מנהל</span>';
     }
-    const activeBadge = u.active ? '' : ' <span class="badge-inactive">לא פעיל</span>';
+    const activeBadge = u.active ? '' : ' <span class="badge-inactive">מושבת</span>';
+    // Self-deactivation is blocked server-side; also hide the button to avoid a
+    // confusing error on the admin's own row.
+    let toggleBtn = '';
+    if (u.id !== CURRENT_USER_ID) {
+        toggleBtn = u.active
+            ? `<button class="toggle-active-btn deactivate" onclick="setActive(${u.id}, 0)">השבת</button>`
+            : `<button class="toggle-active-btn activate" onclick="setActive(${u.id}, 1)">הפעל</button>`;
+    }
 
     let body = '';
     if (u.role === 'admin') {
@@ -152,11 +167,12 @@ function renderCard(u) {
                 <div class="info-note">שינוי ייכנס לתוקף בהתחברות הבאה של המשתמש</div>`;
     }
 
-    return `<div class="user-card" id="user-card-${u.id}">
+    return `<div class="user-card${u.active ? '' : ' inactive'}" id="user-card-${u.id}">
         <div class="user-card-header">
             <span class="user-name">${u.name}</span>
             <span class="user-email">${u.email}</span>
             ${roleBadge}${activeBadge}
+            ${toggleBtn}
         </div>
         ${body}
     </div>`;
@@ -187,6 +203,40 @@ async function createUser() {
         document.getElementById('new-user-password').value = '';
         await loadData();
         await mkAlert({type: 'success', title: 'נוצר', message: 'המשתמש נוסף בהצלחה'});
+    } catch (err) {
+        await mkAlert({type: 'danger', title: 'שגיאה', message: err.message});
+    }
+}
+
+async function setActive(userId, active) {
+    const user = ALL_USERS.find(u => u.id === userId);
+    if (!user) return;
+    if (active === 0) {
+        const confirmed = await mkConfirm({
+            type: 'warning',
+            title: 'השבתת חשבון',
+            message: `האם להשבית את ${user.email}? המשתמש לא יוכל להתחבר עד להפעלה מחדש.`
+        });
+        if (!confirmed) return;
+    }
+    try {
+        const resp = await fetch(`/api/admin/users/${userId}/active`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({active})
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            await mkAlert({type: 'danger', title: 'שגיאה', message: err.error || 'שגיאה לא צפויה'});
+            return;
+        }
+        user.active = active;
+        render();
+        await mkAlert({
+            type: 'success',
+            title: active ? 'הופעל' : 'הושבת',
+            message: active ? `${user.email} הופעל מחדש` : `${user.email} הושבת — לא יוכל להתחבר`
+        });
     } catch (err) {
         await mkAlert({type: 'danger', title: 'שגיאה', message: err.message});
     }
