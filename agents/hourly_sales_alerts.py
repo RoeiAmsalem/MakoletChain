@@ -51,7 +51,10 @@ def run_hourly_alerts():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
 
-    branches = conn.execute('SELECT id, name FROM branches WHERE active = 1').fetchall()
+    # agents_enabled = 1 excludes no-agent branches (demo branch 9999) so no
+    # false "no data received" alerts fire for them. See migration 017.
+    branches = conn.execute(
+        'SELECT id, name FROM branches WHERE active = 1 AND agents_enabled = 1').fetchall()
     today = now.date().isoformat()
 
     for branch in branches:

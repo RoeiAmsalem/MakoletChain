@@ -411,7 +411,7 @@ if __name__ == '__main__':
     if args.all_active:
         conn = _get_db()
         ids = [r['id'] for r in conn.execute(
-            'SELECT id FROM branches WHERE active=1 ORDER BY id').fetchall()]
+            'SELECT id FROM branches WHERE active=1 AND agents_enabled=1 ORDER BY id').fetchall()]
         conn.close()
         print(f"[bilboy_all] running for {len(ids)} active branches: {ids}")
         ok = fail = 0

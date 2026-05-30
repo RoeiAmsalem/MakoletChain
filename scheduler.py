@@ -30,7 +30,11 @@ def init_db():
 
 def get_active_branches() -> list[int]:
     conn = sqlite3.connect(DB_PATH, timeout=30)
-    rows = conn.execute('SELECT id FROM branches WHERE active = 1').fetchall()
+    # agents_enabled = 1 excludes no-agent branches (the demo branch 9999) from
+    # every scheduled agent loop driven by get_active_branches (bilboy, gmail,
+    # hours). DEFAULT 1 keeps all real branches included. See migration 017.
+    rows = conn.execute(
+        'SELECT id FROM branches WHERE active = 1 AND agents_enabled = 1').fetchall()
     conn.close()
     return [r[0] for r in rows]
 
