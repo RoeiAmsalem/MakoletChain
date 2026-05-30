@@ -827,7 +827,14 @@ def run_gmail_sync(branch_id: int) -> dict:
             conn_err.close()
         except Exception:
             pass
-        notify(f"❌ Gmail — {branch.get('name', f'Branch {branch_id}')}", _friendly_gmail_error(e))
+        # IMAP auth failure is systemic (one mailbox/app-password serves every
+        # branch) → critical + fixed dedup_key so a storm collapses to ONE page.
+        # All other per-branch Gmail errors are routine → digest.
+        if 'AUTHENTICATIONFAILED' in str(e):
+            notify(f"❌ Gmail — auth failed", _friendly_gmail_error(e),
+                   critical=True, dedup_key="gmail_imap_auth")
+        else:
+            notify(f"❌ Gmail — {branch.get('name', f'Branch {branch_id}')}", _friendly_gmail_error(e))
         return {'success': False, 'new_reports': 0, 'skipped': 0, 'error': str(e)}
 
 

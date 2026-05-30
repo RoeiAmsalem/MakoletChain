@@ -119,39 +119,56 @@ def _run_aviv_chain():
 def _run_aviv_per_branch():
     """Legacy fallback — per-branch loop. Kept intact for one-line revert."""
     from agents.aviv_live import run_aviv_live
+    from utils.notify import batch_start, batch_flush
     branches = get_active_branches()
+    failed = set()
+    batch_start("Aviv Live", total=len(branches))
     for bid in branches:
         log.info("Running aviv_live for branch %d", bid)
         try:
             result = run_aviv_live(bid)
             log.info("Branch %d: %s", bid, result)
+            if isinstance(result, dict) and result.get('success') is False:
+                failed.add(bid)
         except Exception as e:
             log.error("Branch %d aviv_live failed: %s", bid, e)
+            failed.add(bid)
         _check_consecutive_failures(bid)
+    batch_flush(failed=len(failed))
 
 
 def nightly_sync():
     """Nightly 02:00 IL — run bilboy + gmail_sync for all active branches."""
     from agents.bilboy import run_bilboy
     from agents.gmail_agent import run_gmail_sync
+    from utils.notify import batch_start, batch_flush
 
     branches = get_active_branches()
     log.info("=== Nightly sync started for %d branches ===", len(branches))
 
+    failed = set()
+    batch_start("Nightly sync", total=len(branches))
     for bid in branches:
         log.info("--- Branch %d ---", bid)
         try:
             bb = run_bilboy(bid)
             log.info("BilBoy branch %d: %s", bid, bb)
+            if isinstance(bb, dict) and bb.get('success') is False:
+                failed.add(bid)
         except Exception as e:
             log.error("BilBoy branch %d failed: %s", bid, e)
+            failed.add(bid)
 
         try:
             gm = run_gmail_sync(bid)
             log.info("Gmail branch %d: %s", bid, gm)
+            if isinstance(gm, dict) and gm.get('success') is False:
+                failed.add(bid)
         except Exception as e:
             log.error("Gmail branch %d failed: %s", bid, e)
+            failed.add(bid)
 
+    batch_flush(failed=len(failed))
     log.info("=== Nightly sync complete ===")
 
 

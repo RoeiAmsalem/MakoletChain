@@ -601,21 +601,34 @@ def run_all_branches(include_previous_month: bool = False) -> list[dict]:
             log.info('chain auth: 1 login for %d branch(es): %s', len(bids), bids)
         except Exception as e:
             log.error('chain login failed; aborting employer-report run: %s', e)
+            # Critical + systemic: chain login down aborts the whole run.
+            from utils.notify import notify
+            notify('❌ Employer report (chain)',
+                   f'Chain login failed; run aborted. {str(e)[:120]}',
+                   critical=True, dedup_key="aviv_chain_auth")
             return [{'ok': False, 'branch_id': bid,
                      'error': f'chain login failed: {str(e)[:160]}'}
                     for bid in bids]
 
+    from utils.notify import batch_start, batch_flush
     results: list[dict] = []
+    failed = set()
+    batch_start("Employer report", total=len(bids))
     for idx, bid in enumerate(bids):
         if idx > 0:
             time.sleep(JITTER_SECONDS)  # anti-thundering jitter between branches
         try:
-            results.append(run_for_branch(
+            r = run_for_branch(
                 bid, include_previous_month=include_previous_month,
-                chain_token=chain_token))
+                chain_token=chain_token)
+            results.append(r)
+            if isinstance(r, dict) and r.get('ok') is False:
+                failed.add(bid)
         except Exception as e:
             log.exception('aviv_report failed for branch %d', bid)
             results.append({'ok': False, 'branch_id': bid, 'error': str(e)[:200]})
+            failed.add(bid)
+    batch_flush(failed=len(failed))
     return results
 
 

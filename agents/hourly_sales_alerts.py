@@ -57,6 +57,10 @@ def run_hourly_alerts():
         'SELECT id, name FROM branches WHERE active = 1 AND agents_enabled = 1').fetchall()
     today = now.date().isoformat()
 
+    # Health warnings are routine + per-branch → buffer into one digest. The
+    # per-hour _should_alert throttle stays as a second layer.
+    from utils.notify import batch_start, batch_flush
+    batch_start("Hourly health")
     for branch in branches:
         bid = branch['id']
         bname = branch['name']
@@ -109,5 +113,6 @@ def run_hourly_alerts():
         except Exception as e:
             log.error("Branch %d (%s): alert check failed: %s", bid, bname, e)
 
+    batch_flush()
     conn.close()
     log.info("Hourly alerts check complete for %d branches", len(branches))

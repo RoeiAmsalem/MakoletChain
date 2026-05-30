@@ -364,9 +364,12 @@ def run_bilboy(branch_id: int) -> dict:
             conn_err.close()
         except Exception:
             pass
+        # Critical + chain-wide: one token serves all branches, so a 401 storms
+        # every branch in the run. Fixed dedup_key collapses it to ONE page.
         notify(
             f"🔑 BilBoy — {branch.get('name', f'Branch {branch_id}')}",
-            "BilBoy token expired — needs to be refreshed from the browser."
+            "BilBoy token expired — needs to be refreshed from the browser.",
+            critical=True, dedup_key="bilboy_token_expired"
         )
         return {'success': False, 'docs_count': 0, 'total_amount': 0, 'error': 'token_expired'}
 
