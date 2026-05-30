@@ -28,6 +28,20 @@ import urllib.parse
 
 _CRITICAL_COOLDOWN_SEC = 600  # 10 min: suppress identical critical repeats (retries/storms)
 
+# Severity tags prepended to every brrr title so the tier reads in words, not
+# just emoji/color. Derived AUTOMATICALLY from how the alert is sent (critical
+# flag / digest verb) — never hardcoded at the call site, so it can't drift.
+#   🔴 דחוף  (URGENT) — critical=True + whole-run-fail (systemic)
+#   🟠 בינוני (MEDIUM) — routine failure digest
+#   🟡 מידע   (INFO)   — health/"flagged" digest + plain immediate notices
+SEV_URGENT = "🔴 דחוף:"
+SEV_MEDIUM = "🟠 בינוני:"
+SEV_INFO = "🟡 מידע:"
+
+
+def _tag(prefix: str, title: str) -> str:
+    return f"{prefix} {title}"
+
 # Module-level batch state. Single-process gunicorn + single scheduler process,
 # so a simple module global is safe (no cross-process batching needed).
 _batch = None                 # dict while a batch is active, else None
@@ -78,14 +92,17 @@ def notify(title: str, message: str, critical: bool = False, dedup_key: str = No
         if not _dedup_ok(dedup_key):
             print(f"[brrr] critical deduped ({dedup_key}): {title}")
             return
-        _send(title, message)
+        _send(_tag(SEV_URGENT, title), message)
         return
 
     if _batch is not None:
+        # Buffer raw title; the severity tag is applied to the digest at flush.
         _batch['failures'].append((title, message))
         return
 
-    _send(title, message)
+    # Plain immediate notice (no batch): not a failure digest, not critical →
+    # lowest tier. Covers recovery / manual-run / IEC-refresh style alerts.
+    _send(_tag(SEV_INFO, title), message)
 
 
 def batch_start(label: str, total: int = None, verb: str = "failed"):
@@ -138,10 +155,13 @@ def batch_flush(failed: int = None):
     body = "\n".join(f"• {title}: {message}" for title, message in failures)
 
     if total and failed and failed >= total:
-        # Every branch failed — systemic, page immediately as critical.
-        _send(f"🚨 {label} — SYSTEMIC FAILURE",
+        # Every branch failed — systemic, page immediately as critical (URGENT).
+        _send(_tag(SEV_URGENT, f"{label} — SYSTEMIC FAILURE"),
               f"All {total} branches failed.\n{body}")
     else:
         n = len(failures)
         count = f"{n} branch{'es' if n != 1 else ''} {verb}"
-        _send(f"⚠️ {label}: {count}", body)
+        # "flagged" digests are warning-only (never escalate) → INFO; routine
+        # failure digests → MEDIUM.
+        prefix = SEV_INFO if verb == "flagged" else SEV_MEDIUM
+        _send(_tag(prefix, f"{label}: {count}"), body)

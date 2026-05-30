@@ -89,6 +89,45 @@ crit = any("BilBoy" in t for t, _ in sent)
 digest = any("2 branches failed" in t for t, _ in sent)
 check("G critical + digest separate", len(sent) == 2 and crit and digest, f"{[t for t,_ in sent]}")
 
+# H. Severity tags — three tiers, derived centrally (not per-call-site).
+# H1 URGENT: critical=True
+reset()
+N.notify("🔑 BilBoy — X", "טוקן פג תוקף", critical=True, dedup_key="k1")
+ex_urgent = sent[0][0]
+check("H1 critical → 🔴 דחוף", ex_urgent.startswith("🔴 דחוף:"), ex_urgent)
+
+# H2 MEDIUM: routine failure digest
+reset()
+N.batch_start("ריצת Z", total=18)
+for b in ["דפנה", "לימן", "טבעון"]:
+    N.notify(f"❌ Gmail — {b}", "אין Z-report")
+N.batch_flush(failed=3)
+ex_medium = sent[0][0]
+check("H2 routine digest → 🟠 בינוני", ex_medium.startswith("🟠 בינוני:"), ex_medium)
+
+# H3 INFO: health/flagged digest
+reset()
+N.batch_start("בריאות שעתית", verb="flagged")
+for b in ["A", "B", "C", "D"]:
+    N.notify(f"⚠️ Hourly — {b}", "no data")
+N.batch_flush()
+ex_info = sent[0][0]
+check("H3 flagged digest → 🟡 מידע", ex_info.startswith("🟡 מידע:"), ex_info)
+
+# H4 systemic (whole-run-fail) is URGENT
+reset()
+N.batch_start("Nightly sync", total=2)
+N.notify("❌ BilBoy — A", "err")
+N.notify("❌ BilBoy — B", "err")
+N.batch_flush(failed=2)
+check("H4 systemic → 🔴 דחוף", sent[0][0].startswith("🔴 דחוף:"), sent[0][0])
+
+print()
+print("--- one example per tier ---")
+print(f"🔴 URGENT : {ex_urgent}")
+print(f"🟠 MEDIUM : {ex_medium}")
+print(f"🟡 INFO   : {ex_info}")
+
 print()
 if fails:
     print(f"{len(fails)} FAILED: {fails}")
