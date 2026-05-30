@@ -1,0 +1,18 @@
+-- Migration 019: reserve a SECOND demo branch (id 9998) for the multi-store
+-- sales demo.
+--
+-- No schema change. This is a self-documenting MARKER migration (mirrors how
+-- the agents_enabled kill-switch / demo work is recorded) so the deploy
+-- pipeline records that 9998 is an intentional, agent-free demo branch.
+--
+-- The actual data — branch row (NULL agent-config, agents_enabled=0), a copy of
+-- branch 9999's hand-placed data, the ₪4,000 live_sales tile rows, the cloned
+-- Z-PDF, and scoping demo-store@makoletchain.com to {9998, 9999} — is created
+-- by the idempotent, additive-only scripts/seed_demo_branch_2.py (run manually
+-- on prod, exactly like scripts/seed_demo_branch.py for 9999). No agent ever
+-- touches 9998: agents_enabled=0 + NULL credentials make every scheduled
+-- selector skip it structurally (same proof as 9999 — zero agent_runs).
+--
+-- Kept as a no-op SELECT so migrate.py records it in _migrations without
+-- altering any table.
+SELECT 1;

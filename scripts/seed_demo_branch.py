@@ -319,8 +319,12 @@ def seed_account(conn):
     # never unlinks a real branch from a real user.
     conn.execute('DELETE FROM user_branches WHERE branch_id = ? AND user_id != ?',
                  (DEMO_BRANCH_ID, uid))
-    # Scope the demo manager strictly to the demo branch.
-    conn.execute('DELETE FROM user_branches WHERE user_id = ?', (uid,))
+    # Scope the demo manager to the demo branch(es). Additive: strip only
+    # NON-demo links so re-running this never removes the 2nd demo branch (9998)
+    # added by scripts/seed_demo_branch_2.py. (9998 + 9999 are the only demo
+    # branches; the multi-store scope is owned by seed_demo_branch_2.py.)
+    conn.execute('DELETE FROM user_branches WHERE user_id = ? AND branch_id NOT IN (9999, 9998)',
+                 (uid,))
     conn.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)',
                  (uid, DEMO_BRANCH_ID))
     has_pw = conn.execute('SELECT password_hash FROM users WHERE id=?', (uid,)).fetchone()[0]
