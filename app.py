@@ -1702,6 +1702,7 @@ def _network_revenue_payload(visible, req_date, db):
         'prev_date': None, 'prev_total': 0, 'pct_vs_prev': None,
         'total_branches': total_branches, 'reported': 0, 'missing': [],
         'per_branch': [], 'top': None, 'bottom': None, 'series_14d': [],
+        'momentum': [],
     }
     if not visible:
         return empty
@@ -1797,6 +1798,45 @@ def _network_revenue_payload(visible, req_date, db):
         d = (datetime.strptime(start_date, '%Y-%m-%d') + timedelta(days=i)).strftime('%Y-%m-%d')
         series_14d.append({'date': d, 'total': by_day.get(d, 0)})
 
+    # Per-store momentum: this-month-to-date vs last-month-to-SAME-DAY (the
+    # same partial windows used for the chain pct_vs_prev_month above), so the
+    # comparison is apples-to-apples mid-month. New stores (this-month data,
+    # no last-month) → 'new'; stores that reported last month but not this
+    # month → 'missing'; no data either side → excluded. Powers the
+    # /network/revenue-v2 "מגמת סניפים" panel (series_14d unused there).
+    def _range_by_branch(d0, d1):
+        rows = db.execute(
+            f"SELECT branch_id, COALESCE(SUM(amount),0) AS t FROM daily_sales "
+            f"WHERE date BETWEEN ? AND ? AND branch_id IN ({ph}) GROUP BY branch_id",
+            [d0.isoformat(), d1.isoformat()] + branch_ids
+        ).fetchall()
+        return {r['branch_id']: round(float(r['t'] or 0), 2) for r in rows}
+
+    this_by_branch = _range_by_branch(month_start, sd)
+    last_by_branch = _range_by_branch(prev_start, prev_end)
+    momentum = []
+    for b in visible:
+        bid = b['id']
+        this_t = this_by_branch.get(bid, 0)
+        last_t = last_by_branch.get(bid, 0)
+        if this_t == 0 and last_t == 0:
+            continue  # no data either side → exclude
+        if this_t > 0 and last_t == 0:
+            status, pct = 'new', None
+        elif this_t == 0 and last_t > 0:
+            status, pct = 'missing', None
+        else:
+            pct = round((this_t - last_t) / last_t * 100, 1)
+            status = 'flat' if abs(pct) < 1 else ('up' if pct > 0 else 'down')
+        momentum.append({
+            'branch_id': bid, 'branch_name': names.get(bid, 'סניף לא ידוע'),
+            'this_total': this_t, 'last_total': last_t, 'pct': pct, 'status': status,
+        })
+    # Movers first (biggest |%| change desc), then new stores, then missing.
+    _grp = {'up': 0, 'down': 0, 'flat': 0, 'new': 1, 'missing': 2}
+    momentum.sort(key=lambda m: (_grp[m['status']],
+                                 -(abs(m['pct']) if m['pct'] is not None else 0)))
+
     return {
         'date': sel_date,
         'chain_total': chain_total,
@@ -1816,6 +1856,7 @@ def _network_revenue_payload(visible, req_date, db):
         'top': per_branch[0] if per_branch else None,
         'bottom': per_branch[-1] if per_branch else None,
         'series_14d': series_14d,
+        'momentum': momentum,
     }
 
 

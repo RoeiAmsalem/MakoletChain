@@ -38,9 +38,27 @@
     .nr-coverage { font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 1rem; padding: 0.7rem 0.9rem; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 10px; }
     .nr-coverage b { color: var(--text-primary); }
     .nr-coverage .nr-missing { color: #f59e0b; }
-    .nr-trend { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1rem 1.2rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
-    .nr-trend h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.7rem; }
-    .nr-trend-wrap { position: relative; height: 120px; width: 100%; }
+    /* ── Store momentum panel (this month-to-date vs last month-to-same-day) ── */
+    .nr-mom { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.1rem 1.3rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
+    .nr-mom h2 { font-size: 0.95rem; font-weight: 700; color: var(--text-primary); margin: 0 0 0.9rem; }
+    .mom-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 0.85rem; padding: 0.7rem 0.5rem; border-bottom: 1px solid rgba(148,163,184,0.1); }
+    .mom-row .mom-name { font-size: 1rem; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mom-row .mom-pct { font-size: 1rem; font-weight: 800; white-space: nowrap; letter-spacing: -0.3px; }
+    .mom-pct.up { color: var(--profit); }
+    .mom-pct.down { color: var(--loss); }
+    .mom-pct.flat { color: var(--text-muted); }
+    .mom-pct.new { color: var(--accent); }
+    .mom-row .mom-vals { font-size: 0.84rem; color: var(--text-secondary); white-space: nowrap; text-align: left; direction: ltr; }
+    .mom-row.missing { opacity: 0.55; }
+    .mom-foot { margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary); display: flex; gap: 0.9rem; flex-wrap: wrap; }
+    .mom-foot .up { color: var(--profit); }
+    .mom-foot .down { color: var(--loss); }
+    .mom-foot .flat { color: var(--text-muted); }
+    .mom-foot .new { color: var(--accent); }
+    @media (min-width: 900px) {
+        .mom-rows { column-count: 2; column-gap: 2.5rem; }
+        .mom-row { break-inside: avoid; }
+    }
     .nr-strip { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 1.25rem 1.4rem; box-shadow: var(--shadow); }
     .nr-strip h2 { font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin: 0 0 1.1rem; }
     /* Ranked rows — the main content of the network view: roomy + tappable. */
@@ -109,17 +127,15 @@
 
 {% block scripts %}
 {% if rev2_mode == 'network' %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 (function () {
     const body = document.getElementById('nrBody');
     const MONTH = {{ selected_month | tojson }};
-    let trendChart = null;
     const storeHref = id => `/network/revenue-v2?mode=single&store=${encodeURIComponent(id)}`
         + (MONTH ? ('&month=' + encodeURIComponent(MONTH)) : '');
     const fmt = v => '₪' + Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
     const fmtNum = v => Number(v || 0).toLocaleString('he-IL', { maximumFractionDigits: 0 });
-    const dm = iso => { const p = iso.split('-'); return p[2] + '/' + p[1]; };
+    const fmtK = v => '₪' + Math.round(Number(v || 0) / 1000).toLocaleString('he-IL') + 'k';
 
     function deltaHtml(pct, suffix) {
         if (pct === null || pct === undefined) return `<span class="nr-delta flat">— אין נתוני השוואה</span>`;
@@ -129,24 +145,41 @@
         return `<span class="nr-delta ${cls}">${arrow} ${sign}${pct.toLocaleString('he-IL', { maximumFractionDigits: 1 })}%</span> ${suffix}`;
     }
 
-    function renderTrend(series) {
-        const ctx = document.getElementById('nrTrend');
-        if (!ctx) return;
-        const labels = series.map(p => dm(p.date));
-        const data = series.map(p => p.total);
-        if (trendChart) trendChart.destroy();
-        trendChart = new Chart(ctx.getContext('2d'), {
-            type: 'line',
-            data: { labels, datasets: [{ data, borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.15)', fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: '#818cf8' }] },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false }, tooltip: { callbacks: { title: items => series[items[0].dataIndex].date, label: item => fmt(item.parsed.y) } } },
-                scales: {
-                    x: { grid: { display: false }, ticks: { color: '#94a3b8', maxRotation: 0, autoSkip: false, callback: (v, i) => (i === 0 || i === labels.length - 1) ? labels[i] : '' } },
-                    y: { display: false, beginAtZero: true },
-                },
-            },
-        });
+    function momRowHtml(m) {
+        if (m.status === 'new') {
+            return `<div class="mom-row new">
+                <div class="mom-name" title="${m.branch_name}">${m.branch_name}</div>
+                <div class="mom-pct new">חדש</div>
+                <div class="mom-vals">${fmtK(m.this_total)}</div></div>`;
+        }
+        if (m.status === 'missing') {
+            return `<div class="mom-row missing">
+                <div class="mom-name" title="${m.branch_name}">${m.branch_name}</div>
+                <div class="mom-pct flat">חסר החודש</div>
+                <div class="mom-vals">${fmtK(m.last_total)}→₪0k</div></div>`;
+        }
+        const arrow = m.status === 'up' ? '▲' : (m.status === 'down' ? '▼' : '■');
+        const sign = m.pct > 0 ? '+' : '';
+        return `<div class="mom-row ${m.status}">
+            <div class="mom-name" title="${m.branch_name}">${m.branch_name}</div>
+            <div class="mom-pct ${m.status}">${arrow} ${sign}${m.pct.toLocaleString('he-IL', { maximumFractionDigits: 1 })}%</div>
+            <div class="mom-vals">${fmtK(m.last_total)}→${fmtK(m.this_total)}</div></div>`;
+    }
+
+    function momentumHtml(mom) {
+        if (!mom || !mom.length) {
+            return `<div class="nr-mom"><h2>מגמת סניפים — מול החודש הקודם</h2><div class="nr-empty">אין נתוני השוואה.</div></div>`;
+        }
+        const rows = mom.map(momRowHtml).join('');
+        const up = mom.filter(m => m.status === 'up').length;
+        const down = mom.filter(m => m.status === 'down').length;
+        const flat = mom.filter(m => m.status === 'flat').length;
+        const neu = mom.filter(m => m.status === 'new').length;
+        let foot = `<span class="up">${up} עלו ▲</span> · <span class="down">${down} ירדו ▼</span> · <span class="flat">${flat} ללא שינוי ■</span>`;
+        if (neu) foot += ` · <span class="new">${neu} חדשים</span>`;
+        return `<div class="nr-mom"><h2>מגמת סניפים — מול החודש הקודם</h2>
+            <div class="mom-rows">${rows}</div>
+            <div class="mom-foot">${foot}</div></div>`;
     }
 
     function render(d) {
@@ -180,10 +213,9 @@
                 <div class="nr-metric"><div class="m-label">חודש מתגלגל</div><div class="m-value">${fmt(d.month_to_date_total)}</div><div class="m-sub">${deltaHtml(d.pct_vs_prev_month, 'מהחודש הקודם')}</div></div>
             </div>
             <div class="nr-coverage">${cov}</div>
-            <div class="nr-trend"><h2>מגמת הכנסות הרשת — 14 ימים</h2><div class="nr-trend-wrap"><canvas id="nrTrend"></canvas></div></div>
+            ${momentumHtml(d.momentum || [])}
             <div class="nr-strip"><h2>דירוג סניפים</h2><div class="nr-rows collapsed">${reportedRows}${missingRows}</div>${moreBtn}</div>`;
 
-        renderTrend(d.series_14d || []);
         const moreEl = document.getElementById('nrMore');
         if (moreEl) moreEl.addEventListener('click', () => { body.querySelector('.nr-rows').classList.remove('collapsed'); moreEl.remove(); });
     }
