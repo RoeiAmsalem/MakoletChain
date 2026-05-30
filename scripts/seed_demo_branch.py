@@ -68,12 +68,34 @@ DEMO_MONTHS = ('2026-04', '2026-05')  # months we populate
 PENDING_MONTH = '2026-05'            # month the /employees pending UI defaults to
 RANGE_START = date(2026, 4, 1)
 RANGE_END = date(2026, 5, 29)        # day before "today" (2026-05-30) so it looks live
+GOODS_TARGET_TOTAL = 250000          # exact goods_documents sum for branch 9999
 
 RNG = random.Random(DEMO_BRANCH_ID)   # fixed seed -> reproducible re-runs
 
 
 def cols(conn, table):
     return [r[1] for r in conn.execute(f'PRAGMA table_info({table})').fetchall()]
+
+
+def scale_amounts_to_total(amounts, doc_types, target, step=10):
+    """Scale `amounts` proportionally to sum to EXACTLY `target`, preserving the
+    relative spread (and sign of credit notes). Each scaled amount is rounded to
+    the nearest `step`; the leftover rounding remainder is absorbed into the
+    single largest invoice (doc_type==3, falling back to the largest amount) so
+    the total lands on `target` exactly. Shared by the seed and the in-place
+    goods-adjust script so a rebuild reproduces the live numbers.
+    """
+    s = sum(amounts)
+    if s == 0:
+        raise ValueError("cannot scale amounts that sum to 0")
+    factor = target / s
+    scaled = [int(round(a * factor / step)) * step for a in amounts]
+    remainder = target - sum(scaled)
+    invoice_idxs = [i for i, t in enumerate(doc_types) if t == 3]
+    pool = invoice_idxs if invoice_idxs else list(range(len(amounts)))
+    idx = max(pool, key=lambda i: scaled[i])
+    scaled[idx] += remainder
+    return scaled
 
 
 def insert_dict(conn, table, row, table_cols, or_ignore=False):
@@ -136,9 +158,9 @@ def seed_goods(conn):
     gcols = cols(conn, 'goods_documents')
     conn.execute('DELETE FROM goods_documents WHERE branch_id = ?', (DEMO_BRANCH_ID,))
     # ~2 dozen docs spread across Apr+May. doc_type: 3=invoice, 2=delivery, 4=credit.
-    n = 0
+    docs = []
     ref = 1001
-    for i, supplier in enumerate(SUPPLIERS):
+    for supplier in SUPPLIERS:
         # 1–2 docs per supplier
         for _ in range(RNG.choice([1, 1, 2])):
             month = RNG.choice([4, 5])
@@ -149,15 +171,23 @@ def seed_goods(conn):
             amount = RNG.randrange(800, 9000, 10)
             if doc_type == 4:            # credit note — negative
                 amount = -RNG.randrange(150, 1200, 10)
-            insert_dict(conn, 'goods_documents', {
-                'branch_id': DEMO_BRANCH_ID, 'doc_date': doc_date,
-                'supplier': supplier, 'ref_number': f'DEMO-{ref}',
-                'amount': amount, 'doc_type': doc_type,
-            }, gcols)
+            docs.append({'doc_date': doc_date, 'supplier': supplier,
+                         'ref_number': f'DEMO-{ref}', 'amount': amount,
+                         'doc_type': doc_type})
             ref += 1
-            n += 1
-    print(f"[demo] goods_documents: {n} docs across Apr+May (types 3/2/4)")
-    return n
+    # Scale the spread to an exact total, preserving names + invoice/delivery/credit badges.
+    new_amts = scale_amounts_to_total([d['amount'] for d in docs],
+                                      [d['doc_type'] for d in docs],
+                                      GOODS_TARGET_TOTAL)
+    for d, a in zip(docs, new_amts):
+        insert_dict(conn, 'goods_documents', {
+            'branch_id': DEMO_BRANCH_ID, 'doc_date': d['doc_date'],
+            'supplier': d['supplier'], 'ref_number': d['ref_number'],
+            'amount': a, 'doc_type': d['doc_type'],
+        }, gcols)
+    print(f"[demo] goods_documents: {len(docs)} docs across Apr+May (types 3/2/4), "
+          f"scaled to exactly ₪{sum(new_amts):,.0f}")
+    return len(docs)
 
 
 def seed_employee_hours(conn):
