@@ -43,6 +43,10 @@
     .add-branch-wrap button:disabled { opacity:0.4; cursor:not-allowed; }
     .info-note { font-size:0.75rem; color:var(--text-muted); margin-top:0.4rem; }
     .all-assigned { font-size:0.78rem; color:var(--text-muted); padding:0.25rem 0.6rem; }
+    .users-filter { display:flex; align-items:center; gap:0.6rem; margin-bottom:0.9rem; }
+    .show-inactive-label { display:inline-flex; align-items:center; gap:0.45rem; font-size:0.85rem; color:var(--text-secondary); cursor:pointer; user-select:none; }
+    .show-inactive-label input { width:16px; height:16px; cursor:pointer; accent-color:var(--accent); }
+    .inactive-count-hint { font-size:0.78rem; color:var(--text-muted); }
     .loading { text-align:center; padding:3rem; color:var(--text-muted); }
     @media (max-width: 768px) {
         .admin-container { padding:0.75rem; }
@@ -84,6 +88,14 @@
         <div class="info-note">מנכ"ל רואה את כל הסניפים אוטומטית. מנהל סניף — שיוך ידני בכרטיס.</div>
     </div>
 
+    <div class="users-filter">
+        <label class="show-inactive-label">
+            <input type="checkbox" id="show-inactive" onchange="toggleShowInactive(this.checked)">
+            הצג מושבתים
+        </label>
+        <span id="inactive-count" class="inactive-count-hint"></span>
+    </div>
+
     <div id="users-container">
         <div class="loading">טוען...</div>
     </div>
@@ -95,6 +107,12 @@
 let ALL_USERS = [];
 let ALL_BRANCHES = [];
 const CURRENT_USER_ID = {{ current_user_id | tojson }};
+let SHOW_INACTIVE = false;
+
+function toggleShowInactive(checked) {
+    SHOW_INACTIVE = checked;
+    render();
+}
 
 async function loadData() {
     const [usersRes, branchesRes] = await Promise.all([
@@ -112,11 +130,15 @@ async function loadData() {
 
 function render() {
     const container = document.getElementById('users-container');
-    if (!ALL_USERS.length) {
-        container.innerHTML = '<div class="loading">אין משתמשים</div>';
+    const visible = SHOW_INACTIVE ? ALL_USERS : ALL_USERS.filter(u => u.active);
+    const hiddenCount = ALL_USERS.filter(u => !u.active).length;
+    const hint = document.getElementById('inactive-count');
+    if (hint) hint.textContent = (hiddenCount && !SHOW_INACTIVE) ? `(${hiddenCount} מושבתים מוסתרים)` : '';
+    if (!visible.length) {
+        container.innerHTML = '<div class="loading">אין משתמשים פעילים</div>';
         return;
     }
-    container.innerHTML = ALL_USERS.map(u => renderCard(u)).join('');
+    container.innerHTML = visible.map(u => renderCard(u)).join('');
 }
 
 function renderCard(u) {
