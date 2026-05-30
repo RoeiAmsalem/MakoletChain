@@ -88,14 +88,16 @@ def notify(title: str, message: str, critical: bool = False, dedup_key: str = No
     _send(title, message)
 
 
-def batch_start(label: str, total: int = None):
+def batch_start(label: str, total: int = None, verb: str = "failed"):
     """Begin buffering routine notify() calls for an end-of-run digest.
 
     label: short run name shown in the digest ("Z run", "Nightly sync", ...).
     total: optional branch count, used to detect whole-run-fail at flush.
+    verb:  digest count wording — "failed" for hard failures (default), or e.g.
+           "flagged" for warning-only runs (health checks) that never escalate.
     """
     global _batch
-    _batch = {'label': label, 'total': total, 'failures': []}
+    _batch = {'label': label, 'total': total, 'verb': verb, 'failures': []}
 
 
 def batch_flush(failed: int = None):
@@ -116,6 +118,7 @@ def batch_flush(failed: int = None):
         return
     label = _batch['label']
     total = _batch['total']
+    verb = _batch.get('verb', 'failed')
     # Dedup identical buffered alerts (retries within a run), preserve order.
     seen = set()
     failures = []
@@ -140,5 +143,5 @@ def batch_flush(failed: int = None):
               f"All {total} branches failed.\n{body}")
     else:
         n = len(failures)
-        count = f"{n} branch{'es' if n != 1 else ''} failed"
+        count = f"{n} branch{'es' if n != 1 else ''} {verb}"
         _send(f"⚠️ {label}: {count}", body)
