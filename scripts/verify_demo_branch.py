@@ -65,8 +65,9 @@ for path in ['/ops', '/admin/users', '/admin/branches']:
 
 # Demo headline numbers (real prod schema -> salary query runs)
 summ = c.get(f'/api/summary?month=2026-05&branch_id={DEMO_ID}').get_json() or {}
-print(f"\n[demo numbers] /api/summary 2026-05: revenue={summ.get('revenue')} "
-      f"expenses={summ.get('expenses')} salary={summ.get('salary')}")
+print(f"\n[demo numbers] /api/summary 2026-05: income={summ.get('income')} "
+      f"goods={summ.get('goods')} fixed={summ.get('fixed')} "
+      f"salary={summ.get('salary')} profit={summ.get('profit')}")
 pend = c.get(f'/api/employee-match-pending?month=2026-05&branch_id={DEMO_ID}').get_json() or {}
 print(f"[demo numbers] pending matches: {len(pend.get('pending', []))} "
       f"(employees defined: {len(pend.get('employees', []))})")
