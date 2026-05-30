@@ -301,9 +301,33 @@ def autoseed_chain_branches(conn, chain_branches: list[dict]) -> list[int]:
             (local_id, b['name'], aviv_id))
         if cur.rowcount > 0:
             seeded.append(local_id)
+            _seed_default_franchise_expense(conn, local_id)
     if seeded:
         conn.commit()
     return seeded
+
+
+def _seed_default_franchise_expense(conn, branch_id: int) -> None:
+    """One-time default: seed a זיכיונות (franchise fee) = 5% of revenue row for
+    a newly-created branch's current month. Mirrors migration 017 so branches
+    born here get the same chain-wide default as the existing roster.
+
+    Stored like any "% מהכנסות" expense: expense_type='monthly', pct_value=5,
+    amount=0 (computed live from income). expense_type='monthly' means it then
+    carries forward automatically via _ensure_monthly_expenses(). It's a
+    DEFAULT, not a lock — the branch can edit/remove it and removal sticks.
+
+    INSERT OR IGNORE + UNIQUE(branch_id, month, name) make this idempotent; the
+    id<>9999 guard is a safety net (no branch 9999 exists today).
+    """
+    if branch_id == 9999:
+        return
+    month = datetime.now(IL_TZ).strftime('%Y-%m')
+    conn.execute(
+        "INSERT OR IGNORE INTO fixed_expenses "
+        "(branch_id, month, name, amount, expense_type, pct_value) "
+        "VALUES (?, ?, 'זיכיונות', 0, 'monthly', 5.0)",
+        (branch_id, month))
 
 
 def _refresh(token: str) -> str:
