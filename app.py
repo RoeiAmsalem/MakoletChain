@@ -2134,15 +2134,32 @@ def api_employees_create():
         global_salary = None
 
     db = get_db()
-    db.execute(
-        "INSERT OR IGNORE INTO employees (branch_id, name, role, hourly_rate, salary_type, global_salary) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (branch_id, name, role, hourly_rate, salary_type, global_salary)
-    )
+    # employees has UNIQUE(branch_id, name). A bare INSERT OR IGNORE would
+    # silently no-op on a name collision and still report success — so the new
+    # (e.g. global) employee never gets created and "doesn't appear". Mirror the
+    # pending add-new flow: 409 on an active duplicate, revive an inactive one.
+    existing = db.execute(
+        "SELECT id, active FROM employees WHERE branch_id = ? AND name = ?",
+        (branch_id, name)).fetchone()
+    if existing and existing['active']:
+        return jsonify({'error': f'עובד/ת בשם {name} כבר קיים/ת ופעיל/ה'}), 409
+    if existing:
+        # Revive the soft-deleted row with the new details (incl. salary type).
+        db.execute(
+            "UPDATE employees SET role=?, hourly_rate=?, salary_type=?, global_salary=?, active=1 "
+            "WHERE id=?",
+            (role, hourly_rate, salary_type, global_salary, existing['id']))
+        emp_id = existing['id']
+    else:
+        cur = db.execute(
+            "INSERT INTO employees (branch_id, name, role, hourly_rate, salary_type, global_salary, active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1)",
+            (branch_id, name, role, hourly_rate, salary_type, global_salary))
+        emp_id = cur.lastrowid
     if salary_type == 'hourly' and hourly_rate > 0:
         _recalculate_avg_rate(branch_id, db)
     db.commit()
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'employee_id': emp_id})
 
 
 @app.route('/api/employees/<int:emp_id>', methods=['PUT'])
@@ -2399,11 +2416,21 @@ def api_pending_add_new(pending_id):
 
     data = request.get_json()
     name = (data.get('name') or '').strip()
-    hourly_rate = float(data.get('hourly_rate', 0))
     role = (data.get('role') or 'ערב').strip()
+    salary_type = data.get('salary_type', 'hourly')
+    if salary_type not in ('hourly', 'global'):
+        return jsonify({'error': 'invalid salary_type'}), 400
 
-    if not name or hourly_rate <= 0:
-        return jsonify({'error': 'name and hourly_rate required'}), 400
+    if salary_type == 'global':
+        global_salary = float(data.get('global_salary', 0))
+        if not name or global_salary <= 0:
+            return jsonify({'error': 'name and global_salary required'}), 400
+        hourly_rate = 0
+    else:
+        hourly_rate = float(data.get('hourly_rate', 0))
+        global_salary = None
+        if not name or hourly_rate <= 0:
+            return jsonify({'error': 'name and hourly_rate required'}), 400
 
     # Get aviv_employee_id from pending row if available
     aviv_emp_id = None
@@ -2424,19 +2451,21 @@ def api_pending_add_new(pending_id):
         # Reactivate inactive employee with updated details
         new_emp_id = existing['id']
         db.execute(
-            'UPDATE employees SET hourly_rate = ?, role = ?, active = 1, aviv_employee_id = ? '
-            'WHERE id = ?',
-            (hourly_rate, role, aviv_emp_id, new_emp_id))
+            'UPDATE employees SET hourly_rate = ?, role = ?, active = 1, aviv_employee_id = ?, '
+            'salary_type = ?, global_salary = ? WHERE id = ?',
+            (hourly_rate, role, aviv_emp_id, salary_type, global_salary, new_emp_id))
     else:
         cur = db.execute(
-            'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id) '
-            'VALUES (?, ?, ?, ?, 1, ?)',
-            (branch_id, name, hourly_rate, role, aviv_emp_id))
+            'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id, '
+            'salary_type, global_salary) VALUES (?, ?, ?, ?, 1, ?, ?, ?)',
+            (branch_id, name, hourly_rate, role, aviv_emp_id, salary_type, global_salary))
         new_emp_id = cur.lastrowid
 
     # Promote hours from EVERY unresolved pending row that shares the same
     # (branch_id, csv_name, source) — this covers the case where the same
-    # person has rows for both current and previous month.
+    # person has rows for both current and previous month. For a GLOBAL
+    # employee, hours are irrelevant to cost: we still resolve the pending rows
+    # (clear the banner) but write no employee_hours row.
     source = 'aviv_api'
     try:
         source = row['source'] or 'csv'
@@ -2458,12 +2487,13 @@ def api_pending_add_new(pending_id):
         sib_hours = float(sib['hours'] or 0)
         sib_month = sib['month']
         sib_id = sib['id']
-        sib_salary = round(sib_hours * hourly_rate, 2)
-        db.execute(
-            "INSERT OR REPLACE INTO employee_hours "
-            "(branch_id, month, employee_name, total_hours, total_salary, source) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (branch_id, sib_month, name, sib_hours, sib_salary, source))
+        if salary_type == 'hourly':
+            sib_salary = round(sib_hours * hourly_rate, 2)
+            db.execute(
+                "INSERT OR REPLACE INTO employee_hours "
+                "(branch_id, month, employee_name, total_hours, total_salary, source) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (branch_id, sib_month, name, sib_hours, sib_salary, source))
         db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (sib_id,))
         promoted_months.append(sib_month)
         total_promoted_hours += sib_hours
