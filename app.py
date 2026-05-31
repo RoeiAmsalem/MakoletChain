@@ -1971,13 +1971,15 @@ def api_employees_list():
     # Clean display names and match employees to hours data
     for emp in employees:
         emp['name'] = _clean_display_name(emp['name'], branch_name)
-        if emp['salary_type'] == 'global':
-            # Global employees: flat monthly cost, hours ignored entirely.
-            emp['hours'] = 0
-            emp['salary'] = emp['global_salary'] or 0
-            emp['hours_source'] = 'global'
-            continue
         matched = _match_employee_hours(emp['name'], hours_map, branch_name)
+        if emp['salary_type'] == 'global':
+            # Global employees ARE matched and their hours are shown (FYI), but
+            # their COST stays the flat global_salary — hours never costed.
+            # (_calculate_salary_cost excludes globals from hours×rate.)
+            emp['hours'] = matched['total_hours'] if matched else 0
+            emp['hours_source'] = matched.get('source', 'none') if matched else 'none'
+            emp['salary'] = emp['global_salary'] or 0
+            continue
         if matched:
             emp['hours'] = matched['total_hours']
             emp['salary'] = matched['total_salary']

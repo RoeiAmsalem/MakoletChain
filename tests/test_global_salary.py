@@ -91,6 +91,33 @@ def _add_hours(db_path, name, hours, rate):
     conn.close()
 
 
+def _get_emp(client, name):
+    res = client.get(f'/api/employees?month={MONTH}')
+    emps = json.loads(res.data)['employees']
+    return next((e for e in emps if e['name'] == name), None)
+
+
+def test_global_matched_hours_shown_but_cost_flat(client):
+    """Global employee with matched Aviv hours: hours DISPLAYED on the card,
+    cost stays the flat amount (hours never costed)."""
+    import app as app_module
+    _login(client)
+    _add_global(client, 'משה מנהל', 10000)
+    # Agent matched hours for this global (rate stored 0, total_salary 0).
+    _add_hours(app_module.DB_PATH, 'משה מנהל', 180, 0)
+
+    emp = _get_emp(client, 'משה מנהל')
+    assert emp is not None
+    assert emp['salary_type'] == 'global'
+    assert emp['hours'] == 180          # hours are displayed
+    assert emp['global_salary'] == 10000
+    assert _salary(client) == 10000     # but cost stays flat
+
+    # Pile on more hours — cost is unchanged.
+    res = json.loads(client.get(f'/api/employees?month={MONTH}').data)
+    assert res['salary_cost'] == 10000
+
+
 def test_global_employee_adds_flat_amount(client):
     _login(client)
     assert _salary(client) == 0
