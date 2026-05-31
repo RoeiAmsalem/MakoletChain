@@ -106,8 +106,19 @@
                 </div>
             </div>
             <div class="form-group">
+                <label>סוג שכר</label>
+                <div class="role-toggle">
+                    <label><input type="radio" name="emp-salary-type" value="hourly" checked onchange="onSalaryTypeChange()"><span>שכר שעתי</span></label>
+                    <label><input type="radio" name="emp-salary-type" value="global" onchange="onSalaryTypeChange()"><span>משכורת גלובלית</span></label>
+                </div>
+            </div>
+            <div class="form-group" id="emp-rate-group">
                 <label>תעריף שעתי (₪)</label>
                 <input type="number" id="emp-rate" placeholder="0" min="0" step="0.5">
+            </div>
+            <div class="form-group" id="emp-global-group" style="display:none;">
+                <label>משכורת חודשית (₪)</label>
+                <input type="number" id="emp-global" placeholder="0" min="0" step="100">
             </div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal()">ביטול</button>
