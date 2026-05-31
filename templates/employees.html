@@ -306,8 +306,19 @@
                 </div>
             </div>
             <div class="form-group">
+                <label>סוג שכר</label>
+                <div class="role-toggle">
+                    <label><input type="radio" name="emp-salary-type" value="hourly" checked onchange="onSalaryTypeChange()"><span>שכר שעתי</span></label>
+                    <label><input type="radio" name="emp-salary-type" value="global" onchange="onSalaryTypeChange()"><span>משכורת גלובלית</span></label>
+                </div>
+            </div>
+            <div class="form-group" id="emp-rate-group">
                 <label>תעריף שעתי (₪)</label>
                 <input type="number" id="emp-rate" placeholder="0" min="0" step="0.5">
+            </div>
+            <div class="form-group" id="emp-global-group" style="display:none;">
+                <label>משכורת חודשית (₪)</label>
+                <input type="number" id="emp-global" placeholder="0" min="0" step="100">
             </div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal()">ביטול</button>
@@ -633,11 +644,21 @@ function renderCards(employees, csvProcessed) {
     let html = '';
 
     employees.forEach(emp => {
-        const noRate = !emp.hourly_rate || emp.hourly_rate <= 0;
+        const isGlobal = emp.salary_type === 'global';
+        const noRate = !isGlobal && (!emp.hourly_rate || emp.hourly_rate <= 0);
         const initials = getInitials(emp.name);
         const roleCls = getRoleBadgeClass(emp.role);
         const hasHours = emp.hours > 0;
         const salary = emp.salary > 0 ? formatMoney(emp.salary) : (hasHours && emp.hourly_rate > 0 ? formatMoney(emp.hours * emp.hourly_rate) : '—');
+
+        const statsHtml = isGlobal
+            ? `<div>משכורת גלובלית <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">גלובלי</span></div>
+               <div class="emp-card-rate">${formatMoney(emp.global_salary || 0)}/חודש</div>`
+            : `<div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'לא דווחו שעות באביב — בדוק שהעובד מופיע באביב POS'}
+                ${hasHours && (emp.hours_source === 'aviv_api' || emp.hours_source === 'aviv_report') ? ' <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">API</span>' : ''}
+                </div>
+                <div class="emp-card-rate">${emp.hourly_rate > 0 ? '₪' + Number(emp.hourly_rate.toFixed(2)) + '/שעה' : '<span style="color:#f59e0b">לא הוגדר תעריף</span>'}</div>
+                ${hasHours && salary !== '—' ? `<div>שכר: ${salary}</div>` : ''}`;
 
         html += `<div class="emp-card${noRate ? ' no-rate' : ''}">
             <div class="emp-card-top">
@@ -648,11 +669,7 @@ function renderCards(employees, csvProcessed) {
                 </div>
             </div>
             <div class="emp-card-stats">
-                <div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'לא דווחו שעות באביב — בדוק שהעובד מופיע באביב POS'}
-                ${hasHours && (emp.hours_source === 'aviv_api' || emp.hours_source === 'aviv_report') ? ' <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">API</span>' : ''}
-                </div>
-                <div class="emp-card-rate">${emp.hourly_rate > 0 ? '₪' + Number(emp.hourly_rate.toFixed(2)) + '/שעה' : '<span style="color:#f59e0b">לא הוגדר תעריף</span>'}</div>
-                ${hasHours && salary !== '—' ? `<div>שכר: ${salary}</div>` : ''}
+                ${statsHtml}
             </div>
             <div class="emp-card-actions">
                 <button class="btn-sm" onclick="openEdit(${emp.id})">ערוך</button>
@@ -736,12 +753,26 @@ async function loadEmployees() {
     }
 }
 
+function onSalaryTypeChange() {
+    const type = document.querySelector('input[name="emp-salary-type"]:checked')?.value || 'hourly';
+    document.getElementById('emp-rate-group').style.display = type === 'global' ? 'none' : '';
+    document.getElementById('emp-global-group').style.display = type === 'global' ? '' : 'none';
+}
+
+function setSalaryType(type) {
+    const radio = document.querySelector(`input[name="emp-salary-type"][value="${type || 'hourly'}"]`);
+    if (radio) radio.checked = true;
+    onSalaryTypeChange();
+}
+
 function openAdd() {
     document.getElementById('modal-title').textContent = 'הוסף עובד';
     document.getElementById('edit-id').value = '';
     document.getElementById('emp-name').value = '';
     document.getElementById('emp-rate').value = '';
+    document.getElementById('emp-global').value = '';
     document.querySelector('input[name="emp-role"][value="ערב"]').checked = true;
+    setSalaryType('hourly');
     document.getElementById('emp-modal').classList.add('open');
     document.getElementById('emp-name').focus();
 }
@@ -753,8 +784,10 @@ function openEdit(id) {
     document.getElementById('edit-id').value = id;
     document.getElementById('emp-name').value = emp.name;
     document.getElementById('emp-rate').value = emp.hourly_rate || '';
+    document.getElementById('emp-global').value = emp.global_salary || '';
     const roleRadio = document.querySelector(`input[name="emp-role"][value="${emp.role || 'ערב'}"]`);
     if (roleRadio) roleRadio.checked = true;
+    setSalaryType(emp.salary_type || 'hourly');
     document.getElementById('emp-modal').classList.add('open');
 }
 
@@ -766,9 +799,12 @@ async function saveEmployee() {
     const editId = document.getElementById('edit-id').value;
     const name = document.getElementById('emp-name').value.trim();
     const role = document.querySelector('input[name="emp-role"]:checked')?.value || 'ערב';
+    const salary_type = document.querySelector('input[name="emp-salary-type"]:checked')?.value || 'hourly';
     const hourly_rate = parseFloat(document.getElementById('emp-rate').value) || 0;
+    const global_salary = parseFloat(document.getElementById('emp-global').value) || 0;
 
     if (!name) { showToast('נא למלא שם עובד', 'error'); return; }
+    if (salary_type === 'global' && global_salary <= 0) { showToast('נא להזין משכורת חודשית', 'error'); return; }
 
     try {
         let url, method;
@@ -779,10 +815,13 @@ async function saveEmployee() {
             url = '/api/employees';
             method = 'POST';
         }
+        const body = salary_type === 'global'
+            ? { name, role, salary_type, global_salary }
+            : { name, role, salary_type, hourly_rate };
         const res = await fetch(url, {
             method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, role, hourly_rate })
+            body: JSON.stringify(body)
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'שגיאה');

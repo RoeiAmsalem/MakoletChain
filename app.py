@@ -110,6 +110,8 @@ def _migrate_add_columns(conn):
         ('live_sales', 'running_total', 'REAL DEFAULT 0'),
         ('live_sales', 'running_count', 'INTEGER DEFAULT 0'),
         ('employees', 'aviv_employee_id', 'INTEGER'),
+        ('employees', 'salary_type', "TEXT DEFAULT 'hourly'"),
+        ('employees', 'global_salary', 'REAL'),
         ('employee_match_pending', 'aviv_employee_id', 'INTEGER'),
         ('employee_match_pending', 'source', "TEXT DEFAULT 'csv'"),
         ('employee_match_pending', 'is_new_employee', 'INTEGER DEFAULT 0'),
@@ -887,7 +889,9 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
 
     Current month: ONLY source='aviv_api' rows count.
     Past months: all sources count.
-    Salary = SUM(employee_hours.total_hours × employees.hourly_rate) for the month.
+    Hourly:  SUM(employee_hours.total_hours × employees.hourly_rate).
+    Global:  + SUM(employees.global_salary) for active salary_type='global'
+             employees — a FLAT monthly amount, hours ignored, no proration.
 
     Returns {'amount', 'source', 'hours', 'label'}
     """
@@ -895,6 +899,10 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
 
     # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
     # UPDATED 2026-05-09: Include 'aviv_report' source (new employer-report agent).
+    # UPDATED 2026-05-31: Exclude salary_type='global' employees — their cost is
+    #   a flat amount added below, never hours×rate. Excluding them here also
+    #   prevents Aviv hours for a global employee from double-counting via the
+    #   rate=0 → total_salary fallback.
     # Only include hours for ACTIVE employees (inactive employees excluded from salary).
     rows = db.execute('''
         SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
@@ -905,9 +913,19 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         )
         WHERE eh.branch_id = ? AND eh.month = ?
           AND eh.source IN ('aviv_api', 'aviv_report')
+          AND COALESCE(e.salary_type, 'hourly') != 'global'
     ''', (branch_id, current_month)).fetchall()
 
-    if not rows:
+    # Global employees: flat monthly amount, regardless of hours.
+    grow = db.execute('''
+        SELECT COALESCE(SUM(global_salary), 0) AS g, COUNT(*) AS c
+        FROM employees
+        WHERE branch_id = ? AND active = 1 AND salary_type = 'global'
+    ''', (branch_id,)).fetchone()
+    global_total = grow['g'] or 0
+    global_count = grow['c'] or 0
+
+    if not rows and global_count == 0:
         return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
 
     total_salary = 0
@@ -921,6 +939,8 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         total_hours += hours
         sources.add(r['source'] or 'unknown')
 
+    total_salary += global_total
+
     # Determine source label
     has_api = ('aviv_api' in sources) or ('aviv_report' in sources)
     has_csv = 'csv' in sources
@@ -930,6 +950,8 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         source = 'csv'
     elif has_api:
         source = 'api'
+    elif global_count > 0:
+        source = 'global'
     else:
         source = 'unknown'
 
@@ -1918,7 +1940,8 @@ def api_employees_list():
 
     # All active employees from employees table
     emp_rows = db.execute(
-        "SELECT id, name, role, hourly_rate FROM employees "
+        "SELECT id, name, role, hourly_rate, "
+        "COALESCE(salary_type, 'hourly') AS salary_type, global_salary FROM employees "
         "WHERE branch_id = ? AND active = 1 ORDER BY name",
         (branch_id,)
     ).fetchall()
@@ -1948,6 +1971,12 @@ def api_employees_list():
     # Clean display names and match employees to hours data
     for emp in employees:
         emp['name'] = _clean_display_name(emp['name'], branch_name)
+        if emp['salary_type'] == 'global':
+            # Global employees: flat monthly cost, hours ignored entirely.
+            emp['hours'] = 0
+            emp['salary'] = emp['global_salary'] or 0
+            emp['hours_source'] = 'global'
+            continue
         matched = _match_employee_hours(emp['name'], hours_map, branch_name)
         if matched:
             emp['hours'] = matched['total_hours']
@@ -1982,17 +2011,13 @@ def api_employees_list():
         y, m2 = start_y, start_m
         while (y, m2) <= (end_y, end_m):
             m_str = f'{y:04d}-{m2:02d}'
-            # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
-            # UPDATED 2026-05-09: Include 'aviv_report' rows alongside 'aviv_api'.
-            h_row = db.execute(
-                "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-                "COUNT(*) as cnt FROM employee_hours "
-                "WHERE branch_id = ? AND month = ? AND source IN ('aviv_api', 'aviv_report')",
-                (branch_id, m_str)
-            ).fetchone()
-            h_hours = h_row['hours']
-            h_salary = h_row['salary']
-            h_source = 'api' if h_row['cnt'] > 0 else 'none'
+            # Route per-month salary through the single source of truth so the
+            # history table can never diverge from the KPI/P&L — and so global
+            # employees' flat amounts are included here too (commit 2026-05-31).
+            h_sal = _calculate_salary_cost(branch_id, m_str)
+            h_hours = h_sal['hours']
+            h_salary = h_sal['amount']
+            h_source = 'api' if h_sal['source'] != 'none' else 'none'
             h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
             history.append({
                 'month': m_str, 'hours': h_hours, 'salary': h_salary,
@@ -2091,17 +2116,30 @@ def api_employees_create():
     branch_id = get_branch_id()
     name = data.get('name', '').strip()
     role = data.get('role', 'ערב')
-    hourly_rate = float(data.get('hourly_rate', 0))
+    salary_type = data.get('salary_type', 'hourly')
+    if salary_type not in ('hourly', 'global'):
+        return jsonify({'error': 'invalid salary_type'}), 400
     if not name:
         return jsonify({'error': 'name required'}), 400
-    if hourly_rate < 0:
-        return jsonify({'error': 'hourly_rate must be non-negative'}), 400
+
+    if salary_type == 'global':
+        global_salary = float(data.get('global_salary', 0))
+        if global_salary <= 0:
+            return jsonify({'error': 'global_salary must be positive'}), 400
+        hourly_rate = 0
+    else:
+        hourly_rate = float(data.get('hourly_rate', 0))
+        if hourly_rate < 0:
+            return jsonify({'error': 'hourly_rate must be non-negative'}), 400
+        global_salary = None
+
     db = get_db()
     db.execute(
-        "INSERT OR IGNORE INTO employees (branch_id, name, role, hourly_rate) VALUES (?, ?, ?, ?)",
-        (branch_id, name, role, hourly_rate)
+        "INSERT OR IGNORE INTO employees (branch_id, name, role, hourly_rate, salary_type, global_salary) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (branch_id, name, role, hourly_rate, salary_type, global_salary)
     )
-    if hourly_rate > 0:
+    if salary_type == 'hourly' and hourly_rate > 0:
         _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
@@ -2121,12 +2159,27 @@ def api_employees_update(emp_id):
         return jsonify({'error': 'forbidden'}), 403
     name = data.get('name', row['name'])
     role = data.get('role', row['role'])
-    hourly_rate = float(data.get('hourly_rate', row['hourly_rate']))
+    salary_type = data.get('salary_type', row['salary_type'] or 'hourly')
+    if salary_type not in ('hourly', 'global'):
+        return jsonify({'error': 'invalid salary_type'}), 400
+
+    if salary_type == 'global':
+        global_salary = float(data.get('global_salary', row['global_salary'] or 0))
+        if global_salary <= 0:
+            return jsonify({'error': 'global_salary must be positive'}), 400
+        hourly_rate = 0
+    else:
+        hourly_rate = float(data.get('hourly_rate', row['hourly_rate']))
+        if hourly_rate < 0:
+            return jsonify({'error': 'hourly_rate must be non-negative'}), 400
+        global_salary = None
+
     db.execute(
-        "UPDATE employees SET name=?, role=?, hourly_rate=? WHERE id=?",
-        (name, role, hourly_rate, emp_id)
+        "UPDATE employees SET name=?, role=?, hourly_rate=?, salary_type=?, global_salary=? WHERE id=?",
+        (name, role, hourly_rate, salary_type, global_salary, emp_id)
     )
-    _recalculate_avg_rate(branch_id, db)
+    if salary_type == 'hourly':
+        _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
 
