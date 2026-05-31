@@ -80,7 +80,7 @@ CREDENTIAL_COLS = [
 COPY_TABLES = [
     'daily_sales', 'goods_documents', 'fixed_expenses',
     'employees', 'employee_hours', 'employee_match_pending',
-    'z_department_sales',
+    'z_department_sales', 'hourly_sales',
 ]
 
 

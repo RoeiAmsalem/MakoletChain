@@ -356,6 +356,39 @@ def seed_departments(conn):
     return n
 
 
+# Hand-placed sales-by-hour shape for the demo (reads via /api/sales-by-hour →
+# hourly_sales, keyed branch_id,date,hour). One believable מכולת day: low
+# morning, a midday bump (~12:00), an evening peak (~19:00), tapering to close.
+# (hour, amount, transactions) — sums to ₪4,000 / 199 txns (basket ≈ ₪20), so the
+# day's hourly total matches the static ₪4,000 live tile.
+DEMO_HOURLY = [
+    (7, 100, 5),  (8, 160, 8),  (9, 220, 11), (10, 240, 12),
+    (11, 320, 16), (12, 360, 18), (13, 260, 13), (14, 200, 10),
+    (15, 220, 11), (16, 245, 12), (17, 330, 16), (18, 390, 19),
+    (19, 420, 21), (20, 260, 13), (21, 175, 9),  (22, 100, 5),
+]
+
+
+def seed_hourly_sales(conn):
+    """Hourly sales for the demo's sales-by-hour chart, placed on TODAY so it
+    falls in the current month the chart aggregates (the API filters by month).
+    Idempotent: DELETE 9999's hourly_sales rows then re-insert (PK
+    branch_id,date,hour). Scoped to 9999 only — never touches a real branch."""
+    hcols = cols(conn, 'hourly_sales')
+    conn.execute('DELETE FROM hourly_sales WHERE branch_id = ?', (DEMO_BRANCH_ID,))
+    today = date.today().isoformat()
+    total = 0
+    for hour, amount, txns in DEMO_HOURLY:
+        insert_dict(conn, 'hourly_sales', {
+            'branch_id': DEMO_BRANCH_ID, 'date': today, 'hour': hour,
+            'amount': amount, 'transactions': txns,
+        }, hcols, or_ignore=True)
+        total += amount
+    print(f"[demo] hourly_sales: {len(DEMO_HOURLY)} rows for {today} "
+          f"(₪{total:,.0f}, peak 19:00) — sales-by-hour chart")
+    return len(DEMO_HOURLY)
+
+
 def seed_account(conn):
     ucols = cols(conn, 'users')
     # Create the demo manager iff absent (preserve any password already set).
@@ -423,6 +456,7 @@ def main():
         seed_pending(conn)
         seed_fixed_expenses(conn)
         seed_departments(conn)
+        seed_hourly_sales(conn)
         seed_account(conn)
         copy_zpdf(conn)
         conn.commit()
