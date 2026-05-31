@@ -316,8 +316,11 @@ function renderCards(employees, csvProcessed) {
         const salary = emp.salary > 0 ? formatMoney(emp.salary) : (hasHours && emp.hourly_rate > 0 ? formatMoney(emp.hours * emp.hourly_rate) : '—');
 
         const statsHtml = isGlobal
-            ? `<div>משכורת גלובלית <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">גלובלי</span></div>
-               <div class="emp-card-rate">${formatMoney(emp.global_salary || 0)}/חודש</div>`
+            ? `<div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'לא דווחו שעות באביב'}
+               ${hasHours && (emp.hours_source === 'aviv_api' || emp.hours_source === 'aviv_report') ? ' <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">API</span>' : ''}
+               </div>
+               <div class="emp-card-rate">${formatMoney(emp.global_salary || 0)}/חודש <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">גלובלי קבוע</span></div>
+               <div style="font-size:0.7rem;color:var(--text-muted)">שכר חודשי קבוע — אינו תלוי בשעות</div>`
             : `<div>${hasHours ? emp.hours.toFixed(1) + ' שעות החודש' : 'לא דווחו שעות באביב — בדוק שהעובד מופיע באביב POS'}
                 ${hasHours && (emp.hours_source === 'aviv_api' || emp.hours_source === 'aviv_report') ? ' <span class="status-badge badge-api" style="font-size:0.65rem;padding:0.1rem 0.35rem">API</span>' : ''}
                 </div>
