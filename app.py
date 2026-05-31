@@ -54,6 +54,12 @@ VALID_ROLES = ('admin', 'ceo', 'manager')
 ROLES_ALL_BRANCHES = ('admin', 'ceo')
 ROLES_NOT_TRACKED = ('admin', 'ceo')
 
+# Demo-only branches: visible to admin (sees everything) and to the scoped demo
+# account, and to NO ONE else — not CEO, not other managers, not any
+# aggregate/network view. Centralized here; apply via _demo_exclusion_sql().
+DEMO_BRANCH_IDS = (9999, 9998)
+DEMO_ACCOUNT_EMAIL = 'demo-store@makoletchain.com'
+
 
 def _should_track(role):
     """Single source of truth for analytics exclusion. Admin and CEO are
@@ -324,6 +330,7 @@ def login():
         session['user_id'] = user['id']
         session['user_name'] = user['name']
         session['user_role'] = user['role']
+        session['user_email'] = (user['email'] or '').strip().lower()
 
         # Get user's branches
         branches = db.execute(
@@ -534,24 +541,50 @@ def _branch_name(branch_id):
 BRANCH_PALETTE = ['#378ADD', '#1D9E75', '#D85A30', '#7F77DD', '#E0A82E', '#888780']
 
 
+def _can_view_demo_branches():
+    """Demo branches (DEMO_BRANCH_IDS) are visible ONLY to admin (who sees
+    everything) and to the scoped demo account. Everyone else — every CEO
+    account, every aggregate/network view, every other manager — must never
+    see them. Reads the current session, so call inside a request."""
+    if session.get('user_role') == 'admin':
+        return True
+    return (session.get('user_email') or '').strip().lower() == DEMO_ACCOUNT_EMAIL
+
+
+def _demo_exclusion_sql(column='id'):
+    """SQL fragment that hides demo branches from users who may not see them.
+
+    Returns '' for admin and the demo account (no filter); otherwise
+    ' AND <column> NOT IN (9999,9998)'. Designed to be appended after an
+    existing WHERE clause so every branch list/aggregate stays consistent."""
+    if _can_view_demo_branches():
+        return ''
+    ids = ','.join(str(i) for i in DEMO_BRANCH_IDS)
+    return f' AND {column} NOT IN ({ids})'
+
+
 def _list_visible_branches(user_id, role):
     """Return [{id, name}, ...] of active branches the user can see.
 
-    admin / ceo → every active branch.
-    manager     → only branches listed in user_branches.
+    admin       → every active branch (incl. demo).
+    ceo         → every active branch EXCEPT demo (DEMO_BRANCH_IDS).
+    manager     → only branches listed in user_branches (demo excluded unless
+                  this is the scoped demo account).
 
     Sorted by branch id so colors assigned later are stable.
     """
     db = get_db()
     if role in ROLES_ALL_BRANCHES:
         rows = db.execute(
-            "SELECT id, name FROM branches WHERE active = 1 ORDER BY id"
+            "SELECT id, name FROM branches WHERE active = 1"
+            + _demo_exclusion_sql() + " ORDER BY id"
         ).fetchall()
         return [dict(r) for r in rows]
     rows = db.execute(
         "SELECT b.id, b.name FROM branches b "
         "JOIN user_branches ub ON ub.branch_id = b.id "
-        "WHERE b.active = 1 AND ub.user_id = ? ORDER BY b.id",
+        "WHERE b.active = 1 AND ub.user_id = ?"
+        + _demo_exclusion_sql('b.id') + " ORDER BY b.id",
         (user_id,)
     ).fetchall()
     return [dict(r) for r in rows]
@@ -989,15 +1022,20 @@ def api_branches():
     db = get_db()
     role = session.get('user_role')
     if role in ROLES_ALL_BRANCHES:
-        # admin/ceo: every branch, no user_branches rows needed
-        rows = db.execute('SELECT id, name, city, active FROM branches ORDER BY id').fetchall()
+        # admin/ceo: every branch, no user_branches rows needed (demo hidden
+        # from ceo via _demo_exclusion_sql; admin sees it)
+        rows = db.execute(
+            'SELECT id, name, city, active FROM branches WHERE 1=1'
+            + _demo_exclusion_sql() + ' ORDER BY id'
+        ).fetchall()
     else:
         user_branches = session.get('user_branches', [])
         if not user_branches:
             return jsonify([])
         placeholders = ','.join('?' * len(user_branches))
         rows = db.execute(
-            f'SELECT id, name, city, active FROM branches WHERE id IN ({placeholders}) ORDER BY id',
+            f'SELECT id, name, city, active FROM branches WHERE id IN ({placeholders})'
+            + _demo_exclusion_sql() + ' ORDER BY id',
             user_branches
         ).fetchall()
     return jsonify([dict(r) for r in rows])
