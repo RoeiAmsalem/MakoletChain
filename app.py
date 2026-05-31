@@ -2544,10 +2544,17 @@ def api_employees_list():
             m_str = f'{y:04d}-{m2:02d}'
             # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
             # UPDATED 2026-05-09: Include 'aviv_report' rows alongside 'aviv_api'.
+            # JOIN active=1 to match _calculate_salary_cost exactly, so the
+            # history table can never diverge from the KPI/P&L if an orphaned
+            # employee_hours row ever slips through (defense-in-depth).
             h_row = db.execute(
-                "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
-                "COUNT(*) as cnt FROM employee_hours "
-                "WHERE branch_id = ? AND month = ? AND source IN ('aviv_api', 'aviv_report')",
+                "SELECT COALESCE(SUM(eh.total_hours), 0) as hours, "
+                "COALESCE(SUM(eh.total_salary), 0) as salary, COUNT(*) as cnt "
+                "FROM employee_hours eh "
+                "JOIN employees e ON (e.branch_id = eh.branch_id "
+                "AND e.name = eh.employee_name AND e.active = 1) "
+                "WHERE eh.branch_id = ? AND eh.month = ? "
+                "AND eh.source IN ('aviv_api', 'aviv_report')",
                 (branch_id, m_str)
             ).fetchone()
             h_hours = h_row['hours']
@@ -2725,6 +2732,20 @@ def api_employees_delete(emp_id):
 
     # Cascade-delete aliases
     db.execute('DELETE FROM employee_aliases WHERE employee_id = ?', (emp_id,))
+
+    # Delete this employee's hours rows. The aviv_employees_report agent only
+    # ever writes employee_hours for ACTIVE employees and full-deletes/rebuilds
+    # each month, so leaving these behind creates orphaned rows that the
+    # /employees history table (raw SUM, no active filter) would keep counting
+    # while every _calculate_salary_cost reader drops them. Cover the canonical
+    # name + known aliases (employee_hours.employee_name = canonical employees.name).
+    names = list({n for n in alias_names})
+    if names:
+        placeholders = ','.join('?' * len(names))
+        db.execute(
+            f'DELETE FROM employee_hours WHERE branch_id = ? AND employee_name IN ({placeholders})',
+            (branch_id, *names)
+        )
 
     # Soft-delete the employee
     db.execute("UPDATE employees SET active=0 WHERE id=?", (emp_id,))
