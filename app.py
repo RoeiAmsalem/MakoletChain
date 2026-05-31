@@ -4143,20 +4143,31 @@ def api_admin_branch_create():
 
     manager_email = (data.get('manager_email') or '').strip().lower()
     manager_name = (data.get('manager_name') or '').strip()
+    manager_password = (data.get('manager_password') or '').strip()
     if manager_email and manager_name:
-        temp_password = secrets.token_urlsafe(8)
-        pw_hash = generate_password_hash(temp_password)
-        db.execute(
-            "INSERT OR IGNORE INTO users (name, email, password_hash, role) VALUES (?,?,?,'manager')",
-            (manager_name, manager_email, pw_hash))
-        db.commit()
-        user_row = db.execute('SELECT id FROM users WHERE LOWER(email)=?',
+        # Admin types the password (same rule as /admin/users).
+        if len(manager_password) < 6:
+            return jsonify({'error': 'סיסמה למנהל חייבת להכיל לפחות 6 תווים'}), 400
+
+        existing = db.execute('SELECT id FROM users WHERE LOWER(email)=?',
                               (manager_email,)).fetchone()
-        if user_row:
+        if existing:
+            # Don't overwrite an existing account's password; just link the
+            # branch and tell the admin the account already existed.
             db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
-                       (user_row['id'], branch_id))
+                       (existing['id'], branch_id))
             db.commit()
-        return jsonify({'ok': True, 'branch_id': branch_id, 'temp_password': temp_password})
+            return jsonify({'ok': True, 'branch_id': branch_id,
+                            'manager_existed': True})
+
+        pw_hash = generate_password_hash(manager_password)
+        cur = db.execute(
+            "INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,'manager',1)",
+            (manager_name, manager_email, pw_hash))
+        db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
+                   (cur.lastrowid, branch_id))
+        db.commit()
+        return jsonify({'ok': True, 'branch_id': branch_id, 'manager_created': True})
     return jsonify({'ok': True, 'branch_id': branch_id})
 
 
