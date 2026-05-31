@@ -25,11 +25,11 @@ def cleanup():
         db.commit()
 
 
-def add_hours(name, hours):
+def add_hours(name, hours, salary=0):
     with app.app_context():
         get_db().execute(
             "INSERT OR REPLACE INTO employee_hours (branch_id, month, employee_name, total_hours, total_salary, source) "
-            "VALUES (?, ?, ?, ?, 0, 'aviv_report')", (BID, MONTH, name, hours))
+            "VALUES (?, ?, ?, ?, ?, 'aviv_report')", (BID, MONTH, name, hours, salary))
         get_db().commit()
 
 
@@ -52,7 +52,7 @@ with app.test_client() as c:
                                    'salary_type': 'global', 'global_salary': 10000})
     # also an hourly employee with hours, to confirm they're unaffected
     c.post('/api/employees', json={'name': 'שעתי דנה', 'role': 'ערב', 'hourly_rate': 50})
-    add_hours('שעתי דנה', 100)   # 100 × 50 = 5000
+    add_hours('שעתי דנה', 100, 5000)   # 100 × 50 = 5000
 
     # global with matched hours
     add_hours('גלובל גדי', 180)
