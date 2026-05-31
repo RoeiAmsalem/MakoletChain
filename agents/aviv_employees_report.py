@@ -339,6 +339,11 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
         raw_name = row['raw_name']
         aviv_emp_id = row.get('aviv_employee_id')
         hours = float(row['total_hours'])
+        # Zero-hour names are noise: skip entirely. They get no employee_hours
+        # row and no employee_match_pending entry — they never enter the
+        # pipeline. parse_hh_mm() collapses empty/"0"/"0:00"/invalid all to 0.0.
+        if hours <= 0:
+            continue
         open_shifts_total += int(row.get('open_shift_count', 0))
         total_hours += hours
 
