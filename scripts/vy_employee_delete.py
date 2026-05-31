@@ -44,6 +44,11 @@ def hist_salary():
     return round(r['salary'], 2)
 
 
+def calc_salary():
+    with app.app_context():
+        return _calculate_salary_cost(B, MONTH)['amount']
+
+
 def orphan_hours_count(name):
     c = conn()
     n = c.execute("SELECT COUNT(*) FROM employee_hours WHERE branch_id=? AND employee_name=?",
@@ -80,7 +85,7 @@ run("INSERT INTO employee_hours (branch_id,month,employee_name,total_hours,total
     "VALUES (?,?,?,?,?, 'aviv_report')", (B, MONTH, C, 10.0, 100.0))
 
 # ── BEFORE delete: both readers count test+control = 404.8 ─────────
-before_calc = _calculate_salary_cost(B, MONTH)['amount']
+before_calc = calc_salary()
 before_hist = hist_salary()
 check("BEFORE both readers agree = 404.8",
       abs(before_calc - 404.8) < 0.01 and abs(before_hist - 404.8) < 0.01,
@@ -97,7 +102,7 @@ resp = client.delete(f'/api/employees/{TID}')
 check("DELETE endpoint 200", resp.status_code == 200, f"status={resp.status_code} body={resp.get_data(as_text=True)[:120]}")
 
 # ── AFTER delete ──────────────────────────────────────────────────
-after_calc = _calculate_salary_cost(B, MONTH)['amount']
+after_calc = calc_salary()
 after_hist = hist_salary()
 orphans = orphan_hours_count(T)
 
