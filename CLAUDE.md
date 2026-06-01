@@ -110,8 +110,9 @@ Promote staging→prod by merging `dev` → `main` and pushing main, then run
 
 `branches`, `users`, `user_branches`, `daily_sales` (Z-reports),
 `goods_documents` (BilBoy), `fixed_expenses`, `electricity_invoices`,
-`employees`, `employee_hours`, `employee_match_pending`,
-`agent_runs`, `alerts`, `_migrations`, `reset_tokens`.
+`employees`, `employee_hours`, `employee_match_pending`, `employee_shifts`,
+`z_report_902`, `z_department_sales`, `agent_runs`, `alerts`, `_migrations`,
+`reset_tokens`.
 
 ### Key columns
 
@@ -141,8 +142,11 @@ daily_sales:
   branch_id, date, amount, transactions, source (z_report/provisional)
 
 goods_documents:
-  branch_id, ref_number, supplier_id, supplier_name, doc_type, doc_date,
-  amount, month, status
+  id, branch_id, doc_date, supplier, ref_number, amount, doc_type
+  UNIQUE(branch_id, ref_number)
+  -- NOTE: no month/supplier_id/supplier_name/status columns. Month is derived
+  --   as substr(doc_date,1,7). Status filtering happens in bilboy.py at sync
+  --   time (drop 9, keep 7) — it is NOT persisted.
 
 fixed_expenses:
   branch_id, name, amount, expense_type (חודשי/חד פעמי/% מהכנסות),
@@ -163,6 +167,13 @@ employee_hours:
 employee_match_pending:
   -- low-confidence CSV/API name matches awaiting manager review
   -- formalized by migration 006
+
+employee_shifts:                       -- migration 022
+  id, branch_id, month, employee_name, shift_date, start_ts, end_ts,
+  hours, day_of_week, is_open, source (aviv_report), created_at
+  -- per-shift drill-down from report 301; DISPLAY-ONLY, never summed for salary.
+  -- is_open=1 = "אין יציאה" (no clock-out). Full-overwrite per
+  --   (branch_id, month, source), same strategy as employee_hours.
 
 agent_runs:
   id, branch_id, agent, started_at, finished_at, status, docs_count, amount,
@@ -298,7 +309,7 @@ The token NEVER goes into CLAUDE.md, git history, or logs.
 | POST /account/login            | Get token       | aviv_live, aviv_employees, aviv_employees_report, sales-by-hour |
 | POST /account/refresh          | Refresh token   | Before each call                              |
 | POST /dashboard/query          | SQL-like query  | sales-by-hour (deals table)                   |
-| POST /employees/sales?type=all | Per-employee    | aviv_employees agent (DEPRECATED, see below)  |
+| POST /employees/sales?type=all | Per-employee    | aviv_employees agent (REMOVED from schedule)  |
 | GET :65010/raw/status/plain    | Live status     | aviv_live (revenue, hours, cancellations)     |
 
 **Fallback: Playwright headless Chromium → `bi-aviv.web.app/status`**.
@@ -313,33 +324,78 @@ REST API fails, agent falls back. Use `domcontentloaded + wait_for_timeout(3000)
   - `שעות עובדים מתחילת החודש` → monthly authoritative total
   - `שעות עובדים במשמרת` → current shift only
 - Zero detection: amount=0 after non-zero → save provisional Z + brrr alert
-- **Store hours (Israel time)**: Sun–Thu 06:30–23:30, Fri 06:30–19:00, Sat 16:30–23:30
+- **Store hours (Israel time) — live-scrape guard**: Sun–Thu 06:30–**23:00**,
+  Fri 06:30–19:00, Sat 16:30–23:00 (`aviv_live.STORE_SCHEDULE`). NB: the
+  `hours_end_of_day` job runs at 23:30 as a plain cron — it is NOT gated by this
+  guard.
 - **Outside hours: SILENT SKIP** — no DB write, no `agent_runs` entry
 - Alerts after 6 consecutive failures (~30 min) via `_check_consecutive_failures()`;
   recovery alert on first success after 6+ failures.
 
-### `aviv_employees.py` — DEPRECATED (still scheduled at 15:00 + 23:45 IL)
+### `aviv_employees.py` — REMOVED from the schedule (cutover 2026-05-10)
 
-- Per-employee hours via `POST /employees/sales?type=all`
-- `employee_hours.source = 'aviv_api'`
-- **Status**: still running alongside the new `aviv_employees_report.py` until
-  cutover. Will be retired once the report-based agent is verified across all
-  branches.
+- Old per-employee agent (`POST /employees/sales?type=all`, `source='aviv_api'`).
+  Its 15:00 + 23:45 jobs are **commented out** in `scheduler.py` and never run.
+  The file may still sit in `agents/` but is dead — do not re-enable it (it
+  clobbered `aviv_report` rows via the `employee_hours` UNIQUE constraint).
 
-### `aviv_employees_report.py` — NEW employer-report agent (May 9)
+### `aviv_employees_report.py` — Employer-report agent (report 301)
 
-- Pulls Aviv employer report (report 301)
-- `employee_hours.source = 'aviv_report'`
-- Schedule:
-  - Sun–Thu 16:00 IL — current month
-  - Sun–Thu 23:30 IL — current + previous month
-  - Fri 20:00 IL    — current month
-  - Sat 23:30 IL    — current + previous month
-- 30s jitter between branches to avoid thundering Aviv
-- Pending name matches go to `employee_match_pending` for manager review;
-  parser strips Aviv ID prefix (e.g. `441 עידן בקון` → `עידן בקון`)
-- Lives alongside `aviv_employees.py` until cutover; both write to
-  `employee_hours` with distinct `source` values
+- Pulls Aviv employer report (report 301), `employee_hours.source = 'aviv_report'`.
+- Auth: **chain account** (`AVIV_EMP_USE_CHAIN=1` on prod) — one login reused
+  across branches; per-branch via `aviv_branch_id`. 30s jitter between branches.
+  Retry 3× / 30s backoff; 401 → re-login. POS offline (404) = silent skip.
+- Schedule: Sun–Thu 16:00 (current month) • Sun–Thu 23:30 (current+prev) •
+  Fri 20:00 (current) • Sat 23:30 (current+prev). See the consolidated table.
+- Pending name matches → `employee_match_pending`; parser strips Aviv ID prefix
+  (`441 עידן בקון` → `עידן בקון`).
+- Alerts: unmatched>0 or open_shifts≥3 → brrr digest; chain-login fail →
+  critical brrr (dedup `aviv_chain_auth`).
+
+#### Shift breakdown + open-shift banner (migration 022)
+
+- `parse_employer_report` also emits **per-shift** rows (date, entry/exit ts,
+  hours, day-of-week, `is_open`) parsed from the existing report-301 columns —
+  no extra Aviv call. Written to `employee_shifts` (full-overwrite per
+  branch+month+source), keyed by the matched canonical name.
+- UI: each `/employees` card has an expandable **פירוט משמרות** list
+  (`/api/employee-shifts`). Open shifts (`אין יציאה` / no clock-out) drive a
+  **red pulse banner** on `/employees` AND home (`/api/open-shifts`).
+- **CRITICAL: shifts are NEVER summed for salary.** The monthly
+  `employee_hours.total_hours` (from the report subtotal row) stays the sole
+  salary input — `_calculate_salary_cost` is untouched. Shifts are drill-down
+  only. The banner respects the per-branch visibility floor (`visible_from`).
+
+#### Monthly reconciliation — `reconcile_previous_month` (10th, 23:00 IL)
+
+- BilBoy-style: on the **10th** only (date-gated; `--force` bypasses), re-pulls
+  the **previous month** for all branches and **silently full-overwrites**
+  `employee_hours` + `employee_shifts` (source=`aviv_report`) so late Aviv
+  corrections self-heal.
+- Compares stored prev-month totals before vs after; if **hours Δ>0.5h or
+  salary Δ>₪10** → logs `CHANGED` + brrr alert ("Hours changed — {branch}").
+  Otherwise logs `OK`. Anomaly alerts suppressed during the re-pull.
+- Dedicated log: `logs/hours_reconciliation.log`.
+- Blast radius: previous month only; does not touch current month, `csv` rows,
+  or other agents.
+
+### `aviv_z_report.py` — Z report 902 (LIVE on prod)
+
+- Reads Aviv **report 902** (העתק Z) PDF + XLS. Chain auth (`AVIV_Z_USE_CHAIN=1`).
+- Writes `z_report_902` (z_number, amount, transactions, avg, payment_breakdown,
+  trigger_type, auth_source; UPSERT on branch+date) and `z_department_sales`
+  (DELETE+INSERT dept breakdown). Saves PDF to `data/pdfs/<branch>/z_<date>.pdf`
+  (shared with the Gmail-Z preview on `/sales`). Records a closed-day sentinel
+  so backfill passes don't re-probe.
+- **`AVIV_Z_TO_DAILY_SALES=1` on prod** → also mirrors the Z total into
+  `daily_sales` (`INSERT OR IGNORE`, source=`z_report`). So `daily_sales` now has
+  two writers: `gmail_agent` (PDF) and `aviv_z_report` (902 mirror).
+- **Trigger is HOST CRONTAB, not APScheduler**: `23:00` full pull +
+  `02:00–09:00 every 30 min --missing-only` backfill
+  (`/opt/makolet-chain/run_z_report_prod.sh`).
+- Failure: Z-list fetch wall-clock budget 240s, capped-linear backoff
+  (5/10/15/20/30s); 401 one-shot re-auth; dept-XLS errors swallowed (never fail
+  the Z row); per-branch isolated.
 
 ### `iec_agent.py` / IEC integration — Electricity invoices
 
@@ -376,22 +432,54 @@ REST API fails, agent falls back. Use `domcontentloaded + wait_for_timeout(3000)
 
 ---
 
-## Scheduler Jobs (`scheduler.py`)
+## Scheduler Jobs (`scheduler.py`) — consolidated daily/monthly rhythm
 
-| Job ID                            | When (IL)                       | What                                  |
-| --------------------------------- | ------------------------------- | ------------------------------------- |
-| `nightly_sync`                    | 02:00                           | BilBoy + Gmail for all active branches |
-| `aviv_early`                      | 06:30–06:55 (every 5 min)       | Aviv live revenue (early window)      |
-| `aviv_live`                       | 07:00–22:55 (every 5 min)       | Aviv live revenue                     |
-| `hours_midday`                    | 16:00                           | Hours estimate (baseline + shift)     |
-| `hours_end_of_day`                | 23:30                           | Hours authoritative total             |
-| `aviv_employees_midday`           | 15:00                           | Per-employee hours via `/employees/sales` (DEPRECATED) |
-| `aviv_employees`                  | 23:45                           | Per-employee hours via `/employees/sales` (DEPRECATED) |
-| `aviv_report_weekday_afternoon`   | Sun–Thu 16:00                   | Employer-report (current month)       |
-| `aviv_report_weekday_night`       | Sun–Thu 23:30                   | Employer-report (current + prev)      |
-| `aviv_report_friday`              | Fri 20:00                       | Employer-report (current month)       |
-| `aviv_report_saturday`            | Sat 23:30                       | Employer-report (current + prev)      |
-| `iec_sync`                        | 06:00                           | IEC electricity invoice sync via VPS  |
+APScheduler (`BlockingScheduler`, tz=Asia/Jerusalem; `misfire_grace_time=120`,
+`coalesce`, `max_instances=1`). On startup: `cleanup_orphaned_runs()` (marks
+`running`>1h as `error`/"orphaned on startup") + one immediate aviv_live pass.
+`get_active_branches()` = `active=1 AND agents_enabled=1` (excludes demo 9999).
+
+| Job id (IL time)                     | When                       | What                                  | Writes? |
+| ------------------------------------ | -------------------------- | ------------------------------------- | ------- |
+| `nightly_sync`                       | 02:00                      | BilBoy goods + Gmail Z, all branches  | ✍️ |
+| `cleanup_user_events_daily`          | 03:00                      | prune `user_events` >90 days          | ✍️ del |
+| `recompute_analytics_cache_daily`    | 03:30                      | rebuild `analytics_cache` aggregates  | ✍️ |
+| `iec_sync`                           | 06:00                      | IEC electricity via Israeli VPS (SSH) | ✍️ |
+| `aviv_early`                         | 06:30–06:55 /5min          | Aviv live revenue (early window)      | ✍️ |
+| `aviv_live`                          | 07:00–22:55 /5min          | Aviv live revenue (chain)             | ✍️ |
+| `hourly_sales_alerts`                | 07:00–22:00 /30min         | hourly_sales data-health alerts       | 🔍 read-only |
+| `hours_midday`                       | 16:00                      | Hours estimate (baseline + shift)     | ✍️ |
+| `aviv_report_weekday_afternoon`      | Sun–Thu 16:00              | Employer-report (current month)       | ✍️ |
+| `aviv_report_friday`                 | Fri 20:00                  | Employer-report (current month)       | ✍️ |
+| `aviv_report_monthly_recon`          | **10th only, 23:00**       | Prev-month reconciliation + alert     | ✍️ |
+| `hours_end_of_day`                   | 23:30                      | Hours authoritative total             | ✍️ |
+| `aviv_report_weekday_night`          | Sun–Thu 23:30              | Employer-report (current + prev)      | ✍️ |
+| `aviv_report_saturday`               | Sat 23:30                  | Employer-report (current + prev)      | ✍️ |
+| **z_report_902** (**host crontab**)  | 23:00 + 02:00–09:00 /30min | Report 902 Z + dept + daily_sales mirror | ✍️ |
+
+The **z_report_902** rows run from the host crontab
+(`run_z_report_prod.sh` full @ 23:00; `--missing-only` backfill every 30 min
+02:00–09:00), NOT from APScheduler. Deprecated `aviv_employees` jobs (15:00,
+23:45) are commented out and do not run.
+
+Heaviest moments: **02:00** (bilboy+gmail ×~18) and **23:00–23:30** (z_report +
+recon-on-10th + hours-eod + employer-report night all overlap).
+
+---
+
+## Data-Flow Map (source → agent → table → page)
+
+| Data | source → agent → table → page |
+| ---- | ----------------------------- |
+| Revenue (live) | Aviv `/raw/status/plain` → `aviv_live` (chain) → `live_sales`+`hourly_sales` → `/` live tile, סל ממוצע, sales-by-hour |
+| Revenue (daily Z) | (a) Gmail PDF → `gmail_agent` → `daily_sales` (z_report); (b) Aviv 902 → `aviv_z_report` → `daily_sales` mirror + `z_report_902` → `/sales`, `/`, P&L |
+| Departments | Aviv 902 XLS → `aviv_z_report` → `z_department_sales` → `/sales` dept tiles, home KPI tiles |
+| Goods | BilBoy API → `bilboy` (chain) → `goods_documents` → `/goods`, P&L |
+| Hours (monthly) | Aviv `/raw/status` → `aviv_live` hours jobs → `branches.hours_*` → `/ops`, home |
+| Hours per-employee + salary | Aviv report 301 → `aviv_employees_report` (chain) → `employee_hours` → `_calculate_salary_cost` → `/`, `/employees`, `/api/history`, `/ops` |
+| Shifts (drill-down + open-shift banner) | Aviv report 301 → `aviv_employees_report` → `employee_shifts` → `/employees` card expand + red banner on `/employees`+`/` |
+| Electricity | IEC API (VPS) → `iec_agent` → `electricity_invoices` → `/`, `/fixed-expenses`, `/api/electricity/history` |
+| Match review | report 301 / CSV → `employee_match_pending` → `/employees` approve/reject UI |
 
 ---
 
@@ -411,8 +499,8 @@ Logic: `Salary = SUM(employee_hours.total_hours × employees.hourly_rate)` for
 the month. No estimation. API is source of truth, CSV is verification.
 
 `employee_hours.source`:
-- `aviv_api`    — daily from `aviv_employees` agent (deprecated path)
-- `aviv_report` — daily from `aviv_employees_report` agent (new path)
+- `aviv_api`    — legacy `aviv_employees` agent (REMOVED from schedule; only old rows)
+- `aviv_report` — daily from `aviv_employees_report` agent (the live path)
 - `csv`         — end-of-month Gmail CSV (verification when API data exists,
                   fallback when none does)
 
@@ -506,7 +594,14 @@ RESEND_API_KEY
 BRRR_URL
 ADMIN_PASSWORD            # initial admin seed password (TODO: rotate from 12345)
 BILBOY_CHAIN_TOKEN        # chain JWT (userId=136 Yaniv, exp 2027-05-27)
-BILBOY_USE_CHAIN          # 1 = use chain token + bilboy_branch_id; 0 = per-store bilboy_pass
+
+# Chain-account flags — ALL =1 on prod (one Aviv/BilBoy login, many branches):
+BILBOY_USE_CHAIN=1        # chain token + bilboy_branch_id (else per-store bilboy_pass)
+AVIV_LIVE_USE_CHAIN=1     # aviv_live one multi-branch pull (scheduler USE_CHAIN=True)
+AVIV_EMP_USE_CHAIN=1      # employer-report 301 chain login
+AVIV_Z_USE_CHAIN=1        # report 902 chain login
+AVIV_Z_TO_DAILY_SALES=1   # mirror 902 Z totals into daily_sales (INSERT OR IGNORE)
+# Aviv chain creds: AVIV_CHAIN_USER / AVIV_CHAIN_PASS
 ```
 
 ---
@@ -566,10 +661,15 @@ BILBOY_USE_CHAIN          # 1 = use chain token + bilboy_branch_id; 0 = per-stor
 
 ## Open Issues / Known Tech Debt
 
-- `aviv_employees.py` and `gmail_agent.py` still have runtime `ALTER TABLE`
-  blocks. Migration 006 makes them no-ops, but the stylistic debt remains.
-- Old `aviv_employees` agent and new `aviv_employees_report` run in parallel
-  until cutover.
+- `gmail_agent.py` still has runtime `ALTER TABLE` blocks. Migration 006 makes
+  them no-ops, but the stylistic debt remains.
+- `aviv_employees` cutover done (2026-05-10); jobs commented out. The dead
+  `agents/aviv_employees.py` file can be deleted.
+- `gmail_agent.py`: branches with no `gmail_label` leave an `agent_runs` row
+  stuck `running` (early-return after the insert) → swept to "orphaned on
+  startup" nightly for the ~16 chain stores. Cosmetic; deferred.
+- Branch 9011 (ויצמן): zero `goods_documents` while all other stores have data
+  — BilBoy goods sync broken for this branch; needs investigation.
 - Historical backfill Oct 2025 – Feb 2026 shows ₪0 (never imported).
 - `ADMIN_PASSWORD` still `12345` on prod — rotate this.
 - brrr free tier expires 2026-04-09; verify or replace before then.
@@ -605,4 +705,6 @@ BILBOY_USE_CHAIN          # 1 = use chain token + bilboy_branch_id; 0 = per-stor
 - Aviv outside store hours = silent skip; no DB write, no `agent_runs` entry
 - Attendance CSV arriving 1st–5th of month = previous month report
 - Salary = the **one** function `_calculate_salary_cost()`, used everywhere
+- **NEVER** sum `employee_shifts` for salary — monthly `employee_hours.total_hours`
+  is the sole input; shifts are display-only drill-down
 - All times stored as UTC, displayed in Israel time (`Asia/Jerusalem`)
