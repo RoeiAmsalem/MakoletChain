@@ -48,6 +48,9 @@ sys.path.insert(0, REPO_ROOT)
 
 import sqlite3  # noqa: E402
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # scripts/ for sibling import
+import seed_demo_shifts  # noqa: E402
+
 DEFAULT_DB = os.path.join(REPO_ROOT, 'db', 'makolet_chain.db')
 
 DEMO_BRANCH_ID = 9999
@@ -459,6 +462,10 @@ def main():
         seed_hourly_sales(conn)
         seed_account(conn)
         copy_zpdf(conn)
+        # OT/Shabbat demo employee cards + classified shifts, so a rebuild
+        # reproduces the premium-pay demo. Helper is demo-branch-guarded.
+        seed_demo_shifts._upsert_windows(conn)
+        seed_demo_shifts.seed_branch(conn, DEMO_BRANCH_ID)
         conn.commit()
         print("[demo] DONE — committed.")
     except Exception:

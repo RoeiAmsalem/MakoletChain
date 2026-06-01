@@ -53,6 +53,8 @@ import sqlite3
 from datetime import date, timedelta
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # scripts/ for sibling import
+import seed_demo_shifts  # noqa: E402
 DEFAULT_DB = os.path.join(REPO_ROOT, 'db', 'makolet_chain.db')
 PDF_BASE = os.path.join(REPO_ROOT, 'data', 'pdfs')
 
@@ -224,6 +226,10 @@ def main():
             copy_table(conn, t)
         seed_live(conn, today)
         uid, scope = scope_account(conn)
+        # OT/Shabbat demo shifts for 9998 (employee_shifts is NOT in COPY_TABLES,
+        # so seed it directly — same data as 9999). Helper is demo-branch-guarded.
+        seed_demo_shifts._upsert_windows(conn)
+        seed_demo_shifts.seed_branch(conn, DEMO2_ID)
         conn.commit()
     except Exception:
         conn.rollback()
