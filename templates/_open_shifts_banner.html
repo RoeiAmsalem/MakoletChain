@@ -87,7 +87,9 @@ window.loadOpenShifts = async function () {
         <span class="osb-meta">${meta}</span>
       </div>`;
     }).join('');
-    banner.style.display = '';
+    // Must be an explicit value: `display: none` lives in the stylesheet rule
+    // above, so clearing the inline style ('') would fall back to none.
+    banner.style.display = 'block';
   } catch (err) {
     console.error('loadOpenShifts:', err);
     banner.style.display = 'none';
