@@ -2719,7 +2719,6 @@ def api_employees_list():
         (branch_id,)
     ).fetchone()
     branch_name = (branch_row['name'] or '') if branch_row else ''
-    hours_this_month = (branch_row['hours_this_month'] or 0) if branch_row else 0
     avg_hourly_rate = (branch_row['avg_hourly_rate'] or 0) if branch_row else 0
     hours_updated_at = (branch_row['hours_updated_at'] or '') if branch_row else ''
 
@@ -2793,7 +2792,12 @@ def api_employees_list():
 
     return jsonify({
         'employees': employees,
-        'hours_this_month': hours_this_month,
+        # Hours tile (שעות החודש) is month-to-date for the SELECTED month, from
+        # the same source salary uses (_calculate_salary_cost → employee_hours
+        # SUM, aviv_api/aviv_report). NOT branches.hours_this_month — that single
+        # non-month column is overwritten nightly by the Aviv live total and does
+        # not reset on the 1st, so it showed last month's hours into the new one.
+        'hours_this_month': salary_hours,
         'avg_hourly_rate': avg_hourly_rate,
         'hours_updated_at': hours_updated_at,
         'salary_cost': salary_cost,
@@ -4142,7 +4146,7 @@ def api_ops_status():
 
         # Hourly rate info
         rate_row = db.execute(
-            "SELECT avg_hourly_rate, hours_this_month FROM branches WHERE id = ?",
+            "SELECT avg_hourly_rate FROM branches WHERE id = ?",
             (bid,)
         ).fetchone()
 
@@ -4164,7 +4168,9 @@ def api_ops_status():
             'id': bid, 'name': b['name'], 'city': b['city'],
             'status': overall, 'agents': agents_data,
             'avg_hourly_rate': rate_row['avg_hourly_rate'] if rate_row else 0,
-            'hours_this_month': rate_row['hours_this_month'] if rate_row else 0,
+            # Month-to-date hours from the salary source of truth (employee_hours
+            # for current_month), not branches.hours_this_month — see /api/employees.
+            'hours_this_month': salary_data['hours'],
             'salary_cost': salary_data['amount'],
             'salary_hours': salary_data['hours'],
             'salary_source': salary_data['source'],
