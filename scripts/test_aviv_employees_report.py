@@ -225,7 +225,8 @@ def _make_test_db():
             name TEXT,
             hourly_rate REAL,
             active INTEGER DEFAULT 1,
-            aviv_employee_id INTEGER
+            aviv_employee_id INTEGER,
+            salary_type TEXT DEFAULT 'hourly'
         );
         CREATE TABLE employee_hours (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -280,7 +281,21 @@ def _make_test_db():
             day_of_week TEXT,
             is_open INTEGER NOT NULL DEFAULT 0,
             source TEXT NOT NULL DEFAULT 'aviv_report',
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            regular_hours REAL,
+            overtime_hours REAL,
+            shabbat_hours REAL
+        );
+        CREATE TABLE IF NOT EXISTS shabbat_times (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            candle_lighting_ts TEXT NOT NULL,
+            havdalah_ts TEXT,
+            is_holiday INTEGER NOT NULL DEFAULT 0,
+            label TEXT,
+            geonameid INTEGER NOT NULL DEFAULT 294801,
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(date, geonameid)
         );
     ''')
     conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password, active) "
@@ -460,6 +475,42 @@ class TestUpdateEmployeeHours(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(r['employee_name'] == 'אגם צאצאן' for r in rows))
         self.assertEqual(sum(r['is_open'] for r in rows), 1)
+
+    def test_classification_buckets_written(self):
+        """update_employee_hours stores regular/overtime/shabbat per shift."""
+        from agents.aviv_employees_report import update_employee_hours
+        self.conn.execute(
+            "INSERT INTO shabbat_times (date, candle_lighting_ts, havdalah_ts, is_holiday, label) "
+            "VALUES ('2026-05-29','2026-05-29 19:00:00','2026-05-30 20:00:00',0,'שבת')")
+        parsed = [{
+            'raw_name': 'אגם צאצאן תיכון', 'aviv_employee_id': 551,
+            'total_hours': 9.0, 'shift_count': 1, 'open_shift_count': 0,
+            'shifts': [
+                {'shift_date': '2026-05-30', 'start_ts': '2026-05-30 09:00:00',
+                 'end_ts': '2026-05-30 18:00:00', 'hours': 9.0,
+                 'day_of_week': 'יום ש', 'is_open': False}]}]
+        update_employee_hours(127, '2026-05', parsed, self.conn)
+        row = self.conn.execute(
+            "SELECT regular_hours, overtime_hours, shabbat_hours FROM employee_shifts "
+            "WHERE branch_id=127 AND month='2026-05'").fetchone()
+        self.assertEqual(row['regular_hours'], 8.0)      # daily-8 split
+        self.assertEqual(row['overtime_hours'], 1.0)
+        self.assertAlmostEqual(row['shabbat_hours'], 9.0, places=2)  # orthogonal overlay
+
+    def test_salary_unchanged_by_classification(self):
+        """Salary stays hours*rate — classification never inflates it."""
+        from agents.aviv_employees_report import update_employee_hours
+        parsed = [{
+            'raw_name': 'אגם צאצאן תיכון', 'aviv_employee_id': 551,
+            'total_hours': 9.0, 'shift_count': 1, 'open_shift_count': 0,
+            'shifts': [{'shift_date': '2026-05-30', 'start_ts': '2026-05-30 09:00:00',
+                        'end_ts': '2026-05-30 18:00:00', 'hours': 9.0,
+                        'day_of_week': 'יום ש', 'is_open': False}]}]
+        update_employee_hours(127, '2026-05', parsed, self.conn)
+        sal = self.conn.execute(
+            "SELECT total_salary FROM employee_hours WHERE branch_id=127 AND month='2026-05'"
+        ).fetchone()
+        self.assertEqual(sal['total_salary'], 315.0)  # 9h × ₪35, flat — no OT/Shabbat premium
 
     def test_shifts_overwrite_cleanly_on_resync(self):
         from agents.aviv_employees_report import update_employee_hours

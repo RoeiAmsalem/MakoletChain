@@ -50,7 +50,10 @@ def client():
         day_of_week TEXT,
         is_open INTEGER NOT NULL DEFAULT 0,
         source TEXT NOT NULL DEFAULT 'aviv_report',
-        created_at TEXT DEFAULT (datetime('now'))
+        created_at TEXT DEFAULT (datetime('now')),
+        regular_hours REAL,
+        overtime_hours REAL,
+        shabbat_hours REAL
     )''')
 
     # 126 = no floor; 9001 = floored at 2026-06-01.

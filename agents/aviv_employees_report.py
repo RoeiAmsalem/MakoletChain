@@ -351,6 +351,15 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
     return results
 
 
+def _table_has_column(conn, table: str, column: str) -> bool:
+    """True if `table` has `column` (used to gate migration-023 bucket writes)."""
+    try:
+        cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.OperationalError:
+        return False
+    return any((c[1] == column) for c in cols)
+
+
 def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) -> dict:
     """Apply parsed report to employee_hours table for (branch_id, month).
 
@@ -388,13 +397,26 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
             "DELETE FROM employee_shifts WHERE branch_id=? AND month=? AND source='aviv_report'",
             (branch_id, month))
 
+    # Shift classification (migration 023) — regular/overtime/Shabbat buckets,
+    # DISPLAY ONLY. Computed at sync time and stored on employee_shifts. Guarded
+    # so the agent keeps working on a DB that hasn't applied migration 023 yet.
+    shifts_have_buckets = shifts_table_exists and _table_has_column(
+        conn, 'employee_shifts', 'regular_hours')
+    shabbat_windows = []
+    if shifts_have_buckets:
+        from agents.shift_classify import load_shabbat_windows
+        shabbat_windows = load_shabbat_windows(conn)
+
     branch_row = conn.execute('SELECT name FROM branches WHERE id=?', (branch_id,)).fetchone()
     branch_name = branch_row[0] if branch_row else ''
 
     db_employees_rows = conn.execute(
-        'SELECT id, name, hourly_rate FROM employees WHERE branch_id=? AND active=1',
+        "SELECT id, name, hourly_rate, COALESCE(salary_type, 'hourly') AS salary_type "
+        "FROM employees WHERE branch_id=? AND active=1",
         (branch_id,)).fetchall()
     db_employees = [{'id': r[0], 'name': r[1], 'hourly_rate': r[2]} for r in db_employees_rows]
+    # emp_id → is_global, for skipping classification on flat-pay employees.
+    global_by_id = {r[0]: (r[3] == 'global') for r in db_employees_rows}
 
     matched = 0
     unmatched = 0
@@ -433,17 +455,37 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
             # Write this employee's shift rows under the same canonical db_name
             # so /api/employee-shifts can join on employee_hours.employee_name.
             if shifts_table_exists:
-                for sh in row.get('shifts', []):
-                    conn.execute('''
-                        INSERT INTO employee_shifts
-                        (branch_id, month, employee_name, shift_date, start_ts,
-                         end_ts, hours, day_of_week, is_open, source)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report')
-                    ''', (branch_id, month, db_name, sh.get('shift_date'),
-                          sh.get('start_ts'), sh.get('end_ts'),
-                          round(float(sh.get('hours') or 0), 4),
-                          sh.get('day_of_week'),
-                          1 if sh.get('is_open') else 0))
+                emp_shifts = row.get('shifts', [])
+                if shifts_have_buckets:
+                    from agents.shift_classify import classify_shifts
+                    classify_shifts(emp_shifts, shabbat_windows,
+                                    is_global=global_by_id.get(emp_id, False))
+                for sh in emp_shifts:
+                    if shifts_have_buckets:
+                        conn.execute('''
+                            INSERT INTO employee_shifts
+                            (branch_id, month, employee_name, shift_date, start_ts,
+                             end_ts, hours, day_of_week, is_open, source,
+                             regular_hours, overtime_hours, shabbat_hours)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report', ?, ?, ?)
+                        ''', (branch_id, month, db_name, sh.get('shift_date'),
+                              sh.get('start_ts'), sh.get('end_ts'),
+                              round(float(sh.get('hours') or 0), 4),
+                              sh.get('day_of_week'),
+                              1 if sh.get('is_open') else 0,
+                              sh.get('regular_hours'), sh.get('overtime_hours'),
+                              sh.get('shabbat_hours')))
+                    else:
+                        conn.execute('''
+                            INSERT INTO employee_shifts
+                            (branch_id, month, employee_name, shift_date, start_ts,
+                             end_ts, hours, day_of_week, is_open, source)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report')
+                        ''', (branch_id, month, db_name, sh.get('shift_date'),
+                              sh.get('start_ts'), sh.get('end_ts'),
+                              round(float(sh.get('hours') or 0), 4),
+                              sh.get('day_of_week'),
+                              1 if sh.get('is_open') else 0))
         else:
             unmatched += 1
             # Store the suffix-stripped name so pending rows match what the
