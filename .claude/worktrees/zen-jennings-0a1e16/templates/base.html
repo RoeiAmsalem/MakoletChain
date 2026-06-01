@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MakoletChain{% endblock %}</title>
+    <link rel="stylesheet" href="{{ static_v('css/style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+
+<nav class="navbar">
+    <div class="navbar-top" style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
+        <a href="/" class="navbar-brand" style="text-decoration:none;">
+            <img src="{{ static_v('makolet_logo.png') }}" alt="רשת המכולה" style="height:42px;width:auto;object-fit:contain;filter:invert(1) hue-rotate(180deg);">
+            <span class="store-name">{{ branch_name }}</span>
+        </a>
+        {% if session.get('user_role') == 'admin' or (session.get('user_branches') and session['user_branches']|length > 1) %}
+        <select id="branch-select" onchange="switchBranch(this.value)" style="background:rgba(255,255,255,0.07);color:#e2e8f0;border:1px solid rgba(255,255,255,0.2);border-radius:20px;padding:4px 12px;font-size:0.8rem;cursor:pointer;outline:none;flex-shrink:0;">
+        </select>
+        {% endif %}
+        <button class="hamburger" id="hamburger" aria-label="תפריט">&#9776;</button>
+    </div>
+    <nav>
+        <ul class="navbar-nav">
+            <li><a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a></li>
+            <li><a href="/sales" class="{% if active_page == 'sales' %}active{% endif %}">הכנסות</a></li>
+            <li><a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a></li>
+            <li><a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a></li>
+            <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
+            {% if session.get('user_role') == 'admin' %}
+            <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+    <div class="navbar-end">
+        <div style="display:flex; align-items:center; gap:6px; font-size:0.9rem; direction:ltr;">
+            <a href="?month={{ prev_month }}" style="color:#aaa; text-decoration:none; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08);">‹</a>
+            <span style="color:white; font-weight:600; min-width:80px; text-align:center;">{{ month_display }}</span>
+            {% if next_month %}
+            <a href="?month={{ next_month }}" style="color:#aaa; text-decoration:none; padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08);">›</a>
+            {% else %}
+            <span style="color:#444; padding:2px 6px;">›</span>
+            {% endif %}
+            {% if show_today_btn %}
+            <a href="?month={{ current_month }}" title="חזור לחודש נוכחי" style="color:#f59e0b; text-decoration:none; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.15); font-size:0.8rem; font-weight:600;">היום</a>
+            {% endif %}
+            <span style="width:1px;height:16px;background:rgba(255,255,255,0.15);display:inline-block;margin:0 4px;"></span>
+            <span style="font-size:0.75rem; color:rgba(255,255,255,0.4);">{{ session.get('user_name', '') }}</span>
+            <a href="/logout" style="font-size:0.75rem; color:rgba(255,255,255,0.45); text-decoration:none; padding:2px 8px; border:1px solid rgba(255,255,255,0.15); border-radius:4px;">יציאה</a>
+        </div>
+    </div>
+    <div class="mobile-nav" id="mobile-nav">
+        <a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a>
+        <a href="/sales" class="{% if active_page == 'sales' %}active{% endif %}">הכנסות</a>
+        <a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a>
+        <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
+        <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
+        {% if session.get('user_role') == 'admin' %}
+        <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
+        {% endif %}
+    </div>
+    <div class="month-switcher-mobile">
+        <a href="?month={{ prev_month }}">‹</a>
+        <span class="month-label">{{ month_display }}</span>
+        {% if next_month %}
+        <a href="?month={{ next_month }}">›</a>
+        {% else %}
+        <span class="month-disabled">›</span>
+        {% endif %}
+        {% if show_today_btn %}
+        <a href="?month={{ current_month }}" style="color:#f59e0b; text-decoration:none; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.15); font-size:0.8rem; font-weight:600;">היום</a>
+        {% endif %}
+    </div>
+</nav>
+
+<main class="main-content">
+    {% block content %}{% endblock %}
+</main>
+
+<script>
+const CURRENT_BRANCH_ID = {{ branch_id | tojson }};
+
+async function switchBranch(branchId) {
+    if (!branchId) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('branch_id', branchId);
+    window.location.href = url.toString();
+}
+
+async function loadBranchSwitcher() {
+    const sel = document.getElementById('branch-select');
+    if (!sel) return;
+    const res = await fetch('/api/branches');
+    const branches = await res.json();
+    branches.forEach(b => {
+        const opt = document.createElement('option');
+        opt.value = b.id;
+        opt.textContent = b.name + ' — ' + b.city;
+        if (b.id == CURRENT_BRANCH_ID) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+loadBranchSwitcher();
+
+
+document.getElementById('hamburger').addEventListener('click', function() {
+    document.getElementById('mobile-nav').classList.toggle('open');
+});
+</script>
+
+<script src="{{ static_v('dialog.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -209,7 +209,11 @@ def fetch_employer_report(aviv_branch_id: int, from_date: str, to_date: str,
 
 
 def parse_hh_mm(s) -> float:
-    """'108:34' → 108.5667, '49:26' → 49.4333. Returns 0.0 on empty/invalid."""
+    """'108:34' → 108.5667, '49:26' → 49.4333. Returns 0.0 on empty/invalid.
+
+    Per-shift cells carry seconds ('02:59:01'); subtotal cells are HH:MM. Both
+    are accepted — a third ':' part is read as seconds when present.
+    """
     if not s:
         return 0.0
     s = str(s).strip()
@@ -219,9 +223,26 @@ def parse_hh_mm(s) -> float:
     try:
         h = int(parts[0])
         m = int(parts[1])
-        return h + m / 60.0
+        sec = int(parts[2]) if len(parts) >= 3 and parts[2] != '' else 0
+        return h + m / 60.0 + sec / 3600.0
     except (ValueError, IndexError):
         return 0.0
+
+
+def _parse_aviv_dt(s) -> datetime | None:
+    """'13/04/2026 19:01:34' → datetime, '13/04/2026 19:01' → datetime.
+
+    Returns None on empty/unparseable. Aviv emits day-first dd/mm/yyyy.
+    """
+    s = (s or '').strip()
+    if not s:
+        return None
+    for fmt in ('%d/%m/%Y %H:%M:%S', '%d/%m/%Y %H:%M', '%d/%m/%Y'):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _split_id_prefix(raw: str) -> tuple[int | None, str]:
@@ -242,19 +263,30 @@ def _split_id_prefix(raw: str) -> tuple[int | None, str]:
 
 
 def parse_employer_report(xls_bytes: bytes) -> list[dict]:
-    """Parse legacy .xls → list of {raw_name, aviv_employee_id, total_hours, shift_count, open_shift_count}.
+    """Parse legacy .xls → list of per-employee dicts.
+
+    Each dict: {raw_name, aviv_employee_id, total_hours, shift_count,
+    open_shift_count, shifts}. `shifts` is a list of per-shift dicts:
+    {shift_date, start_ts, end_ts, hours, day_of_week, is_open} where:
+      - shift_date / start_ts / end_ts are 'YYYY-MM-DD[ HH:MM:SS]' or None
+      - hours is a float (0.0 for open shifts — no clock-out, no hours)
+      - is_open is True for the "אין יציאה" (no clock-out) case
 
     Sheet 0 has 9 columns; row 0 is header, then groups of rows per employee
     ending with a "סה''כ שורות N" subtotal row. Final row of file is a
     grand-total row which we skip.
 
+    col 2 = "HH:MM:SS" shift hours / "HH:MM" subtotal hours (can exceed 24h).
+    col 3 = "אין יציאה" on shifts with no clock-out.
+    col 4 = exit timestamp "dd/mm/yyyy HH:MM:SS".
+    col 5 = entry timestamp "dd/mm/yyyy HH:MM:SS".
+    col 6 = day-of-week ("יום ב").
     col 8 = "{id} {name} {store_suffix}" on first row of each group; blank on
             continuation rows; "סה''כ שורות N" on subtotal rows.
-    col 3 = "אין יציאה" on shifts with no clock-out.
-    col 2 = "HH:MM" hours (can exceed 24h).
 
-    The numeric id prefix is split off into aviv_employee_id; raw_name keeps
-    the (possibly suffixed) name for downstream matching.
+    total_hours comes from the subtotal row (authoritative — NEVER the sum of
+    shift rows). The numeric id prefix is split off into aviv_employee_id;
+    raw_name keeps the (possibly suffixed) name for downstream matching.
     """
     import xlrd
     wb = xlrd.open_workbook(file_contents=xls_bytes)
@@ -264,10 +296,14 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
     current_name = None
     current_aviv_id = None
     current_open = 0
+    current_shifts: list[dict] = []
 
     for i in range(1, sh.nrows):
         col2 = str(sh.cell(i, 2).value).strip()
         col3 = str(sh.cell(i, 3).value).strip()
+        col4 = str(sh.cell(i, 4).value).strip()
+        col5 = str(sh.cell(i, 5).value).strip()
+        col6 = str(sh.cell(i, 6).value).strip()
         col8 = str(sh.cell(i, 8).value).strip()
 
         if col8.startswith(SUBTOTAL_PREFIX):
@@ -280,18 +316,37 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
                     'total_hours': round(parse_hh_mm(col2), 4),
                     'shift_count': shift_count,
                     'open_shift_count': current_open,
+                    'shifts': current_shifts,
                 })
                 current_name = None
                 current_aviv_id = None
                 current_open = 0
+                current_shifts = []
             continue
 
         if col8:
             current_aviv_id, current_name = _split_id_prefix(col8)
-            current_open = 1 if col3 == NO_CLOCKOUT else 0
-        else:
-            if col3 == NO_CLOCKOUT:
-                current_open += 1
+            current_open = 0
+            current_shifts = []
+
+        # Append a shift row for any line that carries shift data. The first
+        # row of a group (with col8 set) is itself a shift; continuation rows
+        # have a blank col8. Subtotal rows are handled above and never reach here.
+        is_open = (col3 == NO_CLOCKOUT)
+        start_dt = _parse_aviv_dt(col5)
+        end_dt = _parse_aviv_dt(col4)
+        if is_open:
+            current_open += 1
+        if start_dt or end_dt or is_open:
+            ref_dt = start_dt or end_dt
+            current_shifts.append({
+                'shift_date': ref_dt.strftime('%Y-%m-%d') if ref_dt else None,
+                'start_ts': start_dt.strftime('%Y-%m-%d %H:%M:%S') if start_dt else None,
+                'end_ts': end_dt.strftime('%Y-%m-%d %H:%M:%S') if end_dt else None,
+                'hours': round(parse_hh_mm(col2), 4),
+                'day_of_week': col6 or None,
+                'is_open': is_open,
+            })
 
     return results
 
@@ -320,6 +375,18 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
     conn.execute(
         "DELETE FROM employee_hours WHERE branch_id=? AND month=? AND source='aviv_report'",
         (branch_id, month))
+
+    # Per-shift drill-down rows (migration 022). Full-overwrite alongside the
+    # monthly total so a re-sync replaces cleanly with no duplicate shifts.
+    # Display-only — never summed for the salary total. Guarded so the agent
+    # keeps working on a DB that has not yet applied migration 022.
+    shifts_table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='employee_shifts'"
+    ).fetchone() is not None
+    if shifts_table_exists:
+        conn.execute(
+            "DELETE FROM employee_shifts WHERE branch_id=? AND month=? AND source='aviv_report'",
+            (branch_id, month))
 
     branch_row = conn.execute('SELECT name FROM branches WHERE id=?', (branch_id,)).fetchone()
     branch_name = branch_row[0] if branch_row else ''
@@ -362,6 +429,21 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
             ''', (branch_id, month, db_name, round(hours, 2), salary))
             matched += 1
             written_names.append(db_name)
+
+            # Write this employee's shift rows under the same canonical db_name
+            # so /api/employee-shifts can join on employee_hours.employee_name.
+            if shifts_table_exists:
+                for sh in row.get('shifts', []):
+                    conn.execute('''
+                        INSERT INTO employee_shifts
+                        (branch_id, month, employee_name, shift_date, start_ts,
+                         end_ts, hours, day_of_week, is_open, source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report')
+                    ''', (branch_id, month, db_name, sh.get('shift_date'),
+                          sh.get('start_ts'), sh.get('end_ts'),
+                          round(float(sh.get('hours') or 0), 4),
+                          sh.get('day_of_week'),
+                          1 if sh.get('is_open') else 0))
         else:
             unmatched += 1
             # Store the suffix-stripped name so pending rows match what the
@@ -428,12 +510,18 @@ def _month_window(today: date, *, current: bool):
 
 def run_for_branch(branch_id: int, include_previous_month: bool = False,
                    today: date | None = None,
-                   chain_token: str | None = None) -> dict:
+                   chain_token: str | None = None,
+                   include_current_month: bool = True,
+                   notify_anomalies: bool = True) -> dict:
     """Main entry point per branch per scheduled run.
 
-    Always pulls current-month-to-date. When include_previous_month=True,
+    By default pulls current-month-to-date. When include_previous_month=True,
     additionally re-pulls the entire previous month (used for 23:30 + Sat runs
     so late corrections to clock-outs are captured).
+
+    Set include_current_month=False (with include_previous_month=True) for a
+    previous-month-ONLY pull — used by the monthly reconciliation on the 10th so
+    it doesn't drag the current month along (no extra Aviv load).
 
     If chain_token is provided, skip per-branch login and read aviv_branch_id
     from the branches table (chain-account mode).
@@ -503,7 +591,11 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
 
         find_employer_report_id(reports)  # raises if missing
 
-        windows = [_month_window(today, current=True)]
+        current_window = _month_window(today, current=True)
+        current_month_str = current_window[0]
+        windows = []
+        if include_current_month:
+            windows.append(current_window)
         if include_previous_month:
             windows.append(_month_window(today, current=False))
 
@@ -541,7 +633,7 @@ def run_for_branch(branch_id: int, include_previous_month: bool = False,
              round(time.time() - t0, 2), run_id))
         conn.commit()
 
-        if agg['unmatched'] > 0 or agg['open_shifts_total'] >= 3:
+        if notify_anomalies and (agg['unmatched'] > 0 or agg['open_shifts_total'] >= 3):
             try:
                 from utils.notify import notify
                 bname = branch['name'] if branch else f'Branch {branch_id}'
@@ -637,6 +729,159 @@ def run_all_branches(include_previous_month: bool = False) -> list[dict]:
     return results
 
 
+# ── Monthly reconciliation (BilBoy-style) ─────────────────────────────────
+# Current-month data already self-heals on every run (windows start at the 1st).
+# This is the ONE-SHOT end-of-month confirmation: on the 10th, re-pull the
+# PREVIOUS month and check the stored totals didn't move after Roei may have
+# considered them final. Modeled on bilboy.py's post-sync reconciliation —
+# silent full-overwrite (late corrections fix themselves), then ✅ when the DB
+# matches / ❌ + brrr when it changed beyond tolerance.
+
+# Tolerances ignore rounding noise (hours/salary stored to 2dp). Mirrors
+# BilBoy's ~₪10 idea; a move in EITHER dimension beyond its tolerance flags it.
+RECON_HOURS_TOLERANCE = 0.5    # hours — well under one shift's worth
+RECON_SALARY_TOLERANCE = 10.0  # ₪ — same order as BilBoy's reconciliation gap
+
+
+def _recon_logger():
+    """Dedicated reconciliation log file (mirrors bilboy_reconciliation.log)."""
+    rlog = logging.getLogger('aviv_hours_reconciliation')
+    if not rlog.handlers:
+        log_dir = Path(__file__).resolve().parent.parent / 'logs'
+        log_dir.mkdir(exist_ok=True)
+        fh = logging.FileHandler(log_dir / 'hours_reconciliation.log', encoding='utf-8')
+        fh.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
+        rlog.addHandler(fh)
+        rlog.addHandler(logging.StreamHandler())
+        rlog.setLevel(logging.INFO)
+        rlog.propagate = False
+    return rlog
+
+
+def _prev_month_totals(conn, branch_id: int, month: str) -> tuple[float, float]:
+    """(total_hours, total_salary) summed over source='aviv_report' rows."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(total_hours), 0), COALESCE(SUM(total_salary), 0) "
+        "FROM employee_hours WHERE branch_id=? AND month=? AND source='aviv_report'",
+        (branch_id, month)).fetchone()
+    return float(row[0] or 0), float(row[1] or 0)
+
+
+def reconcile_previous_month(today: date | None = None, force: bool = False) -> dict:
+    """10th-of-month final re-check of the PREVIOUS month for every branch.
+
+    Date-gated to the 10th (force=True runs any day, for tests/manual). Per
+    branch: snapshot the stored previous-month totals, re-pull ONLY the previous
+    month (silent full-overwrite), then compare. Match within tolerance → ✅ log;
+    beyond tolerance → ❌ log + a brrr digest line so Roei learns last month's
+    numbers moved. The re-pull runs with notify_anomalies=False so it does NOT
+    re-fire unmatched/open-shift notices (those alerted during the month) —
+    the digest carries only "changed" branches.
+    """
+    today = today or date.today()
+    rlog = _recon_logger()
+
+    if today.day != 10 and not force:
+        log.info("monthly hours reconciliation: today=%s is not the 10th — skipping",
+                 today.isoformat())
+        return {'ran': False, 'reason': 'not_10th', 'day': today.day}
+
+    prev_month = _month_window(today, current=False)[0]
+
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        if USE_CHAIN_AUTH:
+            rows = conn.execute(
+                'SELECT id, name FROM branches '
+                'WHERE active=1 AND aviv_branch_id IS NOT NULL ORDER BY id').fetchall()
+        else:
+            rows = conn.execute(
+                'SELECT id, name FROM branches '
+                'WHERE active=1 AND aviv_user_id IS NOT NULL ORDER BY id').fetchall()
+        branches = [(r['id'], r['name']) for r in rows]
+    finally:
+        conn.close()
+
+    rlog.info("=== Monthly hours reconciliation: prev_month=%s branches=%d "
+              "(tolerance %.1fh / ₪%.0f) ===",
+              prev_month, len(branches), RECON_HOURS_TOLERANCE, RECON_SALARY_TOLERANCE)
+
+    from utils.notify import notify, batch_start, batch_flush
+
+    chain_token = None
+    if USE_CHAIN_AUTH:
+        if not branches:
+            rlog.info("chain mode: no branches with aviv_branch_id — nothing to reconcile")
+            return {'ran': True, 'month': prev_month, 'checked': 0, 'changed': 0}
+        try:
+            chain_token = _login_chain_account()
+            chain_token = _refresh(chain_token)
+        except Exception as e:
+            rlog.error("chain login failed; reconciliation aborted: %s", e)
+            notify('❌ Hours reconciliation (chain)',
+                   f'Chain login failed; {prev_month} reconciliation aborted. {str(e)[:120]}',
+                   critical=True, dedup_key='aviv_recon_chain_auth')
+            return {'ran': False, 'reason': 'chain_login_failed', 'month': prev_month}
+
+    # verb="flagged" → INFO-tier digest ("N branches flagged"); this is
+    # informational ("numbers moved"), never a hard failure.
+    batch_start("Monthly hours reconciliation", total=len(branches), verb="flagged")
+    checked = 0
+    changed = 0
+    for idx, (bid, bname) in enumerate(branches):
+        if idx > 0:
+            time.sleep(JITTER_SECONDS)  # anti-thundering jitter between branches
+
+        snap = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            before_h, before_s = _prev_month_totals(snap, bid, prev_month)
+        finally:
+            snap.close()
+
+        try:
+            res = run_for_branch(bid, include_previous_month=True,
+                                 include_current_month=False, today=today,
+                                 chain_token=chain_token, notify_anomalies=False)
+        except Exception as e:
+            rlog.error("❌ branch=%d %s re-pull FAILED: %s", bid, bname, str(e)[:160])
+            notify(f'Hours reconciliation — {bname}',
+                   f'{prev_month}: re-pull failed ({str(e)[:100]}).')
+            continue
+        if isinstance(res, dict) and res.get('ok') is False:
+            rlog.error("❌ branch=%d %s re-pull error: %s", bid, bname, res.get('error'))
+            notify(f'Hours reconciliation — {bname}',
+                   f"{prev_month}: re-pull error ({str(res.get('error'))[:100]}).")
+            continue
+
+        snap = sqlite3.connect(DB_PATH, timeout=30)
+        try:
+            after_h, after_s = _prev_month_totals(snap, bid, prev_month)
+        finally:
+            snap.close()
+
+        checked += 1
+        dh = abs(after_h - before_h)
+        ds = abs(after_s - before_s)
+        if dh > RECON_HOURS_TOLERANCE or ds > RECON_SALARY_TOLERANCE:
+            changed += 1
+            rlog.info("❌ branch=%d %s month=%s CHANGED hours %.2f→%.2f (Δ%.2f) "
+                      "salary ₪%.2f→₪%.2f (Δ₪%.2f)",
+                      bid, bname, prev_month, before_h, after_h, dh,
+                      before_s, after_s, ds)
+            notify(f'Hours changed — {bname}',
+                   f'{prev_month} moved after month-end: '
+                   f'hours {before_h:.1f}→{after_h:.1f}, '
+                   f'salary ₪{before_s:,.0f}→₪{after_s:,.0f}.')
+        else:
+            rlog.info("✅ branch=%d %s month=%s OK hours=%.2f salary=₪%.2f",
+                      bid, bname, prev_month, after_h, after_s)
+
+    batch_flush()
+    rlog.info("=== Reconciliation complete: %d checked, %d changed ===", checked, changed)
+    return {'ran': True, 'month': prev_month, 'checked': checked, 'changed': changed}
+
+
 if __name__ == '__main__':
     import argparse
     import sys
@@ -648,9 +893,17 @@ if __name__ == '__main__':
                     help='Single branch id; omit to run all active branches')
     ap.add_argument('--include-previous', action='store_true',
                     help='Also re-fetch previous full month')
+    ap.add_argument('--reconcile-prev', action='store_true',
+                    help='Run the monthly previous-month reconciliation (10th-of-month gated)')
+    ap.add_argument('--force', action='store_true',
+                    help='With --reconcile-prev: ignore the 10th-of-month date gate')
     args = ap.parse_args()
 
-    if args.branch_id:
+    if args.reconcile_prev:
+        result = reconcile_previous_month(force=args.force)
+        print(result)
+        sys.exit(0)
+    elif args.branch_id:
         result = run_for_branch(args.branch_id,
                                 include_previous_month=args.include_previous)
         print(result)

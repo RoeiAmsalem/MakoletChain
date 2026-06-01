@@ -45,37 +45,11 @@ DB_PATH = os.path.join(os.path.dirname(__file__), 'db', 'makolet_chain.db')
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), 'db', 'schema.sql')
 IL_TZ = ZoneInfo('Asia/Jerusalem')
 
-# Valid user roles.
-#   admin   — full access incl. /ops + /admin/*; sees every active branch.
-#   ceo     — sees every active branch automatically (no user_branches rows),
-#             but is blocked from /ops + /admin/*.
-#   manager — sees only branches listed in user_branches.
-VALID_ROLES = ('admin', 'ceo', 'manager')
-ROLES_ALL_BRANCHES = ('admin', 'ceo')
-ROLES_NOT_TRACKED = ('admin', 'ceo')
-
-# Demo-only branches: visible to admin (sees everything) and to the scoped demo
-# account, and to NO ONE else — not CEO, not other managers, not any
-# aggregate/network view. Centralized here; apply via _demo_exclusion_sql().
-DEMO_BRANCH_IDS = (9999, 9998)
-DEMO_ACCOUNT_EMAIL = 'demo-store@makoletchain.com'
-
-
-def _should_track(role):
-    """Single source of truth for analytics exclusion. Admin and CEO are
-    excluded from user_events to keep the dataset focused on operator activity."""
-    return role not in ROLES_NOT_TRACKED
-
 HEBREW_MONTHS = {
     1: 'ינואר', 2: 'פברואר', 3: 'מרץ', 4: 'אפריל',
     5: 'מאי', 6: 'יוני', 7: 'יולי', 8: 'אוגוסט',
     9: 'ספטמבר', 10: 'אוקטובר', 11: 'נובמבר', 12: 'דצמבר'
 }
-
-# Earliest month with real operational data. Routes clamp URL/session to this
-# value (so /?month=2026-01 silently lands on April), and the month-back arrow
-# is hidden when navigating it would cross the floor.
-DATA_FLOOR_MONTH = '2026-04'
 
 
 def get_db():
@@ -110,8 +84,6 @@ def _migrate_add_columns(conn):
         ('live_sales', 'running_total', 'REAL DEFAULT 0'),
         ('live_sales', 'running_count', 'INTEGER DEFAULT 0'),
         ('employees', 'aviv_employee_id', 'INTEGER'),
-        ('employees', 'salary_type', "TEXT DEFAULT 'hourly'"),
-        ('employees', 'global_salary', 'REAL'),
         ('employee_match_pending', 'aviv_employee_id', 'INTEGER'),
         ('employee_match_pending', 'source', "TEXT DEFAULT 'csv'"),
         ('employee_match_pending', 'is_new_employee', 'INTEGER DEFAULT 0'),
@@ -163,17 +135,17 @@ def seed_admin():
     """Seed the admin user if not exists."""
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    existing = conn.execute("SELECT id FROM users WHERE email = ?", ('makoletdashboard@gmail.com',)).fetchone()
+    existing = conn.execute("SELECT id FROM users WHERE email = ?", ('admin@makolet.com',)).fetchone()
     if not existing:
         admin_password = os.environ.get('ADMIN_PASSWORD', secrets.token_urlsafe(16))
         pw_hash = generate_password_hash(admin_password)
         conn.execute(
             "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
-            ('מנהל ראשי', 'makoletdashboard@gmail.com', pw_hash, 'admin')
+            ('מנהל ראשי', 'admin@makolet.com', pw_hash, 'admin')
         )
         conn.commit()
         # Get user id
-        user_row = conn.execute("SELECT id FROM users WHERE email = ?", ('makoletdashboard@gmail.com',)).fetchone()
+        user_row = conn.execute("SELECT id FROM users WHERE email = ?", ('admin@makolet.com',)).fetchone()
         if user_row:
             conn.execute(
                 "INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?, ?)",
@@ -228,53 +200,6 @@ def send_reset_email(to_email: str, reset_url: str, user_name: str = ''):
 
 # ── Auth ──────────────────────────────────────────────────────
 
-def _record_event(event_type, page=None, branch_id=None, duration_seconds=None):
-    """Record a user_event. Admin events are silently dropped (per design).
-
-    MUST be silent on any failure — analytics must never break a user request.
-    """
-    try:
-        if 'user_id' not in session:
-            return
-        if not _should_track(session.get('user_role')):
-            return
-        ua = request.headers.get('User-Agent', '') if request else ''
-        db = get_db()
-        db.execute(
-            'INSERT INTO user_events '
-            '(user_id, event_type, page, branch_id, duration_seconds, user_agent) '
-            'VALUES (?, ?, ?, ?, ?, ?)',
-            (session['user_id'], event_type, page, branch_id,
-             duration_seconds, ua[:255])
-        )
-        db.commit()
-    except Exception as e:
-        try:
-            app.logger.warning(f"_record_event failed: {e}")
-        except Exception:
-            pass
-
-
-@app.before_request
-def _track_page_view():
-    """Track authenticated GETs to HTML pages. Skips API, static, beacons."""
-    if request.method != 'GET':
-        return
-    path = request.path
-    if path.startswith('/api/'):
-        return
-    if path.startswith('/static/'):
-        return
-    if path == '/login' or path == '/logout':
-        return
-    if path == '/forgot-password' or path == '/reset-password':
-        return
-    if 'user_id' not in session:
-        return
-    branch_id = request.args.get('branch_id', type=int) or session.get('branch_id')
-    _record_event('page_view', page=path, branch_id=branch_id)
-
-
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -287,29 +212,6 @@ def login_required(f):
     return decorated
 
 
-def _serve_service_worker():
-    """Serve sw.js with Service-Worker-Allowed: / so it can control the whole
-    origin even though it lives under /static/. Browsers require this header
-    when the worker URL is not at root.
-    """
-    sw_path = os.path.join(app.static_folder, 'sw.js')
-    resp = send_file(sw_path, mimetype='application/javascript')
-    resp.headers['Service-Worker-Allowed'] = '/'
-    resp.headers['Cache-Control'] = 'no-cache'
-    return resp
-
-
-@app.route('/sw.js')
-def service_worker_root():
-    return _serve_service_worker()
-
-
-@app.route('/static/sw.js')
-def service_worker_static():
-    # Override Flask's default /static handler so the header is attached.
-    return _serve_service_worker()
-
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
@@ -318,11 +220,11 @@ def login():
         message = request.args.get('message', '')
         return render_template('login.html', error=None, message=message)
 
-    email = request.form.get('email', '').strip().lower()
+    email = request.form.get('email', '').strip()
     password = request.form.get('password', '')
 
     db = get_db()
-    user = db.execute("SELECT * FROM users WHERE LOWER(email) = ? AND active = 1", (email,)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE email = ? AND active = 1", (email,)).fetchone()
 
     if user and check_password_hash(user['password_hash'], password):
         if request.form.get('remember'):
@@ -332,7 +234,6 @@ def login():
         session['user_id'] = user['id']
         session['user_name'] = user['name']
         session['user_role'] = user['role']
-        session['user_email'] = (user['email'] or '').strip().lower()
 
         # Get user's branches
         branches = db.execute(
@@ -345,7 +246,6 @@ def login():
         if branch_ids:
             session['branch_id'] = branch_ids[0]
 
-        _record_event('login', branch_id=session.get('branch_id'))
         return redirect('/')
 
     return render_template('login.html', error='אימייל או סיסמה שגויים')
@@ -364,7 +264,7 @@ def forgot_password():
 
     email = request.form.get('email', '').strip().lower()
     db = get_db()
-    user = db.execute('SELECT id FROM users WHERE LOWER(email)=? AND active=1', (email,)).fetchone()
+    user = db.execute('SELECT id FROM users WHERE email=? AND active=1', (email,)).fetchone()
     if user:
         token = secrets.token_urlsafe(32)
         expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
@@ -429,62 +329,22 @@ def _now_il():
     return datetime.now(IL_TZ)
 
 
-def _utc_str_to_il_iso(utc_str):
-    """Convert a SQLite datetime('now') UTC string to Israel-local ISO.
-
-    SQLite's datetime('now') returns naive 'YYYY-MM-DD HH:MM:SS' in UTC. We
-    surface fetched_at to the UI as an Israel-local timestamp, DST-safe via
-    zoneinfo. Returns None on missing/unparseable input. Output format
-    matches what sales.html already slices (YYYY-MM-DDTHH:MM:SS).
-    """
-    if not utc_str:
-        return None
-    s = str(utc_str).strip()
-    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S',
-                '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S.%f'):
-        try:
-            dt = datetime.strptime(s, fmt)
-            break
-        except ValueError:
-            dt = None
-    if dt is None:
-        return s
-    return dt.replace(tzinfo=timezone.utc).astimezone(IL_TZ).strftime(
-        '%Y-%m-%dT%H:%M:%S')
-
-
-def _parse_month(floor=DATA_FLOOR_MONTH):
-    """Return the active month, clamped to `floor` (defaults to DATA_FLOOR_MONTH;
-    callers pass a per-branch effective floor so a floored branch can never
-    select a month below its own visibility floor).
-
-    A URL `?month=` below the floor (or a stale session value) is silently
-    bumped up to the floor — never below it.
-    """
-    floor = floor or DATA_FLOOR_MONTH
+def _parse_month():
     month = request.args.get('month')
     if month:
-        if month < floor:
-            month = floor
         session['selected_month'] = month
     else:
         month = session.get('selected_month')
     if not month:
         month = _now_il().strftime('%Y-%m')
-    if month < floor:
-        month = floor
     return month
 
 
-def _month_nav(selected, floor=DATA_FLOOR_MONTH):
-    floor = floor or DATA_FLOOR_MONTH
+def _month_nav(selected):
     year, mon = map(int, selected.split('-'))
     pm = mon - 1 if mon > 1 else 12
     py = year if mon > 1 else year - 1
-    prev_candidate = f'{py:04d}-{pm:02d}'
-    # Hide the back arrow at the floor — there's nothing useful (and, for a
-    # floored branch, nothing permitted) earlier than it.
-    prev_month = prev_candidate if prev_candidate >= floor else None
+    prev_month = f'{py:04d}-{pm:02d}'
     current = _now_il().strftime('%Y-%m')
     nm = mon + 1 if mon < 12 else 1
     ny = year if mon < 12 else year + 1
@@ -496,19 +356,7 @@ def _month_nav(selected, floor=DATA_FLOOR_MONTH):
 
 
 def get_branch_id():
-    """Resolve branch_id for the current request.
-
-    Precedence: ?branch_id= URL param (if user is allowed to see it) →
-    session['branch_id'] → first user_branches entry → first branch in DB
-    (admin/ceo only). Never mutates session — API calls stay idempotent;
-    session writes happen only in _get_branch_id() / _page_context().
-    """
-    url_bid = request.args.get('branch_id', type=int)
-    if url_bid:
-        role = session.get('user_role')
-        allowed = session.get('user_branches', [])
-        if role in ROLES_ALL_BRANCHES or url_bid in allowed:
-            return url_bid
+    """Get branch_id from session only — never from request args/form."""
     bid = session.get('branch_id')
     if bid:
         return bid
@@ -516,8 +364,8 @@ def get_branch_id():
     user_branches = session.get('user_branches', [])
     if user_branches:
         return user_branches[0]
-    # Admin/CEO have no user_branches rows: fall back to first branch in DB
-    if session.get('user_role') in ROLES_ALL_BRANCHES:
+    # Admin with no user_branches rows: fall back to first branch in DB
+    if session.get('user_role') == 'admin':
         db = get_db()
         row = db.execute('SELECT id FROM branches ORDER BY id LIMIT 1').fetchone()
         return row['id'] if row else None
@@ -531,7 +379,7 @@ def _get_branch_id():
         bid = int(bid)
         role = session.get('user_role')
         branches = session.get('user_branches', [])
-        if role in ROLES_ALL_BRANCHES or bid in branches:
+        if role == 'admin' or bid in branches:
             session['branch_id'] = bid
     return get_branch_id()
 
@@ -542,140 +390,13 @@ def _branch_name(branch_id):
     return row['name'] if row else 'סניף לא ידוע'
 
 
-# Stable per-branch colors, assigned by branch_id sort order so the same branch
-# gets the same color across every chart on the network-overview page.
-BRANCH_PALETTE = ['#378ADD', '#1D9E75', '#D85A30', '#7F77DD', '#E0A82E', '#888780']
-
-
-def _can_view_demo_branches():
-    """Demo branches (DEMO_BRANCH_IDS) are visible ONLY to admin (who sees
-    everything) and to the scoped demo account. Everyone else — every CEO
-    account, every aggregate/network view, every other manager — must never
-    see them. Reads the current session, so call inside a request."""
-    if session.get('user_role') == 'admin':
-        return True
-    return (session.get('user_email') or '').strip().lower() == DEMO_ACCOUNT_EMAIL
-
-
-def _demo_exclusion_sql(column='id'):
-    """SQL fragment that hides demo branches from users who may not see them.
-
-    Returns '' for admin and the demo account (no filter); otherwise
-    ' AND <column> NOT IN (9999,9998)'. Designed to be appended after an
-    existing WHERE clause so every branch list/aggregate stays consistent."""
-    if _can_view_demo_branches():
-        return ''
-    ids = ','.join(str(i) for i in DEMO_BRANCH_IDS)
-    return f' AND {column} NOT IN ({ids})'
-
-
-# ── Per-branch visibility FLOOR ──────────────────────────────
-# A branch's `visible_from` (migration 021) is a rolling-forward floor: when
-# set, that branch never sees its own operational data from before that date.
-# NULL = no floor (branches 126/127 and the demo stores). Because the floor is
-# always the 1st of a month, it is month-granular in practice — a month is
-# visible iff it is >= the floor month. Applied at the single-branch route
-# layer only; admin cross-branch aggregates (network/ops) are deliberately
-# left unfloored, so the shared salary/fixed/electricity helpers stay
-# floor-agnostic.
-
-def _branch_visible_from(branch_id, db=None):
-    """The branch's hard visibility floor as 'YYYY-MM-DD', or None for no floor."""
-    if not branch_id:
-        return None
-    db = db or get_db()
-    row = db.execute(
-        'SELECT visible_from FROM branches WHERE id = ?', (branch_id,)
-    ).fetchone()
-    return row['visible_from'] if row and row['visible_from'] else None
-
-
-def _branch_floor_month(branch_id, db=None):
-    """The branch floor as 'YYYY-MM' (or None for no floor)."""
-    vf = _branch_visible_from(branch_id, db)
-    return vf[:7] if vf else None
-
-
-def _effective_floor_month(branch_id, db=None):
-    """Strictest of the global DATA_FLOOR_MONTH and the per-branch floor.
-    Used to clamp the month picker / navigation for a given branch."""
-    bf = _branch_floor_month(branch_id, db)
-    return max(DATA_FLOOR_MONTH, bf) if bf else DATA_FLOOR_MONTH
-
-
-def _month_below_floor(branch_id, month, db=None):
-    """True iff this branch must NOT see `month` (strictly before its floor).
-    Branches with no floor — and any month at/after the floor — return False."""
-    bf = _branch_floor_month(branch_id, db)
-    return bool(bf and month and month < bf)
-
-
-def _list_visible_branches(user_id, role):
-    """Return [{id, name}, ...] of active branches the user can see.
-
-    admin       → every active branch (incl. demo).
-    ceo         → every active branch EXCEPT demo (DEMO_BRANCH_IDS).
-    manager     → only branches listed in user_branches (demo excluded unless
-                  this is the scoped demo account).
-
-    Sorted by branch id so colors assigned later are stable.
-    """
-    db = get_db()
-    if role in ROLES_ALL_BRANCHES:
-        rows = db.execute(
-            "SELECT id, name FROM branches WHERE active = 1"
-            + _demo_exclusion_sql() + " ORDER BY id"
-        ).fetchall()
-        return [dict(r) for r in rows]
-    rows = db.execute(
-        "SELECT b.id, b.name FROM branches b "
-        "JOIN user_branches ub ON ub.branch_id = b.id "
-        "WHERE b.active = 1 AND ub.user_id = ?"
-        + _demo_exclusion_sql('b.id') + " ORDER BY b.id",
-        (user_id,)
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _reclamp_ctx_to_branch(ctx, branch_id, db=None):
-    """Re-apply the month picker clamp/nav for a *specific* branch.
-
-    `_page_context` clamps to the page branch's floor, but the v2 pages can
-    render a different picked store in single-store mode. If that store has a
-    stricter floor than the currently-selected month, bump the month up and
-    rebuild the nav so the picker can't sit on a below-floor month."""
-    if not branch_id:
-        return ctx
-    floor = _effective_floor_month(branch_id, db)
-    ctx['data_floor_month'] = floor
-    if ctx['selected_month'] < floor:
-        ctx['selected_month'] = floor
-        (ctx['prev_month'], ctx['next_month'], ctx['month_display'],
-         ctx['show_today_btn'], ctx['current_month']) = _month_nav(floor, floor)
-    return ctx
-
-
 def _page_context(active_page):
-    requested = request.args.get('month')
-    # Resolve the branch first so the month clamp respects this branch's own
-    # visibility floor (max of the global floor and branches.visible_from).
+    selected = _parse_month()
     branch_id = _get_branch_id()
-    floor = _effective_floor_month(branch_id)
-    selected = _parse_month(floor)
-    # True iff the URL explicitly asked for a pre-floor month — used by the
-    # template to render the "first month with data" notice.
-    floor_clamped = bool(requested and requested < floor)
-    prev_month, next_month, month_display, show_today, current = _month_nav(selected, floor)
-    role = session.get('user_role')
-    user_branches = session.get('user_branches', [])
-    # Same "multi-branch account" definition the navbar branch switcher uses
-    # (base.html:35): admin/ceo see every branch; managers with 2+ user_branches.
-    is_multi_branch = role in ROLES_ALL_BRANCHES or (user_branches and len(user_branches) > 1)
+    prev_month, next_month, month_display, show_today, current = _month_nav(selected)
     return {
         'active_page': active_page,
         'selected_month': selected,
-        'data_floor_month': floor,
-        'floor_clamped': floor_clamped,
         'branch_id': branch_id,
         'branch_name': _branch_name(branch_id),
         'prev_month': prev_month,
@@ -683,7 +404,6 @@ def _page_context(active_page):
         'month_display': month_display,
         'show_today_btn': show_today,
         'current_month': current,
-        'is_multi_branch': bool(is_multi_branch),
     }
 
 
@@ -693,184 +413,13 @@ def _page_context(active_page):
 @login_required
 def index():
     ctx = _page_context('home')
-    role = session.get('user_role')
-    mode = session.get('home_view_mode', 'branch')
-    if mode == 'network' and role in ROLES_ALL_BRANCHES:
-        ctx['active_page'] = 'home'
-        ctx['view_mode'] = 'network'
-        return render_template('home_network.html', **ctx)
-    ctx['view_mode'] = 'branch'
     return render_template('index.html', **ctx)
-
-
-@app.route('/api/set-view-mode', methods=['POST'])
-@login_required
-def api_set_view_mode():
-    """Persist the home-page toggle between 'branch' and 'network'.
-    Only admin + ceo can switch into network mode."""
-    role = session.get('user_role')
-    if role not in ROLES_ALL_BRANCHES:
-        return jsonify({'error': 'forbidden'}), 403
-    data = request.get_json(silent=True) or {}
-    mode = data.get('mode')
-    if mode not in ('branch', 'network'):
-        return jsonify({'error': 'invalid mode'}), 400
-    session['home_view_mode'] = mode
-    return jsonify({'ok': True, 'mode': mode})
-
-
-@app.route('/network')
-@login_required
-def network_page():
-    """Dedicated multi-branch live network page.
-
-    Access: admin/ceo (sees all assigned branches) and managers with 2+
-    user_branches (sees only their assigned branches). Single-branch
-    accounts are redirected home — the page would be a one-tile grid.
-
-    Data is loaded client-side via /api/live-sales/network, which already
-    enforces user_branches access control (URL params can't leak).
-    """
-    role = session.get('user_role')
-    user_branches = session.get('user_branches', [])
-    is_multi_branch = role in ROLES_ALL_BRANCHES or (user_branches and len(user_branches) > 1)
-    if not is_multi_branch:
-        return redirect(url_for('index'))
-    ctx = _page_context('network')
-    return render_template('network.html', **ctx)
-
-
-# ── Sales charts ─────────────────────────────────────────────
-# datetime.weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-_HE_WEEKDAY = {6: 'ראשון', 0: 'שני', 1: 'שלישי', 2: 'רביעי',
-               3: 'חמישי', 4: 'שישי', 5: 'שבת'}
-
-
-def _parse_z_rows(z_reports):
-    """[{date,'amount'}, ...] → sorted [(date, amount)] ascending by date."""
-    out = []
-    for z in z_reports:
-        d = z['date']
-        if isinstance(d, str):
-            d = datetime.strptime(d, '%Y-%m-%d').date()
-        out.append((d, float(z['amount'] or 0)))
-    out.sort(key=lambda t: t[0])
-    return out
-
-
-def _has_saturday_z(z_reports):
-    return any(d.weekday() == 5 for d, _ in _parse_z_rows(z_reports))
-
-
-def _build_daily_chart_data(z_reports):
-    """One bar per Z-report date.
-
-    Red = a bar that represents COMBINED Saturday+Sunday revenue.
-    Any single-day bar (Saturday alone, Sunday alone, anything else) is
-    blue. Friday is always blue.
-
-    - has_saturday_z True (branch runs Saturday Zs): every bar is its own
-      day, all blue, no secondary day-name label.
-    - has_saturday_z False: a Sunday with no preceding Saturday Z is the
-      combined שבת+ראשון bar → red + secondary label. (A Sunday that does
-      have a preceding Saturday Z stays blue — unreachable while
-      has_saturday_z is False, but coded defensively.)
-    """
-    rows = _parse_z_rows(z_reports)
-    date_set = {d for d, _ in rows}
-    has_sat = any(d.weekday() == 5 for d in date_set)
-    out = []
-    for d, amt in rows:
-        secondary, color = None, 'blue'
-        if not has_sat and d.weekday() == 6:          # Sunday, CASE B
-            if (d - timedelta(days=1)) not in date_set:  # no preceding Sat Z
-                secondary, color = 'שבת+ראשון', 'red'
-        out.append({'date': d.strftime('%d/%m'),
-                    'label_secondary': secondary,
-                    'value': round(amt, 2), 'color': color})
-    return out
-
-
-def _build_dow_chart_data(z_reports):
-    """Average revenue per weekday.
-
-    Red = the combined שבת+ראשון bar only. Friday is always blue.
-
-    - has_saturday_z True: 7 separate bars ראשון…שבת, ALL blue.
-    - has_saturday_z False: 6 bars — combined שבת+ראשון first (= average
-      of all Sunday revenues, since no Saturday data exists), red; then
-      שני…שישי, all blue.
-    """
-    rows = _parse_z_rows(z_reports)
-    has_sat = any(d.weekday() == 5 for d, _ in rows)
-    buckets = {}
-    for d, amt in rows:
-        buckets.setdefault(d.weekday(), []).append(amt)
-
-    def avg(wd):
-        vals = buckets.get(wd, [])
-        return round(sum(vals) / len(vals), 2) if vals else 0
-
-    if has_sat:
-        # 7 bars: ראשון … שבת — all blue (no combined-weekend bar).
-        return [{'label': _HE_WEEKDAY[wd], 'value': avg(wd), 'color': 'blue'}
-                for wd in (6, 0, 1, 2, 3, 4, 5)]
-    # CASE B: 6 bars — combined שבת+ראשון first (all Sundays), then Mon..Fri.
-    sun = buckets.get(6, [])
-    combined = round(sum(sun) / len(sun), 2) if sun else 0
-    out = [{'label': 'שבת+ראשון', 'value': combined, 'color': 'red'}]
-    out += [{'label': _HE_WEEKDAY[wd], 'value': avg(wd), 'color': 'blue'}
-            for wd in (0, 1, 2, 3, 4)]
-    return out
-
-
-def _build_cumulative_chart_data(z_reports):
-    out, running = [], 0.0
-    for d, amt in _parse_z_rows(z_reports):
-        running += amt
-        out.append({'date': d.strftime('%d/%m'), 'value': round(running, 2)})
-    return out
-
-
-def _sales_charts_data(z_reports):
-    return {
-        'daily': _build_daily_chart_data(z_reports),
-        'dow': _build_dow_chart_data(z_reports),
-        'cumulative': _build_cumulative_chart_data(z_reports),
-        'has_saturday_z': _has_saturday_z(z_reports),
-    }
-
-
-def _build_sales_footer(z_reports):
-    """Server-rendered table-footer totals (one cell per data column).
-    Returns None when there are no rows."""
-    if not z_reports:
-        return None
-    total_rev = 0.0
-    total_txn = 0
-    for z in z_reports:
-        total_rev += float(z.get('amount') or 0)
-        total_txn += int(z.get('transactions') or 0)
-    return {
-        'total_revenue': round(total_rev, 2),
-        'total_transactions': total_txn,
-        'avg_basket': round(total_rev / total_txn) if total_txn else 0,
-    }
 
 
 @app.route('/sales')
 @login_required
 def sales():
     ctx = _page_context('sales')
-    db = get_db()
-    rows = db.execute(
-        "SELECT date, amount, transactions FROM daily_sales "
-        "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date ASC",
-        (ctx['branch_id'], ctx['selected_month'])
-    ).fetchall()
-    z_reports = [dict(r) for r in rows]
-    ctx['charts_data'] = _sales_charts_data(z_reports)
-    ctx['sales_footer'] = _build_sales_footer(z_reports)
     return render_template('sales.html', **ctx)
 
 
@@ -880,12 +429,6 @@ def goods():
     ctx = _page_context('goods')
     branch_id = ctx['branch_id']
     month = ctx['selected_month']
-
-    view = request.args.get('view')
-    if view in ('list', 'grouped'):
-        session['goods_view_mode'] = view
-    view_mode = session.get('goods_view_mode', 'list')
-
     db = get_db()
     rows = db.execute(
         "SELECT id, doc_date, supplier, ref_number, amount, doc_type "
@@ -906,23 +449,8 @@ def goods():
     for d in docs:
         d['amount_before_vat'] = round(d['amount'] / 1.17, 2)
 
-    groups_map = {}
-    for d in docs:
-        s = d['supplier'] or '—'
-        g = groups_map.setdefault(s, {
-            'supplier': s, 'count': 0, 'total': 0.0,
-            'total_before_vat': 0.0, 'docs': []
-        })
-        g['count'] += 1
-        g['total'] += d['amount']
-        g['total_before_vat'] += d['amount_before_vat']
-        g['docs'].append(d)
-    groups = sorted(groups_map.values(), key=lambda g: g['total'], reverse=True)
-
     ctx.update({
         'docs': docs,
-        'groups': groups,
-        'view_mode': view_mode,
         'total': total,
         'total_before_vat': total_before_vat,
         'invoices_total': invoices_total,
@@ -955,20 +483,13 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
 
     Current month: ONLY source='aviv_api' rows count.
     Past months: all sources count.
-    Hourly:  SUM(employee_hours.total_hours × employees.hourly_rate).
-    Global:  + SUM(employees.global_salary) for active salary_type='global'
-             employees — a FLAT monthly amount, hours ignored, no proration.
+    Salary = SUM(employee_hours.total_hours × employees.hourly_rate) for the month.
 
     Returns {'amount', 'source', 'hours', 'label'}
     """
     db = get_db()
 
     # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
-    # UPDATED 2026-05-09: Include 'aviv_report' source (new employer-report agent).
-    # UPDATED 2026-05-31: Exclude salary_type='global' employees — their cost is
-    #   a flat amount added below, never hours×rate. Excluding them here also
-    #   prevents Aviv hours for a global employee from double-counting via the
-    #   rate=0 → total_salary fallback.
     # Only include hours for ACTIVE employees (inactive employees excluded from salary).
     rows = db.execute('''
         SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
@@ -977,21 +498,10 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         JOIN employees e ON (
             e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
         )
-        WHERE eh.branch_id = ? AND eh.month = ?
-          AND eh.source IN ('aviv_api', 'aviv_report')
-          AND COALESCE(e.salary_type, 'hourly') != 'global'
+        WHERE eh.branch_id = ? AND eh.month = ? AND eh.source = 'aviv_api'
     ''', (branch_id, current_month)).fetchall()
 
-    # Global employees: flat monthly amount, regardless of hours.
-    grow = db.execute('''
-        SELECT COALESCE(SUM(global_salary), 0) AS g, COUNT(*) AS c
-        FROM employees
-        WHERE branch_id = ? AND active = 1 AND salary_type = 'global'
-    ''', (branch_id,)).fetchone()
-    global_total = grow['g'] or 0
-    global_count = grow['c'] or 0
-
-    if not rows and global_count == 0:
+    if not rows:
         return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
 
     total_salary = 0
@@ -1005,10 +515,8 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         total_hours += hours
         sources.add(r['source'] or 'unknown')
 
-    total_salary += global_total
-
     # Determine source label
-    has_api = ('aviv_api' in sources) or ('aviv_report' in sources)
+    has_api = 'aviv_api' in sources
     has_csv = 'csv' in sources
     if has_api and has_csv:
         source = 'api+csv'
@@ -1016,8 +524,6 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         source = 'csv'
     elif has_api:
         source = 'api'
-    elif global_count > 0:
-        source = 'global'
     else:
         source = 'unknown'
 
@@ -1082,48 +588,20 @@ def _recalculate_avg_rate(branch_id: int, conn):
 
 # ── API Routes ───────────────────────────────────────────────
 
-@app.route('/api/events/heartbeat', methods=['POST'])
-@login_required
-def api_heartbeat():
-    """Time-on-page heartbeat. Fires every 30s + once on page-leave (beacon).
-    Duration is cumulative from page-load (not delta)."""
-    data = request.get_json(silent=True) or {}
-    page = data.get('page')
-    branch_id = data.get('branch_id')
-    duration = data.get('duration_seconds')
-    if not isinstance(duration, (int, float)) or duration < 0 or duration > 86400:
-        return '', 204
-    try:
-        bid = int(branch_id) if branch_id not in (None, '') else None
-    except (TypeError, ValueError):
-        bid = None
-    if bid is None:
-        bid = session.get('branch_id')
-    _record_event('heartbeat', page=page, branch_id=bid,
-                  duration_seconds=int(duration))
-    return '', 204
-
-
 @app.route('/api/branches')
 @login_required
 def api_branches():
     db = get_db()
     role = session.get('user_role')
-    if role in ROLES_ALL_BRANCHES:
-        # admin/ceo: every branch, no user_branches rows needed (demo hidden
-        # from ceo via _demo_exclusion_sql; admin sees it)
-        rows = db.execute(
-            'SELECT id, name, city, active FROM branches WHERE 1=1'
-            + _demo_exclusion_sql() + ' ORDER BY id'
-        ).fetchall()
+    if role == 'admin':
+        rows = db.execute('SELECT id, name, city, active FROM branches ORDER BY id').fetchall()
     else:
         user_branches = session.get('user_branches', [])
         if not user_branches:
             return jsonify([])
         placeholders = ','.join('?' * len(user_branches))
         rows = db.execute(
-            f'SELECT id, name, city, active FROM branches WHERE id IN ({placeholders})'
-            + _demo_exclusion_sql() + ' ORDER BY id',
+            f'SELECT id, name, city, active FROM branches WHERE id IN ({placeholders}) ORDER BY id',
             user_branches
         ).fetchall()
     return jsonify([dict(r) for r in rows])
@@ -1137,19 +615,6 @@ def api_summary():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
     db = get_db()
-    # Visibility floor: a below-floor month shows nothing for this branch.
-    if _month_below_floor(branch_id, month, db):
-        return jsonify({
-            'income': 0, 'goods': 0, 'fixed': 0, 'fixed_only': 0,
-            'electricity': {'amount': 0, 'source': 'none', 'estimate_basis': None},
-            'salary': 0, 'salary_source': 'none', 'salary_label': '',
-            'profit': 0, 'live': None, 'has_z': False, 'live_amount_today': 0,
-            'branch_id': branch_id, 'month': month,
-            'cancellation_total': 0, 'discount_total': 0,
-            'running_total': 0, 'running_count': 0,
-            'latest_electricity': None, 'iec_last_sync_at': None,
-            'electricity_source': None,
-        })
     # Income from daily_sales
     income = db.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM daily_sales "
@@ -1176,8 +641,6 @@ def api_summary():
     current_month = _now_il().strftime('%Y-%m')
     has_z = False
     live_amount_today = 0
-    fresh_today = False
-    stale_row = None
 
     if month == current_month:
         z_row = db.execute(
@@ -1193,28 +656,11 @@ def api_summary():
             (branch_id, today)
         ).fetchone()
 
-        fresh_today = bool(live_row and live_row['amount']
-                           and live_row['last_updated'] != 'PAUSED')
-
-        if fresh_today:
-            # POLICY: live_amount_today is the FRESH today-only value. Stale
-            # (prior-day) values feed the tile via live.is_stale but are
-            # NEVER added to income — that would double-count a day whose
-            # Z-report already landed in daily_sales. Keep the two separate.
+        if live_row and live_row['amount']:
             live_amount_today = live_row['amount']
+            # If no Z-report for today, add live amount to income
             if not has_z:
                 income += live_amount_today
-        elif not has_z:
-            # Calendar date has rolled over and no fresh pull yet → store-
-            # closed state. Surface the most recent past-day live row only as
-            # last_amount/last_date for context (never as the live number,
-            # never into income math above).
-            stale_row = db.execute(
-                'SELECT amount, date FROM live_sales '
-                'WHERE branch_id = ? AND amount > 0 AND date < ? '
-                'ORDER BY date DESC, fetched_at DESC LIMIT 1',
-                (branch_id, today)
-            ).fetchone()
     else:
         live_row = None
 
@@ -1229,53 +675,26 @@ def api_summary():
     discount_total = 0
     running_total = 0
     running_count = 0
-    # Fresh today, or the has_z path (today's row shown as-is, unchanged).
-    live_src = live_row if (fresh_today or (has_z and live_row)) else None
-    if live_src is not None:
+    if live_row:
         live = {
-            'amount': live_src['amount'],
-            'transactions': live_src['transactions'],
-            'last_updated': live_src['last_updated'],
-            'is_stale': False,
-            'is_closed': False,
+            'amount': live_row['amount'],
+            'transactions': live_row['transactions'],
+            'last_updated': live_row['last_updated'],
         }
         try:
-            cancellation_total = round(float(live_src['cancellation_total'] or 0), 2)
-            discount_total = round(float(live_src['discount_total'] or 0), 2)
-            running_total = round(float(live_src['running_total'] or 0), 2)
-            running_count = int(live_src['running_count'] or 0)
+            cancellation_total = round(float(live_row['cancellation_total'] or 0), 2)
+            discount_total = round(float(live_row['discount_total'] or 0), 2)
+            running_total = round(float(live_row['running_total'] or 0), 2)
+            running_count = int(live_row['running_count'] or 0)
         except (KeyError, TypeError):
             pass
-    elif stale_row:
-        # Calendar date has rolled to a new day, no fresh pull, no Z →
-        # store-closed state. Past-day amount surfaces as last_amount only,
-        # never as the live number. Not in income.
-        live = {
-            'amount': None,
-            'transactions': None,
-            'last_updated': None,
-            'is_stale': False,
-            'is_closed': True,
-            'last_amount': stale_row['amount'],
-            'last_date': stale_row['date'],
-        }
 
-    # Latest electricity invoice for the strip. Respect the branch floor so a
-    # pre-floor bill never surfaces as the "latest" on a floored branch.
-    vf = _branch_visible_from(branch_id, db)
-    if vf:
-        latest_elec = db.execute(
-            "SELECT period_label, amount, due_date FROM electricity_invoices "
-            "WHERE branch_id = ? AND COALESCE(month, strftime('%Y-%m', due_date)) >= ? "
-            "ORDER BY due_date DESC LIMIT 1",
-            (branch_id, vf[:7])
-        ).fetchone()
-    else:
-        latest_elec = db.execute(
-            "SELECT period_label, amount, due_date FROM electricity_invoices "
-            "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
-            (branch_id,)
-        ).fetchone()
+    # Latest electricity invoice for the strip
+    latest_elec = db.execute(
+        "SELECT period_label, amount, due_date FROM electricity_invoices "
+        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
     # IEC last sync time + electricity_source
     branch_elec = db.execute(
         "SELECT iec_last_sync_at, electricity_source FROM branches WHERE id = ?", (branch_id,)
@@ -1310,363 +729,6 @@ def api_summary():
     })
 
 
-# Department codes surfaced as KPI tiles on the home page. The full ~35-row
-# breakdown is stored in z_department_sales nightly; only these are
-# highlighted on /. Adding a 4th dept is a one-line list edit — no schema
-# change. dept_code is the source of truth; the display label here is the
-# Hebrew tag managers want to see (Aviv's own names are stored too but can
-# read awkwardly out of context, e.g. dept 2 = "ירקות פירות").
-HOME_DEPT_TILES: list[dict] = [
-    {'code': 5,  'label': 'מקרר חלב', 'icon': '🥛'},
-    {'code': 83, 'label': 'סיגריות',  'icon': '🚬'},
-    {'code': 2,  'label': 'ירקות',    'icon': '🥬'},
-]
-
-
-@app.route('/api/department-sales')
-@login_required
-def api_department_sales():
-    """Return per-department sales for the selected branch.
-
-    Default: most recent date with any z_department_sales rows for the branch
-    (so the tile keeps showing yesterday's number when today's Z hasn't
-    landed yet, instead of showing "—"). Override with ?date=YYYY-MM-DD.
-
-    Response:
-      {
-        "branch_id": 127,
-        "date": "2026-05-27" | null,
-        "departments": [{"code": 5, "amount": 4150.33, "qty": 518.0,
-                         "name": "מקרר-מוצרי חלב ותחליפים"}, ...],
-        "tiles": [{"code": 5, "label": "מקרר חלב", "icon": "🥛",
-                   "amount": 4150.33}, ...]
-      }
-
-    `tiles` is the home page's preferred renderer payload — codes from
-    HOME_DEPT_TILES with their amounts looked up. Missing depts → amount=None
-    so the template can render "—" gracefully.
-    """
-    branch_id = get_branch_id()
-    db = get_db()
-
-    # Visibility floor: never surface a dept day before the branch floor.
-    vf = _branch_visible_from(branch_id, db)
-    target_date = request.args.get('date')
-    if target_date and vf and target_date < vf:
-        target_date = None
-    elif not target_date:
-        # Latest date this branch has any dept data for (>= floor).
-        if vf:
-            row = db.execute(
-                'SELECT MAX(date) AS d FROM z_department_sales '
-                'WHERE branch_id=? AND date >= ?',
-                (branch_id, vf)
-            ).fetchone()
-        else:
-            row = db.execute(
-                'SELECT MAX(date) AS d FROM z_department_sales WHERE branch_id=?',
-                (branch_id,)
-            ).fetchone()
-        target_date = row['d'] if row and row['d'] else None
-
-    departments: list[dict] = []
-    by_code: dict[int, dict] = {}
-    if target_date:
-        rows = db.execute(
-            'SELECT dept_code, dept_name, amount, qty FROM z_department_sales '
-            'WHERE branch_id=? AND date=? ORDER BY amount DESC',
-            (branch_id, target_date)
-        ).fetchall()
-        for r in rows:
-            entry = {
-                'code': r['dept_code'],
-                'name': r['dept_name'],
-                'amount': r['amount'],
-                'qty': r['qty'],
-            }
-            departments.append(entry)
-            by_code[r['dept_code']] = entry
-
-    tiles = []
-    for t in HOME_DEPT_TILES:
-        entry = by_code.get(t['code'])
-        tiles.append({
-            'code': t['code'],
-            'label': t['label'],
-            'icon': t['icon'],
-            'amount': entry['amount'] if entry else None,
-        })
-
-    return jsonify({
-        'branch_id': branch_id,
-        'date': target_date,
-        'departments': departments,
-        'tiles': tiles,
-    })
-
-
-# Department tiles shown at the top of /sales — same 3 depts as the (now
-# removed) home tiles, but each tile's hero number is the AVERAGE DAILY
-# PERCENTAGE of that dept's share of the day's Z, across the selected month.
-# Codes/colors mirror the per-day expand panel in sales.html.
-SALES_DEPT_TILES: list[dict] = [
-    {'code': 5,  'label': 'חלב',     'icon': '🥛', 'accent': '#60a5fa'},
-    {'code': 83, 'label': 'סיגריות', 'icon': '🚬', 'accent': '#fbbf24'},
-    {'code': 2,  'label': 'ירקות',   'icon': '🥬', 'accent': '#4ade80'},
-]
-
-
-@app.route('/api/department-sales-monthly')
-@login_required
-def api_department_sales_monthly():
-    """Per-dept monthly summary for /sales: average daily % + ₪ total.
-
-    For the selected branch + month, the hero number per dept is the
-    EQUAL-WEIGHT AVERAGE of each qualifying day's percentage
-    (dept_amount / day_Z_total * 100) — NOT month-total / month-total.
-
-    A "qualifying day" is one that has a real Z (daily_sales row, amount > 0,
-    non-provisional source) AND has z_department_sales rows (proving the 902
-    was actually parsed for that day). Days with no Z, closed-day sentinels,
-    or days where the 902 was never fetched are excluded entirely — they are
-    NOT counted as 0%. A day that DID parse a 902 but has no row for a given
-    dept counts as 0% for that dept (genuine zero — other depts were itemized
-    that day, so this one simply sold nothing).
-
-    Response:
-      {
-        "branch_id": 127, "month": "2026-05", "days_counted": 21,
-        "tiles": [{"code": 5, "label": "חלב", "icon": "🥛",
-                   "accent": "#60a5fa", "avg_pct": 18.3, "total": 87654.32}, ...]
-      }
-    """
-    branch_id = get_branch_id()
-    month = request.args.get('month') or session.get('selected_month')
-    db = get_db()
-
-    # Visibility floor: a below-floor month has no qualifying days for this branch.
-    if _month_below_floor(branch_id, month, db):
-        return jsonify({
-            'branch_id': branch_id, 'month': month, 'days_counted': 0,
-            'tiles': [{'code': t['code'], 'label': t['label'], 'icon': t['icon'],
-                       'accent': t['accent'], 'avg_pct': None, 'total': 0}
-                      for t in SALES_DEPT_TILES],
-        })
-
-    # Qualifying days: real Z (amount > 0, non-provisional) that also has a
-    # parsed 902 (at least one z_department_sales row that day).
-    day_rows = db.execute(
-        "SELECT ds.date AS date, ds.amount AS z_total FROM daily_sales ds "
-        "WHERE ds.branch_id=? AND strftime('%Y-%m', ds.date)=? "
-        "AND ds.amount > 0 AND ds.source NOT IN ('live_provisional', 'provisional') "
-        "AND EXISTS (SELECT 1 FROM z_department_sales z "
-        "            WHERE z.branch_id=ds.branch_id AND z.date=ds.date) "
-        "ORDER BY ds.date ASC",
-        (branch_id, month)
-    ).fetchall()
-    qualifying = {r['date']: r['z_total'] for r in day_rows}
-
-    # Per-dept amount per qualifying day, for the 3 tile codes only.
-    codes = [t['code'] for t in SALES_DEPT_TILES]
-    placeholders = ','.join('?' * len(codes))
-    dept_rows = db.execute(
-        f"SELECT date, dept_code, amount FROM z_department_sales "
-        f"WHERE branch_id=? AND strftime('%Y-%m', date)=? "
-        f"AND dept_code IN ({placeholders})",
-        (branch_id, month, *codes)
-    ).fetchall()
-    # {code: {date: amount}}
-    by_code: dict[int, dict] = {c: {} for c in codes}
-    for r in dept_rows:
-        if r['date'] in qualifying:
-            by_code[r['dept_code']][r['date']] = r['amount']
-
-    tiles = []
-    for t in SALES_DEPT_TILES:
-        per_day = by_code[t['code']]
-        total = 0.0
-        pct_sum = 0.0
-        for date, z_total in qualifying.items():
-            amt = per_day.get(date, 0.0) or 0.0
-            total += amt
-            if z_total and z_total > 0:
-                pct_sum += amt / z_total * 100
-        avg_pct = round(pct_sum / len(qualifying), 1) if qualifying else None
-        tiles.append({
-            'code': t['code'],
-            'label': t['label'],
-            'icon': t['icon'],
-            'accent': t['accent'],
-            'avg_pct': avg_pct,
-            'total': round(total, 2),
-        })
-
-    return jsonify({
-        'branch_id': branch_id,
-        'month': month,
-        'days_counted': len(qualifying),
-        'tiles': tiles,
-    })
-
-
-@app.route('/api/network-overview')
-@login_required
-def api_network_overview():
-    """Chain-wide aggregate for the CEO 'network' view.
-
-    Returns the single payload that feeds all six chart sections on
-    home_network.html (monthly revenue, 6-month trend, profitability,
-    average basket, expense breakdown, leaderboard). Reuses
-    _calculate_salary_cost and _get_fixed_total so every number on this
-    page matches the per-branch home page.
-    """
-    role = session.get('user_role')
-    if role not in ROLES_ALL_BRANCHES:
-        return jsonify({'error': 'forbidden'}), 403
-
-    db = get_db()
-    visible = _list_visible_branches(session.get('user_id'), role)
-    if not visible:
-        return jsonify({
-            'branches': [],
-            'monthly_revenue': [],
-            'trend_6m': {'months': [], 'series': []},
-            'profitability': [],
-            'avg_basket': [],
-            'expense_breakdown': {'goods': 0, 'salary': 0, 'electricity': 0, 'fixed_other': 0},
-            'leaderboard': [],
-        })
-
-    # Stable color per branch by sort order.
-    branches = []
-    for i, b in enumerate(visible):
-        branches.append({
-            'id': b['id'],
-            'name': b['name'],
-            'color': BRANCH_PALETTE[i % len(BRANCH_PALETTE)],
-        })
-
-    current_month = _now_il().strftime('%Y-%m')
-
-    # Build the trailing 6-month window (oldest → current), then drop any
-    # months earlier than the data floor — those would render as flat zeros
-    # and look broken.
-    cy, cm = map(int, current_month.split('-'))
-    trend_months = []
-    y, m = cy, cm
-    for _ in range(6):
-        trend_months.append(f'{y:04d}-{m:02d}')
-        m -= 1
-        if m == 0:
-            m = 12
-            y -= 1
-    trend_months.reverse()
-    trend_months = [ms for ms in trend_months if ms >= DATA_FLOOR_MONTH]
-    trend_labels = [f'{int(ms.split("-")[1])}/{ms.split("-")[0]}' for ms in trend_months]
-
-    monthly_revenue = []
-    profitability = []
-    avg_basket = []
-    trend_series = []
-    total_goods = 0.0
-    total_salary = 0.0
-    total_elec = 0.0
-    total_fixed_other = 0.0
-
-    for b in branches:
-        bid = b['id']
-        bname = b['name']
-
-        # Current-month revenue + transactions
-        row = db.execute(
-            "SELECT COALESCE(SUM(amount),0) AS revenue, "
-            "COALESCE(SUM(transactions),0) AS txn "
-            "FROM daily_sales WHERE branch_id=? AND strftime('%Y-%m',date)=?",
-            (bid, current_month)
-        ).fetchone()
-        revenue = round(float(row['revenue'] or 0), 2)
-        txn = int(row['txn'] or 0)
-
-        goods = db.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM goods_documents "
-            "WHERE branch_id=? AND strftime('%Y-%m',doc_date)=?",
-            (bid, current_month)
-        ).fetchone()[0]
-        goods = round(float(goods or 0), 2)
-
-        _ensure_monthly_expenses(bid, current_month, db)
-        fix_data = _get_fixed_total(bid, current_month, revenue, db)
-        fixed_only = round(float(fix_data['fixed_only']), 2)
-        electricity = round(float(fix_data['electricity']['amount']), 2)
-
-        salary = _calculate_salary_cost(bid, current_month)['amount']
-        salary = round(float(salary), 2)
-
-        profit = round(revenue - goods - salary - fixed_only - electricity, 2)
-        profit_pct = round((profit / revenue) * 100, 1) if revenue > 0 else 0
-
-        basket = round(revenue / txn, 2) if txn > 0 else 0
-
-        monthly_revenue.append({
-            'branch_id': bid, 'branch_name': bname, 'value': revenue,
-        })
-        avg_basket.append({
-            'branch_id': bid, 'branch_name': bname, 'value': basket,
-        })
-        profitability.append({
-            'branch_id': bid, 'branch_name': bname,
-            'revenue': revenue, 'goods': goods, 'salary': salary,
-            'fixed': fixed_only, 'electricity': electricity,
-            'profit': profit, 'profit_pct': profit_pct,
-        })
-
-        total_goods += goods
-        total_salary += salary
-        total_elec += electricity
-        total_fixed_other += fixed_only
-
-        # 6-month revenue trend
-        trend_data = []
-        for ms in trend_months:
-            tr = db.execute(
-                "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
-                "WHERE branch_id=? AND strftime('%Y-%m',date)=?",
-                (bid, ms)
-            ).fetchone()[0]
-            trend_data.append(round(float(tr or 0), 2))
-        trend_series.append({
-            'branch_id': bid, 'branch_name': bname, 'color': b['color'],
-            'data': trend_data,
-        })
-
-    # Leaderboard — sorted by profit descending
-    ranked = sorted(profitability, key=lambda r: r['profit'], reverse=True)
-    leaderboard = [{
-        'rank': i + 1,
-        'branch_id': r['branch_id'],
-        'branch_name': r['branch_name'],
-        'revenue': r['revenue'],
-        'profit': r['profit'],
-        'profit_pct': r['profit_pct'],
-    } for i, r in enumerate(ranked)]
-
-    return jsonify({
-        'branches': branches,
-        'month': current_month,
-        'monthly_revenue': monthly_revenue,
-        'trend_6m': {'months': trend_labels, 'series': trend_series},
-        'profitability': profitability,
-        'avg_basket': avg_basket,
-        'expense_breakdown': {
-            'goods': round(total_goods, 2),
-            'salary': round(total_salary, 2),
-            'electricity': round(total_elec, 2),
-            'fixed_other': round(total_fixed_other, 2),
-        },
-        'leaderboard': leaderboard,
-    })
-
-
 @app.route('/api/history')
 @login_required
 def api_history():
@@ -1680,12 +742,6 @@ def api_history():
         return jsonify([])
 
     start_y, start_m = start
-    # Visibility floor: never start the history before the branch floor month.
-    fm = _branch_floor_month(branch_id, db)
-    if fm:
-        fy, fmo = map(int, fm.split('-'))
-        if (start_y, start_m) < (fy, fmo):
-            start_y, start_m = fy, fmo
     end_y, end_m = map(int, month.split('-'))
     months = []
     y, m = start_y, start_m
@@ -1733,15 +789,7 @@ def api_history():
 @app.route('/api/live-sales')
 @login_required
 def api_live_sales():
-    """Return today's live sales for a branch.
-
-    Read-time rule (no scheduled job, no writes): live data is shown ONLY
-    for the current calendar day (Asia/Jerusalem). When the date has rolled
-    over and no fresh pull exists for the new day yet, returns is_closed
-    with last_amount/last_date for context — the tile renders "החנות סגורה"
-    rather than resurfacing yesterday's closing number as live.
-    Z-report (daily_sales row for today) always wins.
-    """
+    """Return today's live sales for a branch."""
     branch_id = get_branch_id()
     today = _now_il().strftime('%Y-%m-%d')
     db = get_db()
@@ -1749,147 +797,13 @@ def api_live_sales():
         'SELECT amount, transactions, last_updated FROM live_sales WHERE branch_id = ? AND date = ?',
         (branch_id, today)
     ).fetchone()
-
-    fresh_today = bool(row and row['amount'] and row['last_updated'] != 'PAUSED')
-    if fresh_today:
+    if row:
         return jsonify({
             'amount': row['amount'],
             'transactions': row['transactions'],
             'last_updated': row['last_updated'],
-            'is_stale': False,
-            'is_closed': False,
         })
-
-    has_z = db.execute(
-        "SELECT 1 FROM daily_sales WHERE branch_id = ? AND date = ?",
-        (branch_id, today)
-    ).fetchone() is not None
-
-    if has_z:
-        # Z wins — no is_closed even if no live row for today.
-        if row:
-            return jsonify({
-                'amount': row['amount'],
-                'transactions': row['transactions'],
-                'last_updated': row['last_updated'],
-                'is_stale': False,
-                'is_closed': False,
-            })
-        return jsonify({'amount': None, 'transactions': None,
-                        'last_updated': None, 'is_stale': False,
-                        'is_closed': False})
-
-    # Calendar date has rolled to a new day, no fresh pull yet, no Z.
-    # Look up the most recent past-day live row for is_closed context.
-    latest = db.execute(
-        'SELECT amount, date FROM live_sales '
-        'WHERE branch_id = ? AND amount > 0 AND date < ? '
-        'ORDER BY date DESC, fetched_at DESC LIMIT 1',
-        (branch_id, today)
-    ).fetchone()
-    if latest:
-        return jsonify({
-            'amount': None,
-            'transactions': None,
-            'last_updated': None,
-            'is_stale': False,
-            'is_closed': True,
-            'last_amount': latest['amount'],
-            'last_date': latest['date'],
-        })
-    return jsonify({'amount': None, 'transactions': None,
-                    'last_updated': None, 'is_stale': False,
-                    'is_closed': False})
-
-
-def _live_row_for_branch(db, branch_id, today):
-    """Per-branch live-sales read using the same read-time rule as
-    /api/live-sales (today's row, Z-wins, is_closed fallback).
-    Returns a dict matching the per-branch tile payload."""
-    row = db.execute(
-        'SELECT amount, transactions, last_updated FROM live_sales '
-        'WHERE branch_id = ? AND date = ?',
-        (branch_id, today)
-    ).fetchone()
-    fresh_today = bool(row and row['amount'] and row['last_updated'] != 'PAUSED')
-    if fresh_today:
-        return {
-            'amount': row['amount'],
-            'transactions': row['transactions'],
-            'last_updated': row['last_updated'],
-            'is_closed': False,
-        }
-    has_z = db.execute(
-        "SELECT 1 FROM daily_sales WHERE branch_id = ? AND date = ?",
-        (branch_id, today)
-    ).fetchone() is not None
-    if has_z:
-        if row:
-            return {
-                'amount': row['amount'],
-                'transactions': row['transactions'],
-                'last_updated': row['last_updated'],
-                'is_closed': False,
-            }
-        return {'amount': None, 'transactions': None,
-                'last_updated': None, 'is_closed': False}
-    latest = db.execute(
-        'SELECT amount, date FROM live_sales '
-        'WHERE branch_id = ? AND amount > 0 AND date < ? '
-        'ORDER BY date DESC, fetched_at DESC LIMIT 1',
-        (branch_id, today)
-    ).fetchone()
-    if latest:
-        return {
-            'amount': None, 'transactions': None, 'last_updated': None,
-            'is_closed': True,
-            'last_amount': latest['amount'], 'last_date': latest['date'],
-        }
-    return {'amount': None, 'transactions': None,
-            'last_updated': None, 'is_closed': False}
-
-
-@app.route('/api/live-sales/network')
-@login_required
-def api_live_sales_network():
-    """Per-branch live tile payload for multi-branch accounts.
-
-    Returns one entry per ASSIGNED branch (admin/ceo → all active branches;
-    manager → only user_branches). Each entry uses the same read-time rule
-    as /api/live-sales — today's row wins, Z wins, otherwise is_closed with
-    last_amount/last_date context.
-
-    Access control: derives the branch list from _list_visible_branches —
-    URL params are ignored, a multi-store manager cannot leak other branches.
-    """
-    db = get_db()
-    role = session.get('user_role')
-    user_id = session.get('user_id')
-    visible = _list_visible_branches(user_id, role)
-    today = _now_il().strftime('%Y-%m-%d')
-
-    branches = []
-    chain_total = 0.0
-    active_count = 0
-    for b in visible:
-        live = _live_row_for_branch(db, b['id'], today)
-        entry = {
-            'branch_id': b['id'],
-            'branch_name': b['name'],
-            **live,
-        }
-        branches.append(entry)
-        if live.get('amount') and not live.get('is_closed'):
-            chain_total += float(live['amount'])
-            active_count += 1
-
-    return jsonify({
-        'is_multi_branch': len(visible) > 1,
-        'branches': branches,
-        'chain_total': round(chain_total, 2),
-        'active_count': active_count,
-        'total_count': len(visible),
-    })
+    return jsonify({'amount': None, 'transactions': None, 'last_updated': None})
 
 
 @app.route('/api/sales-by-hour')
@@ -1900,10 +814,7 @@ def api_sales_by_hour():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
 
-    # Visibility floor: a below-floor month yields the empty (all-zero) payload.
-    floored = _month_below_floor(branch_id, month, db)
-
-    rows = [] if floored else db.execute(
+    rows = db.execute(
         '''SELECT hour, SUM(amount) as total, SUM(transactions) as count
            FROM hourly_sales
            WHERE branch_id = ? AND strftime('%Y-%m', date) = ?
@@ -1960,7 +871,7 @@ def api_sales_by_hour():
         peak = quiet = None
         hourly_avg = 0
 
-    days_with_data = 0 if floored else db.execute(
+    days_with_data = db.execute(
         '''SELECT COUNT(DISTINCT date) FROM hourly_sales
            WHERE branch_id = ? AND strftime('%Y-%m', date) = ?''',
         (branch_id, month)
@@ -2056,18 +967,9 @@ def api_employees_list():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
 
-    # Visibility floor: a below-floor month shows no employee/hours data.
-    if _month_below_floor(branch_id, month, db):
-        return jsonify({
-            'employees': [], 'hours_this_month': 0, 'avg_hourly_rate': 0,
-            'hours_updated_at': '', 'salary_cost': 0, 'salary_hours': 0,
-            'salary_source': 'none', 'csv_processed': False, 'history': [],
-        })
-
     # All active employees from employees table
     emp_rows = db.execute(
-        "SELECT id, name, role, hourly_rate, "
-        "COALESCE(salary_type, 'hourly') AS salary_type, global_salary FROM employees "
+        "SELECT id, name, role, hourly_rate FROM employees "
         "WHERE branch_id = ? AND active = 1 ORDER BY name",
         (branch_id,)
     ).fetchall()
@@ -2075,10 +977,9 @@ def api_employees_list():
 
     # Hours for this month from employee_hours
     # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
-    # UPDATED 2026-05-09: Include 'aviv_report' rows alongside 'aviv_api'.
     hours_rows = db.execute(
         "SELECT employee_name, total_hours, total_salary, source FROM employee_hours "
-        "WHERE branch_id = ? AND month = ? AND source IN ('aviv_api', 'aviv_report')",
+        "WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
         (branch_id, month)
     ).fetchall()
     hours_map = {r['employee_name']: dict(r) for r in hours_rows}
@@ -2098,14 +999,6 @@ def api_employees_list():
     for emp in employees:
         emp['name'] = _clean_display_name(emp['name'], branch_name)
         matched = _match_employee_hours(emp['name'], hours_map, branch_name)
-        if emp['salary_type'] == 'global':
-            # Global employees ARE matched and their hours are shown (FYI), but
-            # their COST stays the flat global_salary — hours never costed.
-            # (_calculate_salary_cost excludes globals from hours×rate.)
-            emp['hours'] = matched['total_hours'] if matched else 0
-            emp['hours_source'] = matched.get('source', 'none') if matched else 'none'
-            emp['salary'] = emp['global_salary'] or 0
-            continue
         if matched:
             emp['hours'] = matched['total_hours']
             emp['salary'] = matched['total_salary']
@@ -2135,23 +1028,19 @@ def api_employees_list():
     history = []
     if earliest and earliest['m']:
         start_y, start_m = map(int, earliest['m'].split('-'))
-        # Visibility floor: never start the history table before the floor month.
-        fm = _branch_floor_month(branch_id, db)
-        if fm:
-            fy, fmo = map(int, fm.split('-'))
-            if (start_y, start_m) < (fy, fmo):
-                start_y, start_m = fy, fmo
         end_y, end_m = map(int, month.split('-'))
         y, m2 = start_y, start_m
         while (y, m2) <= (end_y, end_m):
             m_str = f'{y:04d}-{m2:02d}'
-            # Route per-month salary through the single source of truth so the
-            # history table can never diverge from the KPI/P&L — and so global
-            # employees' flat amounts are included here too (commit 2026-05-31).
-            h_sal = _calculate_salary_cost(branch_id, m_str)
-            h_hours = h_sal['hours']
-            h_salary = h_sal['amount']
-            h_source = 'api' if h_sal['source'] != 'none' else 'none'
+            # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
+            h_row = db.execute(
+                "SELECT COALESCE(SUM(total_hours), 0) as hours, COALESCE(SUM(total_salary), 0) as salary, "
+                "COUNT(*) as cnt FROM employee_hours WHERE branch_id = ? AND month = ? AND source = 'aviv_api'",
+                (branch_id, m_str)
+            ).fetchone()
+            h_hours = h_row['hours']
+            h_salary = h_row['salary']
+            h_source = 'api' if h_row['cnt'] > 0 else 'none'
             h_rate = round(h_salary / h_hours, 2) if h_hours > 0 and h_salary > 0 else avg_hourly_rate
             history.append({
                 'month': m_str, 'hours': h_hours, 'salary': h_salary,
@@ -2173,99 +1062,6 @@ def api_employees_list():
         'csv_processed': csv_processed,
         'history': history,
     })
-
-
-@app.route('/api/employee-shifts', methods=['GET'])
-@login_required
-def api_employee_shifts():
-    """Per-shift drill-down for one employee in a month (migration 022).
-
-    Query: ?month=YYYY-MM&employee_id=N. Branch comes from the session — never
-    a URL param. Shifts are display-only; the authoritative monthly total comes
-    from employee_hours (the salary source of truth), returned as total_hours so
-    the UI total reconciles with the card. Honors the branch visibility floor.
-    """
-    branch_id = get_branch_id()
-    month = request.args.get('month', _now_il().strftime('%Y-%m'))
-    try:
-        emp_id = int(request.args.get('employee_id', ''))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'employee_id required'}), 400
-    db = get_db()
-
-    if _month_below_floor(branch_id, month, db):
-        return jsonify({'shifts': [], 'total_hours': 0, 'open_count': 0})
-
-    emp = db.execute(
-        "SELECT name FROM employees WHERE id = ? AND branch_id = ?",
-        (emp_id, branch_id)
-    ).fetchone()
-    if not emp:
-        return jsonify({'error': 'not found'}), 404
-    emp_name = emp['name']
-
-    shift_rows = db.execute(
-        "SELECT shift_date, start_ts, end_ts, hours, day_of_week, is_open "
-        "FROM employee_shifts "
-        "WHERE branch_id = ? AND month = ? AND employee_name = ? "
-        "ORDER BY shift_date, start_ts",
-        (branch_id, month, emp_name)
-    ).fetchall()
-
-    # Authoritative monthly total — from employee_hours, NOT a sum of shift rows
-    # (report subtotals can exceed a naive shift sum; open shifts carry no hours).
-    total_row = db.execute(
-        "SELECT total_hours FROM employee_hours "
-        "WHERE branch_id = ? AND month = ? AND employee_name = ? "
-        "AND source IN ('aviv_api', 'aviv_report')",
-        (branch_id, month, emp_name)
-    ).fetchone()
-    total_hours = (total_row['total_hours'] or 0) if total_row else 0
-
-    shifts = [dict(r) for r in shift_rows]
-    open_count = sum(1 for s in shifts if s['is_open'])
-    return jsonify({
-        'shifts': shifts,
-        'total_hours': total_hours,
-        'open_count': open_count,
-    })
-
-
-@app.route('/api/open-shifts', methods=['GET'])
-@login_required
-def api_open_shifts():
-    """Open shifts (אין יציאה — no clock-out) for the branch in a month.
-
-    Powers the URGENT red flag on /employees and the home page. An open shift
-    means hours are miscounted → salary is wrong, so this is higher-severity
-    than the passive amber "unrecognized employee" banner. Branch from session;
-    honors the visibility floor. Names are display-cleaned for the UI.
-    """
-    branch_id = get_branch_id()
-    month = request.args.get('month', _now_il().strftime('%Y-%m'))
-    db = get_db()
-
-    if _month_below_floor(branch_id, month, db):
-        return jsonify({'open_shifts': [], 'count': 0})
-
-    branch_row = db.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)).fetchone()
-    branch_name = (branch_row['name'] or '') if branch_row else ''
-
-    rows = db.execute(
-        "SELECT employee_name, shift_date, start_ts, day_of_week "
-        "FROM employee_shifts "
-        "WHERE branch_id = ? AND month = ? AND is_open = 1 "
-        "ORDER BY shift_date, employee_name",
-        (branch_id, month)
-    ).fetchall()
-
-    open_shifts = [{
-        'employee_name': _clean_display_name(r['employee_name'], branch_name),
-        'shift_date': r['shift_date'],
-        'start_ts': r['start_ts'],
-        'day_of_week': r['day_of_week'],
-    } for r in rows]
-    return jsonify({'open_shifts': open_shifts, 'count': len(open_shifts)})
 
 
 def _clean_display_name(name: str, branch_name: str = '') -> str:
@@ -2343,50 +1139,20 @@ def api_employees_create():
     branch_id = get_branch_id()
     name = data.get('name', '').strip()
     role = data.get('role', 'ערב')
-    salary_type = data.get('salary_type', 'hourly')
-    if salary_type not in ('hourly', 'global'):
-        return jsonify({'error': 'invalid salary_type'}), 400
+    hourly_rate = float(data.get('hourly_rate', 0))
     if not name:
         return jsonify({'error': 'name required'}), 400
-
-    if salary_type == 'global':
-        global_salary = float(data.get('global_salary', 0))
-        if global_salary <= 0:
-            return jsonify({'error': 'global_salary must be positive'}), 400
-        hourly_rate = 0
-    else:
-        hourly_rate = float(data.get('hourly_rate', 0))
-        if hourly_rate < 0:
-            return jsonify({'error': 'hourly_rate must be non-negative'}), 400
-        global_salary = None
-
+    if hourly_rate < 0:
+        return jsonify({'error': 'hourly_rate must be non-negative'}), 400
     db = get_db()
-    # employees has UNIQUE(branch_id, name). A bare INSERT OR IGNORE would
-    # silently no-op on a name collision and still report success — so the new
-    # (e.g. global) employee never gets created and "doesn't appear". Mirror the
-    # pending add-new flow: 409 on an active duplicate, revive an inactive one.
-    existing = db.execute(
-        "SELECT id, active FROM employees WHERE branch_id = ? AND name = ?",
-        (branch_id, name)).fetchone()
-    if existing and existing['active']:
-        return jsonify({'error': f'עובד/ת בשם {name} כבר קיים/ת ופעיל/ה'}), 409
-    if existing:
-        # Revive the soft-deleted row with the new details (incl. salary type).
-        db.execute(
-            "UPDATE employees SET role=?, hourly_rate=?, salary_type=?, global_salary=?, active=1 "
-            "WHERE id=?",
-            (role, hourly_rate, salary_type, global_salary, existing['id']))
-        emp_id = existing['id']
-    else:
-        cur = db.execute(
-            "INSERT INTO employees (branch_id, name, role, hourly_rate, salary_type, global_salary, active) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1)",
-            (branch_id, name, role, hourly_rate, salary_type, global_salary))
-        emp_id = cur.lastrowid
-    if salary_type == 'hourly' and hourly_rate > 0:
+    db.execute(
+        "INSERT OR IGNORE INTO employees (branch_id, name, role, hourly_rate) VALUES (?, ?, ?, ?)",
+        (branch_id, name, role, hourly_rate)
+    )
+    if hourly_rate > 0:
         _recalculate_avg_rate(branch_id, db)
     db.commit()
-    return jsonify({'ok': True, 'employee_id': emp_id})
+    return jsonify({'ok': True})
 
 
 @app.route('/api/employees/<int:emp_id>', methods=['PUT'])
@@ -2403,27 +1169,12 @@ def api_employees_update(emp_id):
         return jsonify({'error': 'forbidden'}), 403
     name = data.get('name', row['name'])
     role = data.get('role', row['role'])
-    salary_type = data.get('salary_type', row['salary_type'] or 'hourly')
-    if salary_type not in ('hourly', 'global'):
-        return jsonify({'error': 'invalid salary_type'}), 400
-
-    if salary_type == 'global':
-        global_salary = float(data.get('global_salary', row['global_salary'] or 0))
-        if global_salary <= 0:
-            return jsonify({'error': 'global_salary must be positive'}), 400
-        hourly_rate = 0
-    else:
-        hourly_rate = float(data.get('hourly_rate', row['hourly_rate']))
-        if hourly_rate < 0:
-            return jsonify({'error': 'hourly_rate must be non-negative'}), 400
-        global_salary = None
-
+    hourly_rate = float(data.get('hourly_rate', row['hourly_rate']))
     db.execute(
-        "UPDATE employees SET name=?, role=?, hourly_rate=?, salary_type=?, global_salary=? WHERE id=?",
-        (name, role, hourly_rate, salary_type, global_salary, emp_id)
+        "UPDATE employees SET name=?, role=?, hourly_rate=? WHERE id=?",
+        (name, role, hourly_rate, emp_id)
     )
-    if salary_type == 'hourly':
-        _recalculate_avg_rate(branch_id, db)
+    _recalculate_avg_rate(branch_id, db)
     db.commit()
     return jsonify({'ok': True})
 
@@ -2490,23 +1241,18 @@ def api_employee_match_pending():
         )
     ''')
 
-    # Visibility floor: don't surface pre-floor unmatched hours for this branch.
-    if _month_below_floor(branch_id, month, db):
-        rows = []
-    else:
-        rows = db.execute('''
-            SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
-                   p.hours, p.salary, p.month, p.aviv_employee_id,
-                   COALESCE(p.source, 'csv') as source,
-                   COALESCE(p.is_new_employee, 0) as is_new_employee,
-                   COALESCE(p.is_csv_only, 0) as is_csv_only,
-                   e.name as suggested_name, e.hourly_rate as suggested_rate
-            FROM employee_match_pending p
-            LEFT JOIN employees e ON e.id = p.suggested_employee_id
-            WHERE p.branch_id = ? AND p.month = ? AND p.resolved = 0
-              AND COALESCE(p.source, 'csv') IN ('csv', 'aviv_api', 'aviv_report')
-            ORDER BY p.hours DESC
-        ''', (branch_id, month)).fetchall()
+    rows = db.execute('''
+        SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
+               p.hours, p.salary, p.month, p.aviv_employee_id,
+               COALESCE(p.source, 'csv') as source,
+               COALESCE(p.is_new_employee, 0) as is_new_employee,
+               COALESCE(p.is_csv_only, 0) as is_csv_only,
+               e.name as suggested_name, e.hourly_rate as suggested_rate
+        FROM employee_match_pending p
+        LEFT JOIN employees e ON e.id = p.suggested_employee_id
+        WHERE p.branch_id = ? AND p.month = ? AND p.resolved = 0
+        ORDER BY p.hours DESC
+    ''', (branch_id, month)).fetchall()
 
     # Also get all active employees for reassignment dropdown
     employees = [dict(r) for r in db.execute(
@@ -2647,21 +1393,11 @@ def api_pending_add_new(pending_id):
 
     data = request.get_json()
     name = (data.get('name') or '').strip()
+    hourly_rate = float(data.get('hourly_rate', 0))
     role = (data.get('role') or 'ערב').strip()
-    salary_type = data.get('salary_type', 'hourly')
-    if salary_type not in ('hourly', 'global'):
-        return jsonify({'error': 'invalid salary_type'}), 400
 
-    if salary_type == 'global':
-        global_salary = float(data.get('global_salary', 0))
-        if not name or global_salary <= 0:
-            return jsonify({'error': 'name and global_salary required'}), 400
-        hourly_rate = 0
-    else:
-        hourly_rate = float(data.get('hourly_rate', 0))
-        global_salary = None
-        if not name or hourly_rate <= 0:
-            return jsonify({'error': 'name and hourly_rate required'}), 400
+    if not name or hourly_rate <= 0:
+        return jsonify({'error': 'name and hourly_rate required'}), 400
 
     # Get aviv_employee_id from pending row if available
     aviv_emp_id = None
@@ -2682,54 +1418,33 @@ def api_pending_add_new(pending_id):
         # Reactivate inactive employee with updated details
         new_emp_id = existing['id']
         db.execute(
-            'UPDATE employees SET hourly_rate = ?, role = ?, active = 1, aviv_employee_id = ?, '
-            'salary_type = ?, global_salary = ? WHERE id = ?',
-            (hourly_rate, role, aviv_emp_id, salary_type, global_salary, new_emp_id))
+            'UPDATE employees SET hourly_rate = ?, role = ?, active = 1, aviv_employee_id = ? '
+            'WHERE id = ?',
+            (hourly_rate, role, aviv_emp_id, new_emp_id))
     else:
         cur = db.execute(
-            'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id, '
-            'salary_type, global_salary) VALUES (?, ?, ?, ?, 1, ?, ?, ?)',
-            (branch_id, name, hourly_rate, role, aviv_emp_id, salary_type, global_salary))
+            'INSERT INTO employees (branch_id, name, hourly_rate, role, active, aviv_employee_id) '
+            'VALUES (?, ?, ?, ?, 1, ?)',
+            (branch_id, name, hourly_rate, role, aviv_emp_id))
         new_emp_id = cur.lastrowid
 
-    # Promote hours from EVERY unresolved pending row that shares the same
-    # (branch_id, csv_name, source) — this covers the case where the same
-    # person has rows for both current and previous month. For a GLOBAL
-    # employee, hours are irrelevant to cost: we still resolve the pending rows
-    # (clear the banner) but write no employee_hours row.
+    # Save hours
+    hours = row['hours']
+    salary = round(hours * hourly_rate, 2)
     source = 'aviv_api'
     try:
         source = row['source'] or 'csv'
     except (IndexError, KeyError):
         pass
-    csv_name = (row['csv_name'] or '').strip()
 
-    sibling_rows = db.execute(
-        "SELECT id, month, hours FROM employee_match_pending "
-        "WHERE branch_id=? AND csv_name=? AND COALESCE(source,'csv')=? AND resolved=0",
-        (branch_id, csv_name, source)).fetchall()
-    if not sibling_rows:
-        # Defensive: at minimum process the row the user clicked.
-        sibling_rows = [row]
-
-    promoted_months = []
-    total_promoted_hours = 0.0
-    for sib in sibling_rows:
-        sib_hours = float(sib['hours'] or 0)
-        sib_month = sib['month']
-        sib_id = sib['id']
-        if salary_type == 'hourly':
-            sib_salary = round(sib_hours * hourly_rate, 2)
-            db.execute(
-                "INSERT OR REPLACE INTO employee_hours "
-                "(branch_id, month, employee_name, total_hours, total_salary, source) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (branch_id, sib_month, name, sib_hours, sib_salary, source))
-        db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (sib_id,))
-        promoted_months.append(sib_month)
-        total_promoted_hours += sib_hours
+    db.execute(
+        "INSERT OR REPLACE INTO employee_hours "
+        "(branch_id, month, employee_name, total_hours, total_salary, source) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (branch_id, row['month'], name, hours, salary, source))
 
     # Always create alias for the original Aviv/CSV name (prevents re-flagging)
+    csv_name = (row['csv_name'] or '').strip()
     if csv_name:
         db.execute(
             'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
@@ -2740,15 +1455,11 @@ def api_pending_add_new(pending_id):
                 'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
                 (new_emp_id, name, branch_id))
 
+    db.execute('UPDATE employee_match_pending SET resolved = 1 WHERE id = ?', (pending_id,))
     _recalculate_avg_rate(branch_id, db)
     db.commit()
 
-    return jsonify({
-        'ok': True,
-        'employee_id': new_emp_id,
-        'promoted_months': promoted_months,
-        'promoted_hours': round(total_promoted_hours, 2),
-    })
+    return jsonify({'ok': True, 'employee_id': new_emp_id})
 
 
 @app.route('/api/labor-cost-ratio')
@@ -2768,10 +1479,6 @@ def api_labor_cost_ratio():
     ''', (branch_id, branch_id)).fetchall()
 
     months = sorted([r['m'] for r in months_rows if r['m']])
-    # Visibility floor: drop any month before the branch floor.
-    fm = _branch_floor_month(branch_id, db)
-    if fm:
-        months = [m for m in months if m >= fm]
     result = []
     for m_str in months:
         sal = _calculate_salary_cost(branch_id, m_str)
@@ -3021,9 +1728,6 @@ def api_fixed_expenses_list():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
-    # Visibility floor: a below-floor month has no expenses for this branch.
-    if _month_below_floor(branch_id, month, db):
-        return jsonify([])
     _ensure_monthly_expenses(branch_id, month, db)
     income = db.execute(
         "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
@@ -3138,15 +1842,6 @@ def api_fixed_expenses_summary():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
-    # Visibility floor: a below-floor month has no expenses for this branch.
-    if _month_below_floor(branch_id, month, db):
-        y, m = map(int, month.split('-'))
-        return jsonify({
-            'fixed_only': 0,
-            'electricity': {'amount': 0, 'source': 'none', 'estimate_basis': None},
-            'total': 0,
-            'month_label': f'{HEBREW_MONTHS[m]} {y}',
-        })
     _ensure_monthly_expenses(branch_id, month, db)
 
     # Income calc — same logic as api_fixed_expenses_list
@@ -3182,21 +1877,11 @@ def api_electricity_latest():
     """Return the most recent electricity invoice for the branch, or null."""
     branch_id = get_branch_id()
     db = get_db()
-    # Visibility floor: never surface a pre-floor invoice as "latest".
-    vf = _branch_visible_from(branch_id, db)
-    if vf:
-        row = db.execute(
-            "SELECT period_label, amount, due_date FROM electricity_invoices "
-            "WHERE branch_id = ? AND COALESCE(month, strftime('%Y-%m', due_date)) >= ? "
-            "ORDER BY due_date DESC LIMIT 1",
-            (branch_id, vf[:7])
-        ).fetchone()
-    else:
-        row = db.execute(
-            "SELECT period_label, amount, due_date FROM electricity_invoices "
-            "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
-            (branch_id,)
-        ).fetchone()
+    row = db.execute(
+        "SELECT period_label, amount, due_date FROM electricity_invoices "
+        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+        (branch_id,)
+    ).fetchone()
     if not row:
         return jsonify(None)
     return jsonify({
@@ -3216,20 +1901,12 @@ def api_sales():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
-    # Visibility floor: a below-floor month shows no sales for this branch.
-    if _month_below_floor(branch_id, month, db):
-        return jsonify({
-            'sales': [], 'total': 0, 'avg': 0, 'highest': 0, 'lowest': 0,
-            'days': 0, 'avg_daily_txn': 0, 'avg_txn_value': 0,
-        })
     rows = db.execute(
-        "SELECT date, amount, transactions, source, fetched_at FROM daily_sales "
+        "SELECT date, amount, transactions, source FROM daily_sales "
         "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date DESC",
         (branch_id, month)
     ).fetchall()
     sales = [dict(r) for r in rows]
-    for s in sales:
-        s['fetched_at'] = _utc_str_to_il_iso(s.get('fetched_at'))
 
     total = sum(s['amount'] for s in sales)
     days = len(sales)
@@ -3317,9 +1994,7 @@ def api_sales_pdf_pages(sale_date):
         return jsonify({'pages': 0})
 
 
-def _admin_required(f):
-    """Allow only role='admin'. CEO and manager are explicitly rejected here —
-    /ops and /admin/* are operator-only surfaces."""
+def _ceo_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if 'user_id' not in session:
@@ -3330,47 +2005,11 @@ def _admin_required(f):
     return decorated
 
 
-def _collect_chain_stores(db):
-    """Return the list of active chain stores (rows with aviv_branch_id set,
-    excluding HQ/legacy ids) with a needs_setup flag — same shape the
-    /admin/branches enrich-form expects. Lifted out so /ops can render the
-    same dropdown without duplicating the loop.
-    """
-    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
-    excluded = set(EXCLUDED_CHAIN_AVIV_IDS)
-    manager_map = {}
-    for row in db.execute(
-        "SELECT ub.branch_id FROM user_branches ub JOIN users u ON u.id = ub.user_id "
-        "WHERE u.active = 1 AND u.role = 'manager'"
-    ).fetchall():
-        manager_map[row['branch_id']] = manager_map.get(row['branch_id'], 0) + 1
-    stores = []
-    for b in db.execute(
-        'SELECT id, name, city, aviv_branch_id, bilboy_branch_id, '
-        'franchise_supplier FROM branches WHERE active=1 ORDER BY id'
-    ).fetchall():
-        if b['aviv_branch_id'] is None or b['aviv_branch_id'] in excluded:
-            continue
-        has_franchise = bool((b['franchise_supplier'] or '').strip())
-        has_bilboy = b['bilboy_branch_id'] is not None
-        has_manager = manager_map.get(b['id'], 0) > 0
-        needs_setup = not (has_franchise and has_bilboy and has_manager)
-        stores.append({
-            'id': b['id'],
-            'name': b['name'] or f"סניף {b['aviv_branch_id']}",
-            'aviv_branch_id': b['aviv_branch_id'],
-            'city': b['city'] or '',
-            'needs_setup': needs_setup,
-        })
-    return stores
-
-
 @app.route('/ops')
-@_admin_required
+@_ceo_required
 def ops():
     ctx = _page_context('ops')
-    db = get_db()
-    return render_template('ops.html', chain_stores=_collect_chain_stores(db), **ctx)
+    return render_template('ops.html', **ctx)
 
 
 def _to_il_time(utc_str):
@@ -3411,23 +2050,17 @@ def _convert_run_times(row_dict):
 
 
 @app.route('/api/ops-status')
-@_admin_required
+@_ceo_required
 def api_ops_status():
-    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
-    excluded = set(EXCLUDED_CHAIN_AVIV_IDS)
-
     db = get_db()
-    current_month = _now_il().strftime('%Y-%m')
     # Branches
-    branches_rows = db.execute(
-        'SELECT id, name, city, active, aviv_branch_id FROM branches WHERE active = 1'
-    ).fetchall()
+    branches_rows = db.execute('SELECT id, name, city, active FROM branches WHERE active = 1').fetchall()
     branches = []
     for b in branches_rows:
         bid = b['id']
         # Last run per agent — exactly one row per agent
         agents_data = {}
-        for agent in ('bilboy', 'gmail', 'aviv_live', 'aviv_report'):
+        for agent in ('bilboy', 'gmail', 'aviv_live'):
             row = db.execute(
                 "SELECT status, message, started_at, duration_seconds, docs_count, amount "
                 "FROM agent_runs WHERE branch_id=? AND agent=? "
@@ -3470,16 +2103,13 @@ def api_ops_status():
         else:
             agents_data['iec'] = None
 
-        # Determine overall status. 'skipped' is NOT 'ok' — a chain branch
-        # whose only runs were no_credentials skips would otherwise show a
-        # green dot. Treat all-skipped (or no rows) as 'unknown'; any real
-        # success alongside skips is 'ok'.
+        # Determine overall status
         statuses = [a['status'] for a in agents_data.values() if a]
         if 'error' in statuses:
             overall = 'error'
         elif 'warning' in statuses:
             overall = 'warning'
-        elif 'success' in statuses:
+        elif statuses:
             overall = 'ok'
         else:
             overall = 'unknown'
@@ -3496,26 +2126,13 @@ def api_ops_status():
             (bid,)
         ).fetchone()['cnt']
 
-        # Salary — single source of truth, same function /employees uses.
-        # /ops previously estimated salary as branches.hours_this_month *
-        # avg_hourly_rate (Aviv-scraped branch total) which double-counted
-        # vs the per-employee tracked sum on /employees. Reconcile here.
-        salary_data = _calculate_salary_cost(bid, current_month)
-
-        aviv_chain_id = b['aviv_branch_id']
-        is_chain_store = aviv_chain_id is not None and aviv_chain_id not in excluded
         branches.append({
             'id': bid, 'name': b['name'], 'city': b['city'],
             'status': overall, 'agents': agents_data,
             'avg_hourly_rate': rate_row['avg_hourly_rate'] if rate_row else 0,
             'hours_this_month': rate_row['hours_this_month'] if rate_row else 0,
-            'salary_cost': salary_data['amount'],
-            'salary_hours': salary_data['hours'],
-            'salary_source': salary_data['source'],
             'employees_with_rates': emp_rate_count,
             'has_iec_token': bool(has_iec),
-            'aviv_branch_id': aviv_chain_id,
-            'is_chain_store': is_chain_store,
         })
 
     # Recent agent runs
@@ -3569,7 +2186,7 @@ def api_ops_status():
 
 
 @app.route('/ops/run-agent', methods=['POST'])
-@_admin_required
+@_ceo_required
 def ops_run_agent():
     data = request.get_json()
     branch_id = data.get('branch_id')
@@ -3579,16 +2196,6 @@ def ops_run_agent():
         return jsonify({'status': 'error', 'message': 'Invalid parameters'}), 400
 
     t0 = time.time()
-    # Resolve chain-mode eligibility once: a branch is chain-eligible when it
-    # has aviv_branch_id set. The auth path actually used is logged below so
-    # /ops shows which one ran (mirrors the bilboy pattern).
-    db = get_db()
-    branch_row = db.execute(
-        'SELECT aviv_branch_id FROM branches WHERE id=?', (int(branch_id),)
-    ).fetchone()
-    has_aviv_chain_id = bool(branch_row and branch_row['aviv_branch_id'] is not None)
-    auth_path = 'per_store'
-
     try:
         if agent == 'bilboy':
             from agents.bilboy import run_bilboy
@@ -3599,17 +2206,8 @@ def ops_run_agent():
             result = run_gmail_sync(int(branch_id))
             msg = f"{result.get('new_reports', 0)} דוחות חדשים"
         elif agent == 'aviv_live':
-            # Manual /ops trigger: bypass the store-hours guard (admin clicked
-            # the button on purpose). Only aviv_live takes force.
-            from agents.aviv_live import (
-                run_aviv_live, run_aviv_live_chain_one,
-                USE_CHAIN_AUTH as AVIV_LIVE_USE_CHAIN,
-            )
-            if AVIV_LIVE_USE_CHAIN and has_aviv_chain_id:
-                auth_path = 'chain'
-                result = run_aviv_live_chain_one(int(branch_id), force=True)
-            else:
-                result = run_aviv_live(int(branch_id), force=True)
+            from agents.aviv_live import run_aviv_live
+            result = run_aviv_live(int(branch_id))
             msg = f"₪{result.get('amount', 0):,.0f} ({result.get('transactions', 0)} tx)"
         elif agent == 'iec':
             # IEC API is geo-blocked outside Israel — must run on Israeli VPS via SSH
@@ -3628,55 +2226,19 @@ def ops_run_agent():
             else:
                 result = {'success': False}
                 msg = proc.stderr.strip() or proc.stdout.strip() or 'SSH to VPS failed'
-        else:  # aviv_employees → chain-aware aviv_employees_report.run_for_branch
-            from agents.aviv_employees_report import (
-                run_for_branch, _login_chain_account, _refresh,
-                USE_CHAIN_AUTH as AVIV_EMP_USE_CHAIN,
-            )
-            chain_token = None
-            if AVIV_EMP_USE_CHAIN and has_aviv_chain_id:
-                auth_path = 'chain'
-                chain_token = _refresh(_login_chain_account())
-            report_res = run_for_branch(int(branch_id), include_previous_month=False,
-                                        chain_token=chain_token)
-            # Normalize to the shape the rest of the handler expects.
-            if report_res.get('ok'):
-                if report_res.get('skipped'):
-                    result = {'success': True, 'skipped': report_res.get('reason')}
-                    msg = report_res.get('reason') or 'skipped'
-                else:
-                    result = {'success': True}
-                    msg = (f"matched={report_res.get('matched',0)} "
-                           f"unmatched={report_res.get('unmatched',0)} "
-                           f"hours={report_res.get('total_hours',0):.1f}")
-            else:
-                result = {'success': False, 'error': report_res.get('error', 'unknown')}
-                msg = report_res.get('error', 'unknown')
+        else:  # aviv_employees
+            from agents.aviv_employees import run_aviv_employees
+            result = run_aviv_employees(int(branch_id))
+            msg = result.get('message', 'done')
 
         duration = round(time.time() - t0, 1)
-        # Classify outcome: real success vs no-op skip vs error. Skipped runs
-        # do NOT count as success — they're surfaced as 'skipped' so the /ops
-        # status dot reflects reality and brrr stays quiet.
+        status = 'success' if result.get('success') else 'error'
         if not result.get('success'):
-            status = 'error'
-            msg = result.get('error', msg or 'Unknown error')
-        elif result.get('skipped'):
-            status = 'skipped'
-            msg = f"דילוג: {result.get('skipped')}"
-        else:
-            status = 'success'
-
-        app.logger.info("ops_run_agent agent=%s branch=%s auth_path=%s status=%s",
-                        agent, branch_id, auth_path, status)
+            msg = result.get('error', 'Unknown error')
 
         from utils.notify import notify
-        # Only emit brrr for real outcomes — not for skipped/no-op manual runs.
-        if status == 'error':
-            notify(f"❌ {agent}", f"סניף {branch_id} — {msg}")
-        elif status == 'success':
-            notify(f"✅ {agent}", f"סניף {branch_id} — {msg}")
-        return jsonify({'status': status, 'message': msg,
-                        'duration': duration, 'auth_path': auth_path})
+        notify(f"{'✅' if status == 'success' else '❌'} {agent}", f"סניף {branch_id} — {msg}")
+        return jsonify({'status': status, 'message': msg, 'duration': duration})
 
     except Exception as e:
         duration = round(time.time() - t0, 1)
@@ -3684,7 +2246,7 @@ def ops_run_agent():
 
 
 @app.route('/ops/logs/<int:branch_id>/<agent>')
-@_admin_required
+@_ceo_required
 def ops_logs(branch_id, agent):
     import re as _re
     if agent not in ('bilboy', 'gmail', 'aviv_live', 'aviv_employees', 'iec'):
@@ -3732,7 +2294,7 @@ def ops_logs(branch_id, agent):
 
 
 @app.route('/ops/dismiss-alert', methods=['POST'])
-@_admin_required
+@_ceo_required
 def ops_dismiss_alert():
     data = request.get_json()
     alert_id = data.get('alert_id')
@@ -3745,7 +2307,7 @@ def ops_dismiss_alert():
 
 
 @app.route('/api/ops-health')
-@_admin_required
+@_ceo_required
 def api_ops_health():
     def _run(cmd):
         try:
@@ -3791,137 +2353,59 @@ def api_ops_health():
 
 
 @app.route('/admin/branches')
-@_admin_required
+@_ceo_required
 def admin_branches():
     db = get_db()
-    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
-    excluded = set(EXCLUDED_CHAIN_AVIV_IDS)
-
-    branch_rows = db.execute('SELECT * FROM branches ORDER BY id').fetchall()
-    manager_map = {}
-    for row in db.execute(
-        "SELECT ub.branch_id, u.id AS user_id, u.name, u.email "
-        "FROM user_branches ub JOIN users u ON u.id = ub.user_id "
-        "WHERE u.active = 1 AND u.role = 'manager' "
-        "ORDER BY ub.branch_id, u.id"
-    ).fetchall():
-        manager_map.setdefault(row['branch_id'], []).append(
-            {'id': row['user_id'], 'name': row['name'], 'email': row['email']})
-
-    branches = []
-    chain_stores = []
-    for b in branch_rows:
-        bd = dict(b)
-        managers = manager_map.get(bd['id'], [])
-        bd['manager_count'] = len(managers)
-        bd['manager_names'] = ', '.join(m['name'] for m in managers)
-        bd['has_bilboy'] = bd.get('bilboy_branch_id') is not None
-        bd['has_franchise'] = bool((bd.get('franchise_supplier') or '').strip())
-        bd['has_manager'] = len(managers) > 0
-        is_chain = (bd.get('aviv_branch_id') is not None
-                    and bd['aviv_branch_id'] not in excluded)
-        bd['is_chain_store'] = is_chain
-        # Status keys on DATA-SOURCE config only (Aviv id + BilBoy), matching
-        # the Aviv#/BilBoy ✓ columns. is_chain already guarantees aviv_branch_id.
-        # Manager assignment (user_branches) is a SEPARATE concern and must NOT
-        # drive configured/unconfigured — chain stores are admin-only by design.
-        bd['needs_setup'] = is_chain and not bd['has_bilboy']
-        branches.append(bd)
-        if is_chain and bd.get('active'):
-            chain_stores.append({
-                'id': bd['id'],
-                'name': bd.get('name') or f"סניף {bd['aviv_branch_id']}",
-                'aviv_branch_id': bd['aviv_branch_id'],
-                'city': bd.get('city') or '',
-                'needs_setup': bd['needs_setup'],
-            })
-
+    branches = db.execute('SELECT * FROM branches ORDER BY id').fetchall()
     users = db.execute(
         "SELECT u.*, GROUP_CONCAT(ub.branch_id) as branch_ids "
         "FROM users u LEFT JOIN user_branches ub ON u.id = ub.user_id "
         "GROUP BY u.id ORDER BY u.id"
     ).fetchall()
     return render_template('admin_branches.html',
-                           branches=branches,
-                           chain_stores=chain_stores,
+                           branches=[dict(b) for b in branches],
                            users=[dict(u) for u in users],
                            **_page_context('admin'))
 
 
 @app.route('/api/admin/branches', methods=['POST'])
-@_admin_required
+@_ceo_required
 def api_admin_branch_create():
-    """Enrich an autoseed-discovered chain store with per-store config.
-
-    This endpoint NO LONGER creates rows — autoseed (from /account/branches)
-    owns the store roster. The form picks an existing branch_id from the
-    chain-stores dropdown; we UPDATE that row in place. Rejects any call that
-    targets a row without aviv_branch_id set or one in EXCLUDED_CHAIN_AVIV_IDS,
-    which prevents the form from recreating the NULL-aviv_branch_id collision
-    that pre-dated this change.
-    """
-    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
-    data = request.get_json() or {}
-    try:
-        branch_id = int(data.get('branch_id'))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'branch_id required'}), 400
-
+    data = request.get_json()
     db = get_db()
-    row = db.execute(
-        'SELECT id, aviv_branch_id, city, franchise_supplier '
-        'FROM branches WHERE id=?', (branch_id,)).fetchone()
-    if row is None:
-        return jsonify({'error': 'unknown branch_id'}), 404
-    if row['aviv_branch_id'] is None:
-        return jsonify({'error': 'branch is not a chain store (no aviv_branch_id)'}), 400
-    if row['aviv_branch_id'] in EXCLUDED_CHAIN_AVIV_IDS:
-        return jsonify({'error': 'branch is HQ/legacy and cannot be enriched'}), 400
-
-    updates = {}
-    city = (data.get('city') or '').strip()
-    if city and not (row['city'] or '').strip():
-        updates['city'] = city
-    for f in ('franchise_supplier',):
-        if f in data and (data.get(f) or '').strip():
-            updates[f] = data[f].strip()
-    if updates:
-        sql = 'UPDATE branches SET ' + ', '.join(f + '=?' for f in updates) + ' WHERE id=?'
-        db.execute(sql, list(updates.values()) + [branch_id])
-        db.commit()
-
-    manager_email = (data.get('manager_email') or '').strip().lower()
-    manager_name = (data.get('manager_name') or '').strip()
-    manager_password = (data.get('manager_password') or '').strip()
+    max_id = db.execute('SELECT MAX(id) FROM branches').fetchone()[0] or 126
+    new_id = max_id + 1
+    db.execute(
+        '''INSERT INTO branches (id, name, city, active, aviv_user_id, aviv_password,
+           bilboy_user, bilboy_pass, gmail_label, franchise_supplier, iec_contract)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)''',
+        (new_id, data.get('name', ''), data.get('city', ''),
+         data.get('aviv_user_id', ''), data.get('aviv_password', ''),
+         data.get('bilboy_user', ''), data.get('bilboy_pass', ''),
+         data.get('gmail_label', ''),
+         data.get('franchise_supplier', 'זיכיונות המכולת בע"מ'),
+         data.get('iec_contract', '')))
+    db.commit()
+    manager_email = data.get('manager_email', '').strip()
+    manager_name = data.get('manager_name', '').strip()
     if manager_email and manager_name:
-        # Admin types the password (same rule as /admin/users).
-        if len(manager_password) < 6:
-            return jsonify({'error': 'סיסמה למנהל חייבת להכיל לפחות 6 תווים'}), 400
-
-        existing = db.execute('SELECT id FROM users WHERE LOWER(email)=?',
-                              (manager_email,)).fetchone()
-        if existing:
-            # Don't overwrite an existing account's password; just link the
-            # branch and tell the admin the account already existed.
-            db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
-                       (existing['id'], branch_id))
-            db.commit()
-            return jsonify({'ok': True, 'branch_id': branch_id,
-                            'manager_existed': True})
-
-        pw_hash = generate_password_hash(manager_password)
-        cur = db.execute(
-            "INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,'manager',1)",
+        temp_password = secrets.token_urlsafe(8)
+        pw_hash = generate_password_hash(temp_password)
+        db.execute(
+            "INSERT OR IGNORE INTO users (name, email, password_hash, role) VALUES (?,?,?,'manager')",
             (manager_name, manager_email, pw_hash))
-        db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
-                   (cur.lastrowid, branch_id))
         db.commit()
-        return jsonify({'ok': True, 'branch_id': branch_id, 'manager_created': True})
-    return jsonify({'ok': True, 'branch_id': branch_id})
+        user_row = db.execute('SELECT id FROM users WHERE email=?', (manager_email,)).fetchone()
+        if user_row:
+            db.execute('INSERT OR IGNORE INTO user_branches (user_id, branch_id) VALUES (?,?)',
+                       (user_row['id'], new_id))
+            db.commit()
+        return jsonify({'ok': True, 'branch_id': new_id, 'temp_password': temp_password})
+    return jsonify({'ok': True, 'branch_id': new_id})
 
 
 @app.route('/api/admin/branches/<int:branch_id>')
-@_admin_required
+@_ceo_required
 def api_admin_branch_get(branch_id):
     db = get_db()
     row = db.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
@@ -3931,12 +2415,12 @@ def api_admin_branch_get(branch_id):
 
 
 @app.route('/api/admin/branches/<int:branch_id>', methods=['PUT'])
-@_admin_required
+@_ceo_required
 def api_admin_branch_update(branch_id):
     data = request.get_json()
     db = get_db()
     fields = ['name', 'city', 'active', 'aviv_user_id', 'aviv_password',
-              'gmail_label', 'franchise_supplier', 'iec_contract']
+              'bilboy_user', 'bilboy_pass', 'gmail_label', 'franchise_supplier', 'iec_contract']
     updates = {f: data[f] for f in fields if f in data}
     if not updates:
         return jsonify({'ok': True})
@@ -3944,239 +2428,6 @@ def api_admin_branch_update(branch_id):
     db.execute(sql, list(updates.values()) + [branch_id])
     db.commit()
     return jsonify({'ok': True})
-
-
-# ── Admin Users & Branch Assignments ────────────────────────────────────
-
-@app.route('/admin/users')
-@_admin_required
-def admin_users():
-    return render_template('admin_users.html',
-                           current_user_id=session.get('user_id'),
-                           **_page_context('admin'))
-
-
-def _z_status_rows(db, target_date):
-    """Build /z-status rows: one per active branch with aviv_branch_id,
-    joined LEFT to z_report_902 for target_date. Sorted by local branch id.
-
-    Derived status values:
-      got      — z_number AND amount NOT NULL
-      closed   — row exists, z_number IS NULL (closed-day sentinel)
-      missing  — no row in z_report_902 for (branch, date)
-      parse    — z_number NOT NULL but amount IS NULL (parse failure edge)
-    """
-    # Non-store chain entries (HQ, legacy) must never show on /z-status. The
-    # agent's EXCLUDED_CHAIN_AVIV_IDS is the source of truth; mirror it here so
-    # a stray seeded row can't sneak back into the diagnostic.
-    from agents.aviv_z_report import EXCLUDED_CHAIN_AVIV_IDS
-    exclude_csv = ','.join(str(x) for x in sorted(EXCLUDED_CHAIN_AVIV_IDS)) or 'NULL'
-    rows = db.execute(
-        "SELECT b.id AS branch_id, b.name AS branch_name, "
-        "       b.aviv_branch_id, "
-        "       z.z_number, z.amount, z.transactions, z.fetched_at, "
-        "       z.trigger_type, z.auth_source "
-        "FROM branches b "
-        "LEFT JOIN z_report_902 z "
-        "  ON z.branch_id = b.id AND z.date = ? "
-        "WHERE b.active = 1 AND b.aviv_branch_id IS NOT NULL "
-        f"  AND b.aviv_branch_id NOT IN ({exclude_csv}) "
-        "ORDER BY b.id",
-        (target_date,)
-    ).fetchall()
-    out = []
-    for r in rows:
-        has_row = r['fetched_at'] is not None
-        if not has_row:
-            status = 'missing'
-        elif r['z_number'] is None:
-            status = 'closed'
-        elif r['amount'] is None:
-            status = 'parse'
-        else:
-            status = 'got'
-        out.append({
-            'branch_id': r['branch_id'],
-            'branch_name': r['branch_name'],
-            'aviv_branch_id': r['aviv_branch_id'],
-            'z_number': r['z_number'],
-            'amount': r['amount'],
-            'transactions': r['transactions'],
-            'fetched_at_il': _utc_str_to_il_iso(r['fetched_at']),
-            'trigger_type': r['trigger_type'],
-            'auth_source': r['auth_source'],
-            'status': status,
-        })
-    return out
-
-
-@app.route('/z-status')
-@_admin_required
-def z_status():
-    """Diagnostic page: per-branch Z pull status for a chosen date.
-
-    Read-only — reads only z_report_902 + branches. Default date is
-    yesterday in Israel time (matches the agent's default target).
-    """
-    requested = (request.args.get('date') or '').strip()
-    if requested:
-        try:
-            target_date = datetime.strptime(requested, '%Y-%m-%d').date().isoformat()
-        except ValueError:
-            target_date = (_now_il().date() - timedelta(days=1)).isoformat()
-    else:
-        target_date = (_now_il().date() - timedelta(days=1)).isoformat()
-
-    db = get_db()
-    rows = _z_status_rows(db, target_date)
-
-    summary = {
-        'total': len(rows),
-        'got': sum(1 for r in rows if r['status'] == 'got'),
-        'closed': sum(1 for r in rows if r['status'] == 'closed'),
-        'missing': sum(1 for r in rows if r['status'] == 'missing'),
-        'parse': sum(1 for r in rows if r['status'] == 'parse'),
-    }
-    ctx = _page_context('z_status')
-    return render_template('z_status.html', rows=rows, target_date=target_date,
-                           summary=summary, **ctx)
-
-
-@app.route('/api/admin/users')
-@_admin_required
-def api_admin_users():
-    db = get_db()
-    users = db.execute('SELECT id, email, name, role, active FROM users ORDER BY id').fetchall()
-    result = []
-    for u in users:
-        branches = db.execute(
-            '''SELECT b.id, b.name, b.city FROM user_branches ub
-               JOIN branches b ON b.id = ub.branch_id
-               WHERE ub.user_id = ? ORDER BY b.id''', (u['id'],)
-        ).fetchall()
-        result.append({
-            'id': u['id'], 'email': u['email'], 'name': u['name'],
-            'role': u['role'], 'active': u['active'],
-            'branches': [{'id': b['id'], 'name': b['name'], 'city': b['city']} for b in branches]
-        })
-    return jsonify(result)
-
-
-@app.route('/api/admin/users', methods=['POST'])
-@_admin_required
-def api_admin_user_create():
-    """Create a manager or CEO user. Admin users are not creatable from the UI."""
-    data = request.get_json() or {}
-    name = (data.get('name') or '').strip()
-    email = (data.get('email') or '').strip().lower()
-    password = (data.get('password') or '').strip()
-    role = (data.get('role') or 'manager').strip()
-
-    if not name or not email or not password:
-        return jsonify({'error': 'missing name, email, or password'}), 400
-    if role not in ('manager', 'ceo'):
-        return jsonify({'error': 'role must be manager or ceo'}), 400
-    if len(password) < 6:
-        return jsonify({'error': 'password must be at least 6 chars'}), 400
-
-    db = get_db()
-    existing = db.execute('SELECT id FROM users WHERE LOWER(email)=?', (email,)).fetchone()
-    if existing:
-        return jsonify({'error': 'email already exists'}), 409
-
-    pw_hash = generate_password_hash(password)
-    cur = db.execute(
-        'INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,?,1)',
-        (name, email, pw_hash, role))
-    db.commit()
-    return jsonify({'ok': True, 'user_id': cur.lastrowid, 'role': role}), 201
-
-
-@app.route('/api/admin/users/<int:user_id>/active', methods=['POST'])
-@_admin_required
-def api_admin_user_set_active(user_id):
-    """Reversibly (de)activate a user account — sets users.active 0/1 ONLY.
-
-    NEVER deletes the row and never touches user_branches; reactivation
-    restores access fully. active=0 blocks login + all data access because the
-    login + password-reset queries require `active = 1`. Admin-only via
-    _admin_required (ceo/manager → 403). An admin CANNOT deactivate their own
-    currently-logged-in account (would lock themselves out) — enforced
-    server-side, not just hidden in the UI.
-    """
-    data = request.get_json(silent=True) or {}
-    active = data.get('active')
-    if active not in (0, 1, True, False):
-        return jsonify({'error': 'active must be 0 or 1'}), 400
-    active = 1 if active in (1, True) else 0
-
-    db = get_db()
-    user = db.execute('SELECT id, email FROM users WHERE id = ?', (user_id,)).fetchone()
-    if not user:
-        return jsonify({'error': 'user not found'}), 404
-
-    if active == 0 and user_id == session.get('user_id'):
-        return jsonify({'error': 'cannot deactivate your own account'}), 403
-
-    db.execute('UPDATE users SET active = ? WHERE id = ?', (active, user_id))
-    db.commit()
-    return jsonify({'ok': True, 'user_id': user_id, 'active': active})
-
-
-@app.route('/api/admin/users/<int:user_id>/branches', methods=['POST'])
-@_admin_required
-def api_admin_user_add_branch(user_id):
-    db = get_db()
-    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
-    if not user:
-        return jsonify({'error': 'user not found'}), 404
-    if user['role'] in ROLES_ALL_BRANCHES:
-        return jsonify({'error': 'cannot assign branches to admin/ceo users — they see all branches automatically'}), 403
-    data = request.get_json()
-    branch_id = data.get('branch_id')
-    branch = db.execute('SELECT id FROM branches WHERE id = ?', (branch_id,)).fetchone()
-    if not branch:
-        return jsonify({'error': 'branch not found'}), 404
-    existing = db.execute(
-        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
-        (user_id, branch_id)).fetchone()
-    if existing:
-        return jsonify({'error': 'branch already assigned'}), 409
-    db.execute('INSERT INTO user_branches (user_id, branch_id) VALUES (?, ?)',
-               (user_id, branch_id))
-    db.commit()
-    return jsonify({'ok': True, 'user_id': user_id, 'branch_id': branch_id}), 201
-
-
-@app.route('/api/admin/users/<int:user_id>/branches/<int:branch_id>', methods=['DELETE'])
-@_admin_required
-def api_admin_user_remove_branch(user_id, branch_id):
-    db = get_db()
-    user = db.execute('SELECT id, role FROM users WHERE id = ?', (user_id,)).fetchone()
-    if not user:
-        return jsonify({'error': 'user not found'}), 404
-    existing = db.execute(
-        'SELECT 1 FROM user_branches WHERE user_id = ? AND branch_id = ?',
-        (user_id, branch_id)).fetchone()
-    if not existing:
-        return '', 204
-    count = db.execute(
-        'SELECT COUNT(*) as cnt FROM user_branches WHERE user_id = ?',
-        (user_id,)).fetchone()['cnt']
-    if count <= 1 and user['role'] == 'manager':
-        return jsonify({'error': 'cannot leave manager without any branches — delete or deactivate the user instead'}), 422
-    db.execute('DELETE FROM user_branches WHERE user_id = ? AND branch_id = ?',
-               (user_id, branch_id))
-    db.commit()
-    return '', 204
-
-
-@app.route('/api/admin/branches-list')
-@_admin_required
-def api_admin_branches_list():
-    db = get_db()
-    rows = db.execute('SELECT id, name, city FROM branches WHERE active = 1 ORDER BY id').fetchall()
-    return jsonify([{'id': r['id'], 'name': r['name'], 'city': r['city']} for r in rows])
 
 
 # ── Manual electricity endpoints ──────────────────────────────────────────
@@ -4318,29 +2569,18 @@ def api_electricity_history():
     """Return all electricity entries for the branch, for history display."""
     branch_id = get_branch_id()
     db = get_db()
-    # Visibility floor: hide invoices whose period falls before the branch floor.
-    vf = _branch_visible_from(branch_id, db)
-    if vf:
-        rows = db.execute(
-            "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
-            "FROM electricity_invoices WHERE branch_id = ? "
-            "AND COALESCE(month, strftime('%Y-%m', due_date)) >= ? "
-            "ORDER BY COALESCE(month, due_date) DESC",
-            (branch_id, vf[:7])
-        ).fetchall()
-    else:
-        rows = db.execute(
-            "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
-            "FROM electricity_invoices WHERE branch_id = ? ORDER BY COALESCE(month, due_date) DESC",
-            (branch_id,)
-        ).fetchall()
+    rows = db.execute(
+        "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
+        "FROM electricity_invoices WHERE branch_id = ? ORDER BY COALESCE(month, due_date) DESC",
+        (branch_id,)
+    ).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
 # ── IEC status & accuracy endpoints ─────────────────────────────────────
 
 @app.route('/api/iec-status')
-@_admin_required
+@_ceo_required
 def api_iec_status():
     branch_id = request.args.get('branch_id', type=int)
     if not branch_id:
@@ -4477,7 +2717,7 @@ def _get_iec_accuracy_data(branch_id: int, db=None) -> list:
 
 
 @app.route('/api/iec-accuracy')
-@_admin_required
+@_ceo_required
 def api_iec_accuracy():
     branch_id = request.args.get('branch_id', type=int)
     db = get_db()
@@ -4642,7 +2882,7 @@ def _wizard_send_recv(proc, cmd, timeout=60):
 
 def _check_branch_permission(branch_id):
     """Check if current user has permission for this branch."""
-    if session.get('user_role') in ROLES_ALL_BRANCHES:
+    if session.get('user_role') == 'admin':
         return True
     return session.get('branch_id') == branch_id
 
@@ -4834,431 +3074,6 @@ def api_iec_sync():
             return jsonify({"ok": False, "error": msg}), 500
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-
-
-# ── /admin/analytics ────────────────────────────────────────────────────
-
-# Sessions are blocks of contiguous events <=30min apart. A 'login' event
-# always starts a fresh session even if the gap is smaller.
-_SESSION_GAP_SECONDS = 30 * 60
-
-# Bump when the cached payload structure changes — old entries are dropped.
-_ANALYTICS_CACHE_VERSION = 3
-
-# Line colors assigned to managers in user_id order (stable across renders).
-USER_LINE_COLORS = ['#378ADD', '#1D9E75', '#D85A30', '#B5739D', '#E0B341', '#7D5BA6']
-
-PAGE_LABELS = {
-    '/': 'בית',
-    '/sales': 'הכנסות',
-    '/goods': 'סחורה',
-    '/employees': 'עובדים',
-    '/fixed-expenses': 'הוצאות קבועות',
-    '/electricity-history': 'חשמל',
-    '/ops': 'בקרה',
-    '/admin/branches': 'ניהול סניפים',
-    '/admin/users': 'ניהול משתמשים',
-    '/admin/analytics': 'ניתוח שימוש',
-}
-
-
-def format_duration_he(seconds):
-    """Format a duration in seconds as Hebrew text.
-    0 → '—', <60 → 'פחות מדקה', <3600 → 'N דקות',
-    >=3600 → 'H שעות [M דקות]'."""
-    if not seconds or seconds <= 0:
-        return '—'
-    if seconds < 60:
-        return 'פחות מדקה'
-    if seconds < 3600:
-        return f'{seconds // 60} דקות'
-    hours = seconds // 3600
-    rem_min = (seconds % 3600) // 60
-    if rem_min == 0:
-        return f'{hours} שעות'
-    return f'{hours} שעות {rem_min} דקות'
-
-
-def _classify_device(ua):
-    """mobile vs desktop from user_agent (keyword match)."""
-    if not ua:
-        return 'desktop'
-    ua_l = ua.lower()
-    if 'iphone' in ua_l or 'ipad' in ua_l or 'android' in ua_l:
-        return 'mobile'
-    return 'desktop'
-
-
-def _parse_event_ts(s):
-    """user_events.created_at is 'YYYY-MM-DD HH:MM:SS' in UTC."""
-    return datetime.strptime(s, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-
-
-def _compute_sessions(events):
-    """events: iterable of dicts with at least {created_at, event_type, user_id}.
-    Returns a list of sessions. Each session is a list of events. Sorted by user
-    then time; a new session starts on a 'login' event OR a >30min gap from the
-    previous event by the SAME user."""
-    by_user = {}
-    for e in events:
-        by_user.setdefault(e['user_id'], []).append(e)
-    sessions = []
-    for uid, ulist in by_user.items():
-        ulist.sort(key=lambda r: r['created_at'])
-        current = []
-        prev_ts = None
-        for e in ulist:
-            ts = _parse_event_ts(e['created_at'])
-            is_login = e['event_type'] == 'login'
-            gap_too_big = prev_ts is not None and (ts - prev_ts).total_seconds() > _SESSION_GAP_SECONDS
-            if not current or is_login or gap_too_big:
-                if current:
-                    sessions.append(current)
-                current = [e]
-            else:
-                current.append(e)
-            prev_ts = ts
-        if current:
-            sessions.append(current)
-    return sessions
-
-
-def _active_seconds_from_sessions(sessions):
-    """Sum of (last_event_ts - first_event_ts) per session, in seconds.
-    A single-event session contributes 0."""
-    total = 0
-    for s in sessions:
-        if len(s) < 2:
-            continue
-        first = _parse_event_ts(s[0]['created_at'])
-        last = _parse_event_ts(s[-1]['created_at'])
-        total += int((last - first).total_seconds())
-    return total
-
-
-def _range_bounds(range_key, db):
-    """Return (start_dt_utc, end_dt_utc, label_days_in_window). end is now (UTC).
-    For 'all', start = first event's created_at (or epoch fallback)."""
-    now = datetime.now(timezone.utc)
-    if range_key == '7d':
-        start = now - timedelta(days=7)
-        days = 7
-    elif range_key == '30d':
-        start = now - timedelta(days=30)
-        days = 30
-    elif range_key == 'month':
-        il_now = now.astimezone(IL_TZ)
-        start_il = il_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        start = start_il.astimezone(timezone.utc)
-        days = il_now.day  # days elapsed in current month
-    else:  # 'all'
-        row = db.execute("SELECT MIN(created_at) AS m FROM user_events").fetchone()
-        if row and row['m']:
-            start = _parse_event_ts(row['m'])
-        else:
-            start = now - timedelta(days=1)
-        delta = now - start
-        days = max(1, int(delta.total_seconds() / 86400) + 1)
-    return start, now, days
-
-
-def _fetch_events_range(db, start_utc, end_utc, user_id=None):
-    sql = ("SELECT id, user_id, event_type, page, branch_id, "
-           "duration_seconds, user_agent, created_at "
-           "FROM user_events WHERE created_at >= ? AND created_at <= ?")
-    params = [start_utc.strftime('%Y-%m-%d %H:%M:%S'),
-              end_utc.strftime('%Y-%m-%d %H:%M:%S')]
-    if user_id:
-        sql += " AND user_id = ?"
-        params.append(user_id)
-    sql += " ORDER BY created_at"
-    return [dict(r) for r in db.execute(sql, params).fetchall()]
-
-
-def _daily_per_user(events, start_utc, end_utc, db):
-    """Daily per-user event counts for the chart. Zero-fills missing days
-    so each user's data array has one entry per calendar day in the range
-    (Israel time), ordered ascending."""
-    # Build the inclusive list of IL date strings in the window.
-    start_il = start_utc.astimezone(IL_TZ).date()
-    end_il = end_utc.astimezone(IL_TZ).date()
-    days = []
-    d = start_il
-    while d <= end_il:
-        days.append(d)
-        d += timedelta(days=1)
-    day_index = {d.isoformat(): i for i, d in enumerate(days)}
-    labels = [d.strftime('%d/%m') for d in days]
-
-    # Bucket events by (user_id, IL-date).
-    per_user = {}
-    for e in events:
-        ts_il = _parse_event_ts(e['created_at']).astimezone(IL_TZ).date()
-        idx = day_index.get(ts_il.isoformat())
-        if idx is None:
-            continue
-        u = per_user.setdefault(e['user_id'], [0] * len(days))
-        u[idx] += 1
-
-    if not per_user:
-        return {'labels': labels, 'users': []}
-
-    # Resolve user names; assign color by sorted user_id.
-    ids = sorted(per_user.keys())
-    placeholders = ','.join(['?'] * len(ids))
-    rows = db.execute(
-        f"SELECT id, name FROM users WHERE id IN ({placeholders})", ids
-    ).fetchall()
-    name_by_id = {r['id']: (r['name'] or f'#{r["id"]}') for r in rows}
-
-    users_out = []
-    for i, uid in enumerate(ids):
-        users_out.append({
-            'user_id': uid,
-            'name': name_by_id.get(uid, f'#{uid}'),
-            'color': USER_LINE_COLORS[i % len(USER_LINE_COLORS)],
-            'data': per_user[uid],
-        })
-    return {'labels': labels, 'users': users_out}
-
-
-def _analytics_aggregate(range_key, user_id=None):
-    """Compute aggregates for the requested window. Returns a dict that the
-    template renders directly. NEVER call this when the cache should be hit
-    — the route handles cache lookup before calling."""
-    db = get_db()
-    start_utc, end_utc, days_in_window = _range_bounds(range_key, db)
-    events = _fetch_events_range(db, start_utc, end_utc, user_id=user_id)
-
-    # Empty state.
-    if not events:
-        return {
-            '_v': _ANALYTICS_CACHE_VERSION,
-            'empty': True,
-            'range': range_key,
-            'user_id': user_id,
-            'days_in_window': days_in_window,
-        }
-
-    # Tile 1 — logins + delta vs previous comparable window.
-    login_count = sum(1 for e in events if e['event_type'] == 'login')
-    prev_login_count = None
-    if range_key != 'all' and not user_id:
-        if range_key == 'month':
-            il_start = start_utc.astimezone(IL_TZ)
-            prev_month_last_day = il_start - timedelta(days=1)
-            prev_start_il = prev_month_last_day.replace(day=1, hour=0, minute=0,
-                                                       second=0, microsecond=0)
-            prev_start = prev_start_il.astimezone(timezone.utc)
-            prev_end = start_utc
-        else:
-            window = end_utc - start_utc
-            prev_end = start_utc
-            prev_start = start_utc - window
-        prow = db.execute(
-            "SELECT COUNT(*) AS c FROM user_events "
-            "WHERE event_type='login' AND created_at >= ? AND created_at < ?",
-            (prev_start.strftime('%Y-%m-%d %H:%M:%S'),
-             prev_end.strftime('%Y-%m-%d %H:%M:%S'))
-        ).fetchone()
-        prev_login_count = prow['c']
-
-    # Tile 2 — sessions.
-    sessions = _compute_sessions(events)
-    session_count = len(sessions)
-    sessions_per_day = round(session_count / days_in_window, 1)
-
-    # Tile 3 — active time.
-    active_seconds = _active_seconds_from_sessions(sessions)
-    active_minutes_per_day = round((active_seconds / 60) / days_in_window)
-
-    # Tile 4 — days active.
-    distinct_days = len({e['created_at'][:10] for e in events})
-
-    # Daily per-user line chart payload.
-    daily_per_user = _daily_per_user(events, start_utc, end_utc, db)
-
-    # Top pages.
-    page_counts = {}
-    for e in events:
-        if e['event_type'] != 'page_view' or not e['page']:
-            continue
-        page_counts[e['page']] = page_counts.get(e['page'], 0) + 1
-    top_pages = sorted(page_counts.items(), key=lambda kv: -kv[1])[:5]
-    total_pv = sum(page_counts.values()) or 1
-    top_pages_out = [
-        {'page': p, 'label': PAGE_LABELS.get(p, p),
-         'count': c, 'pct': round(c * 100 / total_pv)}
-        for p, c in top_pages
-    ]
-
-    # Device split.
-    mobile = sum(1 for e in events if _classify_device(e['user_agent']) == 'mobile')
-    desktop = len(events) - mobile
-    total_dev = mobile + desktop or 1
-    device = {
-        'mobile_pct': round(mobile * 100 / total_dev),
-        'desktop_pct': round(desktop * 100 / total_dev),
-    }
-
-    # Per-user table.
-    user_rows = {}
-    for e in events:
-        u = user_rows.setdefault(e['user_id'], {
-            'user_id': e['user_id'],
-            'logins': 0,
-            'events': [],
-        })
-        u['events'].append(e)
-        if e['event_type'] == 'login':
-            u['logins'] += 1
-    # User name + branch.
-    user_meta = {}
-    if user_rows:
-        ids = tuple(user_rows.keys())
-        placeholders = ','.join(['?'] * len(ids))
-        rows = db.execute(
-            f"SELECT u.id, u.name, "
-            f"(SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
-            f"  WHERE ub.user_id=u.id ORDER BY b.id LIMIT 1) AS branch_name "
-            f"FROM users u WHERE u.id IN ({placeholders})",
-            ids
-        ).fetchall()
-        for r in rows:
-            user_meta[r['id']] = {'name': r['name'] or '—',
-                                  'branch_name': r['branch_name'] or '—'}
-    users_table = []
-    for uid, u in user_rows.items():
-        sess_for_user = _compute_sessions(u['events'])
-        active_s = _active_seconds_from_sessions(sess_for_user)
-        last_event = u['events'][-1]['created_at']
-        meta = user_meta.get(uid, {'name': '—', 'branch_name': '—'})
-        users_table.append({
-            'user_id': uid,
-            'name': meta['name'],
-            'initial': (meta['name'][:1] if meta['name'] else '?'),
-            'branch_name': meta['branch_name'],
-            'logins': u['logins'],
-            'active_time': format_duration_he(active_s),
-            'last_active_utc': last_event,
-        })
-    users_table.sort(key=lambda r: -r['logins'])
-
-    # Active-time tile subtitle: "Y דק' ליום בממוצע" unless avg >= 60 min,
-    # in which case use the Hebrew duration helper.
-    avg_active_seconds_per_day = int(active_seconds / days_in_window) if days_in_window else 0
-    if avg_active_seconds_per_day >= 3600:
-        active_per_day_label = format_duration_he(avg_active_seconds_per_day) + ' ליום בממוצע'
-    else:
-        active_per_day_label = f"{active_minutes_per_day} דק' ליום בממוצע"
-
-    return {
-        '_v': _ANALYTICS_CACHE_VERSION,
-        'empty': False,
-        'range': range_key,
-        'user_id': user_id,
-        'days_in_window': days_in_window,
-        'login_count': login_count,
-        'prev_login_count': prev_login_count,
-        'session_count': session_count,
-        'sessions_per_day': sessions_per_day,
-        'active_seconds': active_seconds,
-        'active_time': format_duration_he(active_seconds),
-        'active_minutes_per_day': active_minutes_per_day,
-        'active_per_day_label': active_per_day_label,
-        'distinct_days': distinct_days,
-        'daily_per_user': daily_per_user,
-        'top_pages': top_pages_out,
-        'device': device,
-        'users_table': users_table,
-        'computed_at_utc': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
-    }
-
-
-def _analytics_cache_get(range_key):
-    """Return cached payload dict or None. Always silent on errors."""
-    try:
-        db = get_db()
-        row = db.execute(
-            "SELECT payload, computed_at FROM analytics_cache WHERE range = ?",
-            (range_key,)
-        ).fetchone()
-        if not row:
-            return None
-        payload = json.loads(row['payload'])
-        if payload.get('_v') != _ANALYTICS_CACHE_VERSION:
-            return None
-        payload['computed_at_utc'] = row['computed_at']
-        return payload
-    except Exception:
-        return None
-
-
-def _analytics_cache_set(range_key, payload):
-    try:
-        db = get_db()
-        db.execute(
-            "INSERT INTO analytics_cache (range, payload, computed_at) "
-            "VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(range) DO UPDATE SET "
-            "  payload = excluded.payload, computed_at = excluded.computed_at",
-            (range_key, json.dumps(payload, ensure_ascii=False))
-        )
-        db.commit()
-    except Exception:
-        pass
-
-
-_VALID_ANALYTICS_RANGES = ('7d', '30d', 'month', 'all')
-
-
-@app.route('/admin/analytics')
-@_admin_required
-def admin_analytics():
-    range_key = request.args.get('range', 'all')
-    if range_key not in _VALID_ANALYTICS_RANGES:
-        range_key = 'all'
-    user_id = request.args.get('user_id', type=int)
-
-    # Cache only for unfiltered queries.
-    payload = None
-    if user_id is None:
-        payload = _analytics_cache_get(range_key)
-    if payload is None:
-        payload = _analytics_aggregate(range_key, user_id=user_id)
-        if user_id is None:
-            _analytics_cache_set(range_key, payload)
-
-    # Selected-user name for filter chip.
-    selected_user_name = None
-    if user_id:
-        db = get_db()
-        urow = db.execute("SELECT name FROM users WHERE id = ?", (user_id,)).fetchone()
-        if urow:
-            selected_user_name = urow['name']
-
-    return render_template(
-        'admin_analytics.html',
-        analytics=payload,
-        range_key=range_key,
-        selected_user_id=user_id,
-        selected_user_name=selected_user_name,
-        **_page_context('admin')
-    )
-
-
-@app.route('/api/admin/analytics/recent-activity')
-@_admin_required
-def api_admin_analytics_recent_activity():
-    """Lightweight endpoint for the user table's 60s auto-refresh.
-    Returns just the users_table portion for the requested range/user filter."""
-    range_key = request.args.get('range', 'all')
-    if range_key not in _VALID_ANALYTICS_RANGES:
-        range_key = 'all'
-    user_id = request.args.get('user_id', type=int)
-    payload = _analytics_aggregate(range_key, user_id=user_id)
-    return jsonify({'users_table': payload.get('users_table', []),
-                    'empty': payload.get('empty', False)})
 
 
 @app.route('/health')

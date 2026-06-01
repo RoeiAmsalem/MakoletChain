@@ -1,0 +1,13 @@
+flask
+gunicorn
+apscheduler
+playwright
+werkzeug
+requests
+pymupdf
+pdfplumber
+python-dotenv
+resend
+openpyxl
+xlrd
+iec-api>=0.5.13

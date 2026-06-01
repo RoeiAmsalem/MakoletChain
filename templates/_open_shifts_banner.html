@@ -1,0 +1,98 @@
+{# URGENT open-shift (אין יציאה / no clock-out) banner — shared by /employees
+   and /. Deliberately HIGHER severity than the amber "unrecognized employee"
+   notice: an open shift means hours are miscounted → salary is wrong, so this
+   reads "fix this now" — solid saturated red, 🔴, a pulse, strong wording.
+
+   Self-contained: brings its own markup + JS. Requires the page to define
+   globals BRANCH_ID, SELECTED_MONTH and to call loadOpenShifts() after the
+   consts are declared.
+#}
+<style>
+  @keyframes openshift-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.45); }
+    50%      { box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+  }
+  #open-shifts-banner {
+    display: none;
+    background: linear-gradient(180deg, #991b1b 0%, #7f1d1d 100%);
+    border: 2px solid #ef4444;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+    animation: openshift-pulse 2s ease-in-out infinite;
+  }
+  #open-shifts-banner .osb-head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; }
+  #open-shifts-banner .osb-title { font-weight: 800; color: #fff; font-size: 1rem; letter-spacing: 0.2px; }
+  #open-shifts-banner .osb-sub { font-size: 0.84rem; color: #fecaca; margin-top: 0.2rem; font-weight: 600; }
+  #open-shifts-banner .osb-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  #open-shifts-banner .osb-row {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(252,165,165,0.35);
+    border-radius: 8px;
+    padding: 0.55rem 0.85rem;
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    color: #fff; font-size: 0.88rem;
+  }
+  #open-shifts-banner .osb-row .osb-name { font-weight: 700; }
+  #open-shifts-banner .osb-row .osb-meta { color: #fecaca; font-size: 0.82rem; }
+  #open-shifts-banner .osb-tag {
+    background: #fff; color: #991b1b; font-weight: 800; font-size: 0.72rem;
+    border-radius: 999px; padding: 0.1rem 0.55rem; white-space: nowrap;
+  }
+</style>
+
+<div id="open-shifts-banner">
+  <div class="osb-head">
+    <span style="font-size:1.4rem;">&#128308;</span>
+    <div>
+      <div class="osb-title"><span id="open-shifts-count">0</span> משמרות ללא יציאה</div>
+      <div class="osb-sub">שעות העובד אינן נספרות עד שמתקנים את היציאה באביב — עלות השכר שגויה.</div>
+    </div>
+  </div>
+  <div class="osb-list" id="open-shifts-list"></div>
+</div>
+
+<script>
+'use strict';
+
+window.loadOpenShifts = async function () {
+  const banner = document.getElementById('open-shifts-banner');
+  if (!banner) return;
+  try {
+    const res = await fetch(`/api/open-shifts?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
+    if (!res.ok) { banner.style.display = 'none'; return; }
+    const d = await res.json();
+    const shifts = d.open_shifts || [];
+    if (!shifts.length) { banner.style.display = 'none'; return; }
+
+    document.getElementById('open-shifts-count').textContent = shifts.length;
+    const fmtDay = s => {
+      // s.start_ts: "YYYY-MM-DD HH:MM:SS" → date "d/m" + time "HH:MM"
+      const ref = s.start_ts || (s.shift_date ? s.shift_date + ' 00:00:00' : '');
+      let dm = '', hm = '';
+      const m = String(ref).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/);
+      if (m) {
+        dm = `${parseInt(m[3])}/${parseInt(m[2])}`;
+        if (m[4]) hm = `${m[4]}:${m[5]}`;
+      }
+      return { dm, hm };
+    };
+    document.getElementById('open-shifts-list').innerHTML = shifts.map(s => {
+      const { dm, hm } = fmtDay(s);
+      const dow = s.day_of_week ? `${s.day_of_week} ` : '';
+      const meta = [dow + dm, hm ? `כניסה ${hm}` : ''].filter(Boolean).join(' · ');
+      return `<div class="osb-row">
+        <span class="osb-tag">ללא יציאה</span>
+        <span class="osb-name">${s.employee_name || ''}</span>
+        <span class="osb-meta">${meta}</span>
+      </div>`;
+    }).join('');
+    // Must be an explicit value: `display: none` lives in the stylesheet rule
+    // above, so clearing the inline style ('') would fall back to none.
+    banner.style.display = 'block';
+  } catch (err) {
+    console.error('loadOpenShifts:', err);
+    banner.style.display = 'none';
+  }
+};
+</script>

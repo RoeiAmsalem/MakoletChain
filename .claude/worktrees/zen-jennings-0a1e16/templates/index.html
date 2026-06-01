@@ -1,11 +1,9 @@
 {% extends "base.html" %}
-{% block title %}מסך בית - קופה שקופה{% endblock %}
+{% block title %}מסך בית - MakoletChain{% endblock %}
 {% block head %}
 <style>
-    /* Prevent horizontal scroll. Use `clip` (not `hidden`) on html so the
-       sticky navbar isn't broken by a new scroll container on the html element. */
-    html { overflow-x: clip; max-width: 100vw; }
-    body { overflow-x: clip; max-width: 100vw; }
+    /* Prevent horizontal scroll */
+    html, body { overflow-x: hidden; max-width: 100vw; }
 
     /* Electricity strip state styling */
     .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
@@ -88,54 +86,17 @@
 
 {% block content %}
 
-{% if session.get('user_role') in ('admin', 'ceo') %}
-<section class="view-toggle" style="display:flex;justify-content:center;margin-bottom:1rem;">
-    <div style="display:inline-flex;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:999px;padding:4px;gap:4px;">
-        <button type="button" onclick="setViewMode('branch')"
-            style="background:#6366f1;color:#fff;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
-            תצוגה על סניף
-        </button>
-        <button type="button" onclick="setViewMode('network')"
-            style="background:transparent;color:#cbd5e1;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
-            תצוגה על כל הרשת
-        </button>
-    </div>
-</section>
-<script>
-async function setViewMode(mode) {
-    try {
-        const res = await fetch('/api/set-view-mode', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({mode}),
-        });
-        if (res.ok) window.location.reload();
-    } catch (e) { /* no-op */ }
-}
-</script>
-{% endif %}
-
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
-    <div class="kpi-card kpi-card--live" id="live-tile"
-         {% if is_multi_branch %}role="link" tabindex="0"
-         onclick="location.href='/network'"
-         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();location.href='/network';}"
-         style="cursor:pointer;"
-         data-multi-branch="true"{% endif %}>
+    <div class="kpi-card kpi-card--live" id="live-tile">
         <div class="kpi-header">
             <span class="kpi-icon"><span class="live-dot"></span></span>
-            <span class="kpi-label" id="live-label">{% if is_multi_branch %}חי כרגע{% else %}היום בזמן אמת{% endif %}</span>
+            <span class="kpi-label">היום בזמן אמת</span>
         </div>
         <span class="kpi-value" id="live-amount">אין נתונים</span>
         <div class="kpi-sub" id="live-sub" style="font-size:0.85rem; color:#94a3b8; margin-top:4px;"></div>
         <div class="kpi-sub" id="live-basket" style="font-size:0.82rem; color:#94a3b8; margin-top:2px;"></div>
         <div class="kpi-sub" id="live-updated" style="font-size:0.75rem; color:#64748b; margin-top:2px;"></div>
-        {% if is_multi_branch %}
-        <div class="kpi-sub" id="live-network-link" style="font-size:0.72rem; color:#6366f1; margin-top:6px; font-weight:600;">
-            תצוגת רשת ←
-        </div>
-        {% endif %}
     </div>
 
     <div class="kpi-card kpi-card--neutral" id="profit-tile">
@@ -188,9 +149,6 @@ async function setViewMode(mode) {
         <span class="kpi-value salary" id="salary-value">₪ 0.00</span>
     </div>
 </section>
-
-{% include '_open_shifts_banner.html' %}
-{% include '_unknown_employees_banner.html' %}
 
 <!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
 <div id="elec-hourly-cluster" style="display:flex; flex-direction:column; gap:6px;">
@@ -368,8 +326,6 @@ async function setViewMode(mode) {
 'use strict';
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
-window.IS_MULTI_BRANCH = {{ is_multi_branch | tojson }};
-const BRANCH_NAME = {{ branch_name | tojson }};
 const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
 
 async function loadSummary() {
@@ -780,7 +736,5 @@ loadHistory();
 loadHourlyChart();
 {% if branch_id == 126 %}loadAmazonDeliveries();{% endif %}
 if (typeof loadLiveSales === 'function') loadLiveSales();
-if (typeof loadPendingMatches === 'function') loadPendingMatches();
-if (typeof loadOpenShifts === 'function') loadOpenShifts();
 </script>
 {% endblock %}

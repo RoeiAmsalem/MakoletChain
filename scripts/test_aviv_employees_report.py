@@ -82,6 +82,41 @@ class TestParseEmployerReport(unittest.TestCase):
         total_shifts = sum(p['shift_count'] for p in self.parsed)
         self.assertEqual(total_shifts, 62)
 
+    def test_each_employee_has_shifts_list(self):
+        for p in self.parsed:
+            self.assertIn('shifts', p)
+            self.assertIsInstance(p['shifts'], list)
+            self.assertGreater(len(p['shifts']), 0)
+
+    def test_first_shift_fields(self):
+        # אגם צאצאן row 1: entry 13/04/2026 16:02:33, exit 19:01:34, 02:59:01.
+        first = self.parsed[0]['shifts'][0]
+        self.assertEqual(first['shift_date'], '2026-04-13')
+        self.assertEqual(first['start_ts'], '2026-04-13 16:02:33')
+        self.assertEqual(first['end_ts'], '2026-04-13 19:01:34')
+        self.assertEqual(first['day_of_week'], 'יום ב')
+        self.assertFalse(first['is_open'])
+        self.assertAlmostEqual(first['hours'], 2 + 59/60 + 1/3600, places=3)
+
+    def test_open_shift_in_shifts_list(self):
+        # דביר פישר has one open shift (17/04/2026 entry, no exit/hours).
+        by_name = {p['raw_name']: p for p in self.parsed}
+        dvir = by_name['דביר פישר תיכון']
+        opens = [s for s in dvir['shifts'] if s['is_open']]
+        self.assertEqual(len(opens), 1)
+        o = opens[0]
+        self.assertEqual(o['start_ts'], '2026-04-17 07:28:00')
+        self.assertIsNone(o['end_ts'])
+        self.assertEqual(o['hours'], 0.0)
+        self.assertEqual(o['shift_date'], '2026-04-17')
+
+    def test_shift_count_matches_shifts_len_when_dated(self):
+        # Every parsed shift row has at least a date (orphan exit-only rows
+        # carry the exit date). Shifts list length equals the reported count.
+        for p in self.parsed:
+            self.assertEqual(len(p['shifts']), p['shift_count'],
+                             f"{p['raw_name']}: {len(p['shifts'])} != {p['shift_count']}")
+
 
 class TestFetchReportList(unittest.TestCase):
     @patch('agents.aviv_employees_report.time.sleep')
@@ -233,6 +268,20 @@ def _make_test_db():
             duration_seconds REAL,
             dismissed INTEGER DEFAULT 0
         );
+        CREATE TABLE employee_shifts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER NOT NULL,
+            month TEXT NOT NULL,
+            employee_name TEXT NOT NULL,
+            shift_date TEXT,
+            start_ts TEXT,
+            end_ts TEXT,
+            hours REAL DEFAULT 0,
+            day_of_week TEXT,
+            is_open INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'aviv_report',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     ''')
     conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password, active) "
                  "VALUES (127, 'תיכון', 'Tichon123', 'Tichon123', 1)")
@@ -378,6 +427,50 @@ class TestUpdateEmployeeHours(unittest.TestCase):
         ).fetchone()
         self.assertEqual(pend['c'], 1)
 
+    def _parsed_with_shifts(self):
+        return [
+            {'raw_name': 'אגם צאצאן תיכון', 'aviv_employee_id': 551,
+             'total_hours': 5.0, 'shift_count': 2, 'open_shift_count': 0,
+             'shifts': [
+                 {'shift_date': '2026-05-03', 'start_ts': '2026-05-03 13:59:00',
+                  'end_ts': '2026-05-03 23:03:04', 'hours': 9.07,
+                  'day_of_week': 'יום א', 'is_open': False},
+                 {'shift_date': '2026-05-06', 'start_ts': '2026-05-06 15:56:30',
+                  'end_ts': None, 'hours': 0.0, 'day_of_week': 'יום ד',
+                  'is_open': True},
+             ]},
+            {'raw_name': 'רנדומלי תיכון', 'aviv_employee_id': 999,
+             'total_hours': 10.0, 'shift_count': 1, 'open_shift_count': 0,
+             'shifts': [
+                 {'shift_date': '2026-05-01', 'start_ts': '2026-05-01 07:00:00',
+                  'end_ts': '2026-05-01 17:00:00', 'hours': 10.0,
+                  'day_of_week': 'יום ה', 'is_open': False},
+             ]},
+        ]
+
+    def test_shifts_written_for_matched_only(self):
+        from agents.aviv_employees_report import update_employee_hours
+        update_employee_hours(127, '2026-05', self._parsed_with_shifts(), self.conn)
+        rows = self.conn.execute(
+            "SELECT employee_name, is_open FROM employee_shifts "
+            "WHERE branch_id=127 AND month='2026-05' ORDER BY id"
+        ).fetchall()
+        # Only the matched employee (אגם צאצאן) gets shift rows; the unmatched
+        # 'רנדומלי' goes to pending and writes no shifts.
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r['employee_name'] == 'אגם צאצאן' for r in rows))
+        self.assertEqual(sum(r['is_open'] for r in rows), 1)
+
+    def test_shifts_overwrite_cleanly_on_resync(self):
+        from agents.aviv_employees_report import update_employee_hours
+        update_employee_hours(127, '2026-05', self._parsed_with_shifts(), self.conn)
+        update_employee_hours(127, '2026-05', self._parsed_with_shifts(), self.conn)
+        c = self.conn.execute(
+            "SELECT COUNT(*) c FROM employee_shifts "
+            "WHERE branch_id=127 AND month='2026-05' AND source='aviv_report'"
+        ).fetchone()['c']
+        self.assertEqual(c, 2)
+
 
 class _SharedConnContext:
     """Pretend sqlite3.connect returns the same in-memory DB and skip close()."""
@@ -466,6 +559,105 @@ class TestRunForBranch(unittest.TestCase):
             res = m.run_for_branch(127, today=date(2026, 5, 9))
         self.assertTrue(res.get('ok'))
         self.assertTrue(res.get('skipped'))
+
+
+class TestMonthlyReconciliation(unittest.TestCase):
+    """10th-of-month previous-month reconciliation: date gate + change alert."""
+
+    def setUp(self):
+        self.conn = _make_test_db()
+        # Previous-month (2026-05) stored totals — the "considered final" state.
+        self.conn.execute(
+            "INSERT INTO employee_hours (branch_id, month, employee_name, total_hours, "
+            "total_salary, source) VALUES (127, '2026-05', 'אגם צאצאן', 100.0, 4000.0, 'aviv_report')")
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_date_gate_skips_when_not_10th(self):
+        from agents import aviv_employees_report as m
+        with _SharedConnContext(self.conn), patch.object(m, 'USE_CHAIN_AUTH', False):
+            res = m.reconcile_previous_month(today=date(2026, 6, 11), force=False)
+        self.assertFalse(res['ran'])
+        self.assertEqual(res['reason'], 'not_10th')
+
+    def test_force_runs_off_the_10th(self):
+        from agents import aviv_employees_report as m
+        with _SharedConnContext(self.conn), \
+             patch.object(m, 'USE_CHAIN_AUTH', False), \
+             patch.object(m, 'run_for_branch', side_effect=lambda bid, **kw: {'ok': True}), \
+             patch('utils.notify.notify'), patch.object(m.time, 'sleep'):
+            res = m.reconcile_previous_month(today=date(2026, 6, 15), force=True)
+        self.assertTrue(res['ran'])
+        self.assertEqual(res['month'], '2026-05')  # previous month only
+
+    def test_change_fires_alert_and_overwrites(self):
+        from agents import aviv_employees_report as m
+
+        def fake_repull(bid, **kw):
+            # Simulate a corrected re-pull: last month's total moved after month-end.
+            self.conn.execute(
+                "UPDATE employee_hours SET total_hours=110.0, total_salary=4400.0 "
+                "WHERE branch_id=127 AND month='2026-05' AND source='aviv_report'")
+            self.conn.commit()
+            return {'ok': True}
+
+        with _SharedConnContext(self.conn), \
+             patch.object(m, 'USE_CHAIN_AUTH', False), \
+             patch.object(m, 'run_for_branch', side_effect=fake_repull), \
+             patch('utils.notify.notify') as mock_notify, \
+             patch.object(m.time, 'sleep'):
+            res = m.reconcile_previous_month(today=date(2026, 6, 10), force=False)
+
+        self.assertTrue(res['ran'])
+        self.assertEqual(res['month'], '2026-05')
+        self.assertEqual(res['changed'], 1)
+        self.assertEqual(res['checked'], 1)
+        # Silent overwrite happened.
+        new_total = self.conn.execute(
+            "SELECT total_hours FROM employee_hours WHERE branch_id=127 AND month='2026-05'"
+        ).fetchone()[0]
+        self.assertEqual(new_total, 110.0)
+        # And a brrr alert fired naming the change.
+        self.assertEqual(mock_notify.call_count, 1)
+        title, message = mock_notify.call_args[0][0], mock_notify.call_args[0][1]
+        self.assertIn('Hours changed', title)
+        self.assertIn('100', message)
+        self.assertIn('110', message)
+
+    def test_no_change_no_alert(self):
+        from agents import aviv_employees_report as m
+        with _SharedConnContext(self.conn), \
+             patch.object(m, 'USE_CHAIN_AUTH', False), \
+             patch.object(m, 'run_for_branch', side_effect=lambda bid, **kw: {'ok': True}), \
+             patch('utils.notify.notify') as mock_notify, \
+             patch.object(m.time, 'sleep'):
+            res = m.reconcile_previous_month(today=date(2026, 6, 10))
+        self.assertTrue(res['ran'])
+        self.assertEqual(res['changed'], 0)
+        self.assertEqual(res['checked'], 1)
+        mock_notify.assert_not_called()
+
+    def test_rounding_within_tolerance_is_ok(self):
+        from agents import aviv_employees_report as m
+
+        def tiny_change(bid, **kw):
+            # +0.3h / +₪8 — both under tolerance (0.5h / ₪10) → no alert.
+            self.conn.execute(
+                "UPDATE employee_hours SET total_hours=100.3, total_salary=4008.0 "
+                "WHERE branch_id=127 AND month='2026-05' AND source='aviv_report'")
+            self.conn.commit()
+            return {'ok': True}
+
+        with _SharedConnContext(self.conn), \
+             patch.object(m, 'USE_CHAIN_AUTH', False), \
+             patch.object(m, 'run_for_branch', side_effect=tiny_change), \
+             patch('utils.notify.notify') as mock_notify, \
+             patch.object(m.time, 'sleep'):
+            res = m.reconcile_previous_month(today=date(2026, 6, 10))
+        self.assertEqual(res['changed'], 0)
+        mock_notify.assert_not_called()
 
 
 if __name__ == '__main__':

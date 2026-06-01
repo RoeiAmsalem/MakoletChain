@@ -1,0 +1,1081 @@
+{% extends "base.html" %}
+{% block title %}בקרה — MakoletChain{% endblock %}
+{% block head %}
+<style>
+    .ops-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
+    .ops-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+    .ops-header h1 { font-size:1.5rem; font-weight:700; }
+    .btn-refresh { background:rgba(99,102,241,0.2); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:0.5rem 1rem; cursor:pointer; font-family:inherit; font-size:0.85rem; font-weight:600; transition:background 0.15s; }
+    .btn-refresh:hover { background:rgba(99,102,241,0.35); }
+
+    /* Summary bar */
+    .summary-bar { display:flex; align-items:center; gap:1.5rem; padding:0.75rem 1.25rem; background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); margin-bottom:1.5rem; font-size:0.85rem; color:var(--text-secondary); flex-wrap:wrap; }
+    .summary-bar .sep { width:1px; height:16px; background:var(--card-border); }
+    .summary-bar strong { color:var(--text-primary); }
+    .summary-bar .error-count { color:#fca5a5; font-weight:700; }
+    .summary-bar .store-status { display:inline-flex; align-items:center; gap:4px; }
+    .summary-bar .store-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+    .summary-bar .store-dot.open { background:#22c55e; }
+    .summary-bar .store-dot.closed { background:#ef4444; }
+
+    /* Branch cards */
+    .branch-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:1rem; margin-bottom:2rem; }
+    .branch-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); }
+    .branch-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+    .branch-name { font-size:1.1rem; font-weight:700; }
+    .branch-meta { font-size:0.8rem; color:var(--text-secondary); }
+    .status-dot { display:inline-block; width:12px; height:12px; border-radius:50%; }
+    .status-dot.ok { background:#22c55e; }
+    .status-dot.warning { background:#f59e0b; }
+    .status-dot.error { background:#ef4444; }
+    .status-dot.unknown { background:#64748b; }
+
+    .agent-rows { display:flex; flex-direction:column; gap:0.5rem; margin-bottom:1rem; }
+    .agent-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.4rem 0.6rem; background:rgba(255,255,255,0.03); border-radius:6px; }
+    .agent-name { font-weight:600; min-width:70px; }
+    .agent-msg { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .agent-badge { font-size:0.75rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:999px; }
+    .agent-badge.success { background:rgba(34,197,94,0.2); color:#86efac; }
+    .agent-badge.warning { background:rgba(245,158,11,0.2); color:#fde68a; }
+    .agent-badge.error { background:rgba(239,68,68,0.2); color:#fca5a5; }
+    .agent-badge.running { background:rgba(99,102,241,0.2); color:#a5b4fc; }
+    .agent-badge.skipped { background:rgba(100,116,139,0.2); color:#94a3b8; }
+    .agent-time { font-size:0.75rem; color:var(--text-muted); min-width:50px; text-align:left; }
+
+    .branch-actions { display:flex; gap:0.5rem; flex-wrap:wrap; }
+    .btn-action { background:rgba(255,255,255,0.06); border:1px solid var(--card-border); border-radius:6px; padding:0.35rem 0.75rem; color:var(--text-secondary); cursor:pointer; font-size:0.8rem; font-family:inherit; transition:background 0.15s, color 0.15s; }
+    .btn-action:hover { background:rgba(255,255,255,0.12); color:white; }
+    .btn-action:disabled { opacity:0.5; cursor:not-allowed; }
+    .btn-action .spin { display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,0.2); border-top-color:white; border-radius:50%; animation:spin 0.8s linear infinite; margin-left:4px; }
+
+    /* Sections */
+    .section-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; box-shadow:var(--shadow); margin-bottom:1.5rem; }
+    .section-card h2 { font-size:1.1rem; font-weight:700; margin-bottom:1rem; }
+
+    /* Timeline */
+    .timeline { display:flex; flex-direction:column; gap:0.4rem; }
+    .timeline-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.4rem 0.6rem; border-radius:6px; background:rgba(255,255,255,0.02); }
+    .timeline-time { font-size:0.75rem; color:var(--text-muted); min-width:100px; direction:ltr; text-align:right; }
+    .timeline-branch { font-weight:600; min-width:100px; }
+    .timeline-agent { min-width:70px; color:var(--text-secondary); }
+    .timeline-msg { flex:1; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* Alerts */
+    .alert-row { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; padding:0.5rem 0.75rem; border-radius:6px; margin-bottom:0.4rem; }
+    .alert-row.error { background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.15); }
+    .alert-row.warning { background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.15); }
+    .alert-msg { flex:1; }
+    .alert-time { font-size:0.75rem; color:var(--text-muted); }
+    .alert-dismiss { background:none; border:none; color:var(--text-muted); cursor:pointer; font-size:1rem; padding:0 0.25rem; line-height:1; opacity:0.6; transition:opacity 0.15s; }
+    .alert-dismiss:hover { opacity:1; color:var(--text-primary); }
+
+    /* Health cards */
+    .health-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:1rem; }
+    .health-card { background:rgba(255,255,255,0.03); border:1px solid var(--card-border); border-radius:8px; padding:1rem; text-align:center; }
+    .health-label { font-size:0.78rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.5rem; }
+    .health-value { font-size:1.1rem; font-weight:700; color:var(--text-primary); }
+    .health-value.ok { color:#86efac; }
+    .health-value.warning { color:#fde68a; }
+    .health-value.error { color:#fca5a5; }
+    .health-sub { font-size:0.75rem; color:var(--text-muted); margin-top:0.25rem; }
+
+    /* Log modal */
+    .modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); z-index:1000; align-items:center; justify-content:center; }
+    .modal-overlay.open { display:flex; }
+    .modal-box { background:var(--surface); border:1px solid var(--card-border); border-radius:var(--radius); width:90%; max-width:800px; max-height:80vh; display:flex; flex-direction:column; }
+    .modal-header { display:flex; align-items:center; justify-content:space-between; padding:1rem 1.25rem; border-bottom:1px solid var(--card-border); }
+    .modal-header h3 { font-size:1rem; font-weight:700; }
+    .modal-close { background:none; border:none; color:var(--text-secondary); font-size:1.25rem; cursor:pointer; padding:0.25rem; }
+    .modal-body { padding:1rem 1.25rem; overflow-y:auto; flex:1; }
+    .log-pre { font-family:'Courier New', monospace; font-size:0.78rem; line-height:1.6; color:var(--text-secondary); white-space:pre-wrap; word-break:break-all; margin:0; }
+
+    /* Toast */
+    .toast { position:fixed; bottom:2rem; left:50%; transform:translateX(-50%); padding:0.75rem 1.5rem; border-radius:8px; font-size:0.9rem; font-weight:600; z-index:2000; opacity:0; transition:opacity 0.3s; pointer-events:none; }
+    .toast.show { opacity:1; }
+    .toast.success { background:#065f46; color:#86efac; border:1px solid rgba(34,197,94,0.3); }
+    .toast.error { background:#7f1d1d; color:#fca5a5; border:1px solid rgba(239,68,68,0.3); }
+
+    /* IEC Wizard */
+    .iec-step { font-size:1.2rem; color:#475569; transition:color 0.2s; }
+    .iec-step.active { color:#818cf8; }
+    .iec-step.done { color:#22c55e; }
+    .iec-contract-option { display:block; background:rgba(255,255,255,0.04); border:1px solid var(--card-border); border-radius:8px; padding:0.75rem; cursor:pointer; transition:border-color 0.15s; }
+    .iec-contract-option:hover { border-color:rgba(129,140,248,0.5); }
+    .iec-contract-option input[type="radio"] { margin-left:8px; }
+    .iec-contract-option.selected { border-color:#818cf8; background:rgba(129,140,248,0.08); }
+
+    @media (max-width: 768px) {
+        /* Layout */
+        .ops-container { padding: 0.75rem !important; }
+        .ops-header { flex-direction:column; gap:0.75rem; align-items:stretch; }
+        .ops-header h1 { font-size: 1.2rem !important; }
+        .ops-header > div { display:flex; gap:0.5rem; }
+        .ops-header > div > button { flex:1; min-height:44px; }
+
+        /* Summary bar — hide separators, tighter layout */
+        .summary-bar { font-size:0.8rem; gap:0.5rem 1rem; padding:0.6rem 0.75rem; }
+        .summary-bar .sep { display:none; }
+
+        /* Branch cards */
+        .branch-grid { grid-template-columns:1fr; }
+        .branch-card { padding:1rem !important; }
+
+        /* Agent rows — allow message to wrap */
+        .agent-row { flex-wrap:wrap; gap:0.4rem; }
+        .agent-msg { white-space:normal !important; min-width:0; }
+        .agent-name { min-width:60px; font-size:0.82rem; }
+        .agent-time { font-size:0.7rem; }
+
+        /* Branch action buttons — 2-column grid for tap targets */
+        .branch-actions { display:grid !important; grid-template-columns:1fr 1fr; gap:0.4rem; }
+        .btn-action { min-height:44px; padding:0.5rem 0.5rem !important; font-size:0.82rem !important; text-align:center; touch-action:manipulation; }
+
+        /* Timeline — stack on mobile */
+        .timeline-row { flex-wrap:wrap; gap:0.3rem 0.5rem; padding:0.5rem; }
+        .timeline-time { min-width:unset; font-size:0.72rem; order:3; }
+        .timeline-branch { min-width:unset; font-size:0.85rem; }
+        .timeline-agent { min-width:unset; font-size:0.82rem; }
+        .timeline-msg { flex-basis:100%; white-space:normal !important; font-size:0.8rem; }
+
+        /* Alerts — dismiss button tap target */
+        .alert-row { flex-wrap:wrap; gap:0.4rem; }
+        .alert-dismiss { min-width:44px; min-height:44px; display:flex; align-items:center; justify-content:center; font-size:1.2rem; }
+        .alert-msg { font-size:0.82rem; }
+
+        /* Health grid */
+        .health-grid { grid-template-columns:repeat(2, 1fr); gap:0.5rem; }
+        .health-card { padding:0.75rem; }
+        .health-value { font-size:1rem; }
+        .health-label { font-size:0.72rem; }
+
+        /* Modals — prevent iOS zoom on inputs */
+        .modal-box { max-width:100%; max-height:95vh; }
+        .modal-box input, .modal-box textarea, .modal-box select { font-size:16px !important; }
+        .modal-body { padding:0.75rem 1rem; }
+
+        /* Add branch form inputs */
+        #add-branch-form input, #add-branch-form textarea, #add-branch-form select { font-size:16px !important; }
+        #submit-branch-btn { min-height:44px; width:100%; }
+
+        /* Section headings */
+        .section-card h2 { font-size:1rem !important; }
+
+        /* Refresh button */
+        .btn-refresh { min-height:44px; touch-action:manipulation; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="ops-container">
+    <div class="ops-header">
+        <h1>בקרת תפעול</h1>
+        <div style="display:flex; gap:0.5rem;">
+            <button id="toggle-branches-btn" class="btn-action" onclick="toggleBranchesPanel()" style="padding:0.5rem 1rem; font-size:0.85rem; font-weight:600;">➕ הוסף סניף</button>
+            <button class="btn-refresh" onclick="loadAll()">רענן</button>
+        </div>
+    </div>
+
+    <!-- Summary Bar -->
+    <div class="summary-bar" id="summary-bar">טוען...</div>
+
+    <!-- Add Branch Panel -->
+    <div id="branches-panel" style="display:none; margin-bottom:1.5rem;">
+        <div class="section-card">
+            <h2>הוספת סניף חדש</h2>
+            <div class="success-banner" id="branch-success" style="display:none; background:rgba(34,197,94,0.15); border:1px solid rgba(34,197,94,0.3); border-radius:8px; padding:0.75rem 1rem; color:#86efac; font-size:0.9rem; font-weight:600; margin-bottom:1rem;"></div>
+            <form id="add-branch-form" onsubmit="return addBranch(event)">
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם הסניף *</label>
+                        <input type="text" name="name" id="branch-name" required placeholder="לדוגמה: המכולת ד׳יזנגוף" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">עיר</label>
+                        <input type="text" name="city" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Aviv User ID</label>
+                        <input type="text" name="aviv_user_id" placeholder="לדוגמה: S33834" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Aviv Password</label>
+                        <input type="text" name="aviv_password" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">BilBoy Token (JWT)</label>
+                        <textarea name="bilboy_pass" placeholder="הדבק את ה-JWT token מ-BilBoy (מ-localStorage או DevTools)" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem; resize:vertical; min-height:60px;"></textarea>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">Gmail Label</label>
+                        <input type="text" name="gmail_label" placeholder="המילה הייחודית בנושא מייל ה-Z" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:3px;">Forward one Z-report email from avivpost@avivpos.co.il to makoletdashboard@gmail.com — the unique word in the subject becomes the label</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">מספר חוזה חשמל (IEC)</label>
+                        <input type="text" name="iec_contract" id="branch-iec-contract" placeholder="לדוגמה: 346412955" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <span style="font-size:0.78rem; color:#94a3b8;">* הגדר העברה אוטומטית מ-noreplys@iec.co.il לתיבה שלנו</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">ספק זיכיון</label>
+                        <input type="text" name="franchise_supplier" value="זיכיונות המכולת בע&quot;מ" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                        <div style="font-size:0.75rem; color:#64748b; margin-top:3px;">This supplier will be automatically filtered out from goods reports</div>
+                    </div>
+                    <div style="border-top:1px solid #334155; margin:8px 0 12px; padding-top:12px; font-size:0.8rem; color:#64748b; text-align:center;">— Manager Details (optional) —</div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">שם מנהל</label>
+                        <input type="text" name="manager_name" style="background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:0.3rem;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">אימייל מנהל</label>
+                        <input type="email" name="manager_email" style="direction:ltr; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.5rem 0.75rem; color:var(--text-primary); font-family:inherit; font-size:0.85rem;">
+                    </div>
+                    <div style="margin-top:0.5rem;">
+                        <button type="submit" id="submit-branch-btn" style="background:var(--accent); color:white; border:none; border-radius:8px; padding:0.6rem 1.5rem; font-size:0.9rem; font-weight:700; cursor:pointer; font-family:inherit; opacity:0.5; cursor:not-allowed;" disabled>הוסף סניף</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Branch Cards -->
+    <div class="branch-grid" id="branch-grid">
+        <div class="loading"><div class="spinner"></div> טוען נתונים...</div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="section-card">
+        <h2>ציר זמן — הרצות אחרונות</h2>
+        <div class="timeline" id="timeline">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="section-card">
+        <h2>התראות — 7 ימים אחרונים</h2>
+        <div id="alerts">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+
+    <!-- System Health -->
+    <div class="section-card">
+        <h2>בריאות השרת</h2>
+        <div class="health-grid" id="health-grid">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+
+    <!-- Hourly Sales Data Health -->
+    <div class="section-card">
+        <h2>בריאות הנתונים — מכירות לפי שעת היום</h2>
+        <div id="hourly-health-container">
+            <div class="loading"><div class="spinner"></div></div>
+        </div>
+    </div>
+
+    <!-- Electricity Accuracy Table -->
+    <div class="section-card" id="iec-accuracy-section" style="display:none;">
+        <h2>אמינות תחזיות החשמל</h2>
+        <p style="font-size:13px;color:#cbd5e1;margin:0 0 1rem 0;">
+            השוואה בין החשמל שהוערך לבין החשבונית האמיתית. חודשים עתידיים יישארו ריקים עד שתתקבלנה חשבוניות מלאות.
+        </p>
+        <div style="overflow-x:auto;">
+            <table class="data-table" id="iec-accuracy-table" style="width:100%;font-size:0.85rem;">
+                <thead>
+                    <tr style="border-bottom:1px solid var(--card-border);">
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">סניף</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">חודש</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">תחזית</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">בסיס תחזית</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">בפועל</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">הפרש</th>
+                        <th style="padding:0.5rem 0.75rem;text-align:right;color:var(--text-muted);font-weight:600;">אמינות %</th>
+                    </tr>
+                </thead>
+                <tbody id="iec-accuracy-tbody">
+                    <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1rem;">טוען...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Branch Modal -->
+<div class="modal-overlay" id="edit-branch-modal">
+  <div class="modal-box" style="max-width:560px;">
+    <div class="modal-header">
+      <h3 id="edit-branch-title">Edit Branch</h3>
+      <button class="modal-close" onclick="closeEditBranch()">✕</button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+      <input type="hidden" id="edit-branch-id">
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Branch Name *</label>
+      <input id="edit-name" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">City</label>
+      <input id="edit-city" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Aviv User ID</label>
+      <input id="edit-aviv-user" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Aviv Password</label>
+      <input id="edit-aviv-pass" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">BilBoy Token (JWT)</label>
+      <textarea id="edit-bilboy-token" rows="3" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.82rem;margin-top:4px;resize:vertical;"></textarea></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Gmail Label</label>
+      <input id="edit-gmail-label" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">IEC Contract Number</label>
+      <input id="edit-iec-contract" type="text" placeholder="e.g. 346412955" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div><label style="font-size:0.82rem;color:#94a3b8;">Franchise Supplier</label>
+      <input id="edit-franchise-supplier" type="text" style="width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:0.88rem;margin-top:4px;"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+        <input type="checkbox" id="edit-active" style="width:16px;height:16px;cursor:pointer;">
+        <label for="edit-active" style="font-size:0.88rem;color:#f1f5f9;cursor:pointer;">Branch Active</label>
+      </div>
+      <div id="edit-branch-error" style="display:none;color:#fca5a5;font-size:0.82rem;"></div>
+      <button onclick="saveEditBranch()" style="background:#6366f1;color:white;border:none;border-radius:8px;padding:10px;font-size:0.9rem;font-weight:600;cursor:pointer;margin-top:4px;">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Log Modal -->
+<div class="modal-overlay" id="log-modal">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3 id="log-title">לוגים</h3>
+            <button class="modal-close" onclick="closeLogModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            <pre class="log-pre" id="log-content">טוען...</pre>
+        </div>
+    </div>
+</div>
+
+<!-- IEC Onboarding Wizard Modal -->
+<div class="modal-overlay" id="iec-wizard-modal">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-header">
+      <h3 id="iec-wizard-title">הגדרת חשבון חשמל</h3>
+      <button class="modal-close" onclick="iecWizard.close()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Step indicator -->
+      <div style="display:flex;justify-content:center;gap:8px;margin-bottom:1.25rem;" id="iec-steps">
+        <span class="iec-step active" data-step="1">●</span>
+        <span class="iec-step" data-step="2">○</span>
+        <span class="iec-step" data-step="3">○</span>
+      </div>
+      <!-- Error display -->
+      <div id="iec-wizard-error" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:0.6rem 0.85rem;color:#fca5a5;font-size:0.85rem;margin-bottom:1rem;"></div>
+
+      <!-- Step 1: ID number -->
+      <div id="iec-step-1">
+        <label style="display:block;font-size:0.88rem;font-weight:600;color:#94a3b8;margin-bottom:0.4rem;">תעודת זהות</label>
+        <input type="text" id="iec-id-number" maxlength="9" inputmode="numeric" autocomplete="off"
+               style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.6rem 0.85rem;color:white;font-size:16px;font-family:inherit;direction:ltr;text-align:center;letter-spacing:2px;">
+        <button id="iec-send-otp-btn" onclick="iecWizard.sendOtp()" style="width:100%;margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.65rem;color:#c7d2fe;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">שלח קוד אימות לאימייל</button>
+        <small style="display:block;text-align:center;color:#64748b;margin-top:0.5rem;font-size:0.78rem;">קוד יישלח לכתובת המייל הרשומה בחשבון החשמל</small>
+      </div>
+
+      <!-- Step 2: OTP -->
+      <div id="iec-step-2" style="display:none;">
+        <p style="color:#94a3b8;font-size:0.88rem;margin:0 0 0.75rem 0;">קוד נשלח. הזן את ה-6 ספרות מהמייל.</p>
+        <input type="text" id="iec-otp-code" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+               style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.6rem 0.85rem;color:white;font-size:16px;font-family:inherit;direction:ltr;text-align:center;letter-spacing:4px;">
+        <button id="iec-verify-btn" onclick="iecWizard.verifyOtp()" style="width:100%;margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.65rem;color:#c7d2fe;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">אמת</button>
+        <p style="text-align:center;color:#64748b;font-size:0.82rem;margin-top:0.5rem;">הקוד תקף לעוד <span id="iec-otp-timer" style="color:#fbbf24;font-weight:600;">10:00</span></p>
+      </div>
+
+      <!-- Step 3: Contract selection -->
+      <div id="iec-step-3" style="display:none;">
+        <p style="color:#94a3b8;font-size:0.88rem;margin:0 0 0.75rem 0;">בחר את חוזה החשמל של הסניף:</p>
+        <div id="iec-contracts-list" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+        <button id="iec-save-btn" onclick="iecWizard.save()" style="width:100%;margin-top:1rem;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.5);border-radius:8px;padding:0.65rem;color:#86efac;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">סיום</button>
+      </div>
+
+      <!-- Expired state -->
+      <div id="iec-step-expired" style="display:none;text-align:center;padding:1rem 0;">
+        <p style="color:#fca5a5;font-size:0.95rem;font-weight:600;">פג תוקף הקוד</p>
+        <button onclick="iecWizard.reset()" style="margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.55rem 1.25rem;color:#c7d2fe;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:inherit;">התחל מחדש</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const AGENT_LABELS = { bilboy: 'BilBoy', gmail: 'Gmail', aviv_live: 'Aviv Live', iec: 'IEC', aviv_employees: 'עובדים' };
+const STATUS_ICONS = { success: '✓', warning: '⚠', error: '✗', running: '⟳', skipped: '–' };
+const LOG_COLORS = { error: '#fca5a5', warning: '#fde68a', success: '#86efac', default: '#94a3b8' };
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    setTimeout(() => t.className = 'toast', 3000);
+}
+
+function renderSummary(s) {
+    const bar = document.getElementById('summary-bar');
+    if (!s) { bar.textContent = '—'; return; }
+    const errClass = s.errors_24h > 0 ? 'error-count' : '';
+    const storeHtml = s.store_open
+        ? '<span class="store-status"><span class="store-dot open"></span> חנות פתוחה</span>'
+        : `<span class="store-status"><span class="store-dot closed"></span> סגור · יפתח ב-${s.next_opening}</span>`;
+    bar.innerHTML = `
+        <span><strong>${s.active_branches}</strong> סניפים פעילים</span>
+        <span class="sep"></span>
+        <span class="${errClass}">${s.errors_24h} שגיאות (24ש)</span>
+        <span class="sep"></span>
+        <span>ריצה אחרונה: <strong>${s.last_nightly || '—'}</strong></span>
+        <span class="sep"></span>
+        <span>ריצה הבאה: <strong>מחר 02:00</strong></span>
+        <span class="sep"></span>
+        ${storeHtml}
+    `;
+}
+
+function renderBranches(branches) {
+    const grid = document.getElementById('branch-grid');
+    if (!branches || !branches.length) {
+        grid.innerHTML = '<div style="color:var(--text-muted);padding:2rem;text-align:center;">אין סניפים פעילים</div>';
+        return;
+    }
+    grid.innerHTML = branches.map(b => {
+        const agentRows = ['bilboy', 'gmail', 'aviv_live', 'iec', 'aviv_employees'].map(agent => {
+            const a = b.agents[agent];
+            if (agent === 'iec' && !b.has_iec_token) {
+                return `<div class="agent-row"><span class="agent-name">IEC</span><span class="agent-msg" style="color:#64748b">לא מוגדר</span><button class="btn-action" style="padding:0.2rem 0.6rem;font-size:0.75rem;" onclick="iecWizard.open(${b.id},'${b.name.replace(/'/g,"\\'")}')">הגדר חשמל</button></div>`;
+            }
+            if (!a) return `<div class="agent-row"><span class="agent-name">${AGENT_LABELS[agent]}</span><span class="agent-msg">לא רץ</span><span class="agent-badge skipped">–</span></div>`;
+            const badge = a.status || 'unknown';
+            const icon = STATUS_ICONS[badge] || '?';
+            const dur = a.duration_seconds ? `${a.duration_seconds}s` : '';
+            return `<div class="agent-row">
+                <span class="agent-name">${AGENT_LABELS[agent]}</span>
+                <span class="agent-msg">${a.message || ''}</span>
+                <span class="agent-badge ${badge}">${icon}</span>
+                <span class="agent-time">${a.started_at || ''} ${dur}</span>
+            </div>`;
+        }).join('');
+
+        return `<div class="branch-card">
+            <div class="branch-card-header">
+                <div>
+                    <span class="status-dot ${b.status}"></span>
+                    <span class="branch-name">${b.name}</span>
+                    <span class="branch-meta">#${b.id} · ${b.city || ''}</span>
+                </div>
+            </div>
+            <div class="agent-rows">${agentRows}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);padding:0.3rem 0.6rem;margin-bottom:0.5rem;">
+                ${b.hours_this_month > 0
+                    ? 'שעות החודש: ' + (b.hours_this_month || 0).toFixed(1) + (b.avg_hourly_rate > 0 ? ' | עלות שכר: ₪' + Math.round(b.hours_this_month * b.avg_hourly_rate).toLocaleString() : '')
+                    : 'טרם הועלו שעות'}
+                ${b.employees_with_rates !== undefined ? '<br>תעריפים: ' + b.employees_with_rates + ' עובדים מוגדרים' : ''}
+            </div>
+            <div class="branch-actions">
+                <button class="btn-action" onclick="runAgent(${b.id},'bilboy',this)">הרץ BilBoy</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'gmail',this)">הרץ Gmail</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'aviv_live',this)">הרץ Aviv</button>
+                <button class="btn-action" onclick="runAgent(${b.id},'aviv_employees',this)">הרץ עובדים</button>
+                ${b.has_iec_token ? `<button class="btn-action" onclick="runAgent(${b.id},'iec',this)">הרץ IEC</button>` : ''}
+                <button class="btn-action" onclick="openLogs(${b.id},'bilboy')">לוגים BB</button>
+                <button class="btn-action" onclick="openLogs(${b.id},'gmail')">לוגים GM</button>
+                <button class="btn-action" onclick="openLogs(${b.id},'aviv_live')">לוגים AV</button>
+                <button class="btn-action" onclick="openEditBranch(${b.id})">✏️ Edit Branch</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderTimeline(runs) {
+    const el = document.getElementById('timeline');
+    if (!runs || !runs.length) {
+        el.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">אין הרצות אחרונות</div>';
+        return;
+    }
+    el.innerHTML = runs.map(r => {
+        const badge = r.status || 'unknown';
+        return `<div class="timeline-row">
+            <span class="status-dot ${badge}" style="width:8px;height:8px;flex-shrink:0;"></span>
+            <span class="timeline-time">${r.started_at || ''}</span>
+            <span class="timeline-branch">${r.branch_name || '#' + r.branch_id}</span>
+            <span class="timeline-agent">${AGENT_LABELS[r.agent] || r.agent}</span>
+            <span class="timeline-msg">${r.message || ''}</span>
+        </div>`;
+    }).join('');
+}
+
+function renderAlerts(alerts) {
+    const el = document.getElementById('alerts');
+    if (!alerts || !alerts.length) {
+        el.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">אין התראות</div>';
+        return;
+    }
+    el.innerHTML = alerts.map(a => {
+        return `<div class="alert-row ${a.status}" id="alert-${a.id}">
+            <span class="status-dot ${a.status}" style="width:8px;height:8px;flex-shrink:0;"></span>
+            <span class="alert-msg"><strong>${a.branch_name || '#' + a.branch_id}</strong> · ${AGENT_LABELS[a.agent] || a.agent} — ${a.message || ''}</span>
+            <span class="alert-time">${a.started_at || ''}</span>
+            <button class="alert-dismiss" onclick="dismissAlert(${a.id})" title="סגור">✕</button>
+        </div>`;
+    }).join('');
+}
+
+function renderHealth(h) {
+    const grid = document.getElementById('health-grid');
+    if (!h) { grid.innerHTML = '<span style="color:var(--text-muted)">לא זמין</span>'; return; }
+
+    const svcCount = (h.services.app === 'active' ? 1 : 0) + (h.services.scheduler === 'active' ? 1 : 0);
+    const svcClass = svcCount === 2 ? 'ok' : 'error';
+
+    const diskClass = h.disk.status;
+
+    // Parse memory used/total
+    let memHtml = h.memory || '—';
+    let memClass = 'ok';
+    try {
+        const [used, total] = h.memory.split('/').map(Number);
+        const memPct = Math.round(used / total * 100);
+        memHtml = `${memPct}% (${used}M)`;
+        memClass = memPct > 85 ? 'error' : (memPct > 70 ? 'warning' : 'ok');
+    } catch(e) {}
+
+    grid.innerHTML = `
+        <div class="health-card">
+            <div class="health-label">שירותים</div>
+            <div class="health-value ${svcClass}">${svcCount}/2 פעילים</div>
+            <div class="health-sub">${h.uptime || ''}</div>
+        </div>
+        <div class="health-card">
+            <div class="health-label">דיסק</div>
+            <div class="health-value ${diskClass}">${h.disk.pct}%</div>
+            <div class="health-sub">${h.disk.raw || ''}</div>
+        </div>
+        <div class="health-card">
+            <div class="health-label">זיכרון</div>
+            <div class="health-value ${memClass}">${memHtml}</div>
+        </div>
+        <div class="health-card">
+            <div class="health-label">פריסה אחרונה</div>
+            <div class="health-value" style="font-size:0.85rem;">${h.last_deploy || '—'}</div>
+        </div>
+    `;
+}
+
+async function loadOpsData() {
+    try {
+        const resp = await fetch('/api/ops-status');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        renderSummary(data.summary);
+        renderBranches(data.branches);
+        renderTimeline(data.agent_runs);
+        renderAlerts(data.alerts);
+    } catch (e) {
+        console.error('Failed to load ops data:', e);
+    }
+}
+
+async function loadHealth() {
+    try {
+        const resp = await fetch('/api/ops-health');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        renderHealth(await resp.json());
+    } catch (e) {
+        document.getElementById('health-grid').innerHTML = `<span style="color:#fca5a5">שגיאה: ${e.message}</span>`;
+    }
+}
+
+async function loadIecAccuracy() {
+    try {
+        const resp = await fetch('/api/iec-accuracy');
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const rows = await resp.json();
+        const section = document.getElementById('iec-accuracy-section');
+        const tbody = document.getElementById('iec-accuracy-tbody');
+        if (!rows.length) {
+            section.style.display = 'none';
+            return;
+        }
+        section.style.display = 'block';
+        let lastBranch = null;
+        tbody.innerHTML = rows.map(r => {
+            const showBranch = r.branch_name !== lastBranch;
+            lastBranch = r.branch_name;
+            const branchCell = showBranch
+                ? `<td style="padding:0.5rem 0.75rem;font-weight:700;color:var(--text-primary);border-top:1px solid var(--card-border);">${r.branch_name}</td>`
+                : `<td style="padding:0.5rem 0.75rem;"></td>`;
+            const est = r.estimate != null ? '₪' + Math.round(r.estimate).toLocaleString() : '—';
+            const basis = r.estimate_basis || '—';
+            let realCell;
+            if (r.real != null) {
+                realCell = '₪' + Math.round(r.real).toLocaleString();
+            } else {
+                realCell = '<span style="font-size:0.75rem;background:rgba(251,191,36,0.15);color:#fbbf24;padding:2px 6px;border-radius:4px;">ממתין</span>';
+            }
+            let deltaCell = '—';
+            if (r.delta != null) {
+                const sign = r.delta > 0 ? '+' : '';
+                const color = r.delta <= 0 ? '#86efac' : '#fca5a5';
+                deltaCell = `<span style="color:${color}">${sign}₪${Math.round(r.delta).toLocaleString()}</span>`;
+            }
+            let accCell = '—';
+            if (r.accuracy_pct != null) {
+                const color = r.accuracy_pct >= 90 ? '#86efac' : r.accuracy_pct >= 70 ? '#fde68a' : '#fca5a5';
+                accCell = `<span style="color:${color};font-weight:600;">${r.accuracy_pct}%</span>`;
+            }
+            const rowBorder = showBranch ? 'border-top:1px solid var(--card-border);' : '';
+            return `<tr style="${rowBorder}">
+                ${branchCell}
+                <td style="padding:0.5rem 0.75rem;color:var(--text-secondary);">${r.month_label}</td>
+                <td style="padding:0.5rem 0.75rem;color:var(--text-primary);">${est}</td>
+                <td style="padding:0.5rem 0.75rem;color:var(--text-muted);font-size:0.8rem;">${basis}</td>
+                <td style="padding:0.5rem 0.75rem;">${realCell}</td>
+                <td style="padding:0.5rem 0.75rem;">${deltaCell}</td>
+                <td style="padding:0.5rem 0.75rem;">${accCell}</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        console.error('IEC accuracy load failed:', e);
+    }
+}
+
+function loadAll() { loadOpsData(); loadHealth(); loadIecAccuracy(); }
+
+async function runAgent(branchId, agent, btn) {
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.innerHTML = orig + ' <span class="spin"></span>';
+    try {
+        const resp = await fetch('/ops/run-agent', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({branch_id: branchId, agent: agent})
+        });
+        const data = await resp.json();
+        if (data.status === 'success') {
+            showToast(`${AGENT_LABELS[agent]} #${branchId}: ${data.message} (${data.duration}s)`, 'success');
+        } else {
+            showToast(`${AGENT_LABELS[agent]} #${branchId}: ${data.message}`, 'error');
+        }
+        loadOpsData();
+    } catch (e) {
+        showToast(`שגיאה: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+    }
+}
+
+async function dismissAlert(id) {
+    try {
+        await fetch('/ops/dismiss-alert', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({alert_id: id})
+        });
+        const row = document.getElementById('alert-' + id);
+        if (row) row.remove();
+    } catch (e) {
+        showToast('שגיאה בסגירת התראה', 'error');
+    }
+}
+
+async function openLogs(branchId, agent) {
+    document.getElementById('log-title').textContent = `לוגים — ${AGENT_LABELS[agent]} #${branchId}`;
+    document.getElementById('log-content').innerHTML = '<span style="color:var(--text-muted)">טוען...</span>';
+    document.getElementById('log-modal').classList.add('open');
+    try {
+        const resp = await fetch(`/ops/logs/${branchId}/${agent}`);
+        const data = await resp.json();
+        if (data.branch_name) {
+            document.getElementById('log-title').textContent = `לוגים — ${AGENT_LABELS[agent]} · ${data.branch_name}`;
+        }
+        const lines = data.lines || [];
+        if (!lines.length) {
+            document.getElementById('log-content').innerHTML = '<span style="color:var(--text-muted)">אין לוגים</span>';
+            return;
+        }
+        document.getElementById('log-content').innerHTML = lines.map(l => {
+            const color = LOG_COLORS[l.level] || LOG_COLORS.default;
+            const escaped = (l.message || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return `<span style="color:${color}">${escaped}</span>`;
+        }).join('\n');
+    } catch (e) {
+        document.getElementById('log-content').innerHTML = `<span style="color:#fca5a5">שגיאה: ${e.message}</span>`;
+    }
+}
+
+function closeLogModal() { document.getElementById('log-modal').classList.remove('open'); }
+
+async function openEditBranch(branchId) {
+    const resp = await fetch(`/api/admin/branches/${branchId}`);
+    const b = await resp.json();
+    document.getElementById('edit-branch-id').value = b.id;
+    document.getElementById('edit-branch-title').textContent = `Edit Branch — ${b.name}`;
+    document.getElementById('edit-name').value = b.name || '';
+    document.getElementById('edit-city').value = b.city || '';
+    document.getElementById('edit-aviv-user').value = b.aviv_user_id || '';
+    document.getElementById('edit-aviv-pass').value = b.aviv_password || '';
+    document.getElementById('edit-bilboy-token').value = b.bilboy_pass || '';
+    document.getElementById('edit-gmail-label').value = b.gmail_label || '';
+    document.getElementById('edit-iec-contract').value = b.iec_contract || '';
+    document.getElementById('edit-franchise-supplier').value = b.franchise_supplier || '';
+    document.getElementById('edit-active').checked = b.active == 1;
+    document.getElementById('edit-branch-error').style.display = 'none';
+    document.getElementById('edit-branch-modal').classList.add('open');
+}
+
+function closeEditBranch() {
+    document.getElementById('edit-branch-modal').classList.remove('open');
+}
+
+async function saveEditBranch() {
+    const id = document.getElementById('edit-branch-id').value;
+    const payload = {
+        name: document.getElementById('edit-name').value.trim(),
+        city: document.getElementById('edit-city').value.trim(),
+        aviv_user_id: document.getElementById('edit-aviv-user').value.trim(),
+        aviv_password: document.getElementById('edit-aviv-pass').value.trim(),
+        bilboy_pass: document.getElementById('edit-bilboy-token').value.trim(),
+        gmail_label: document.getElementById('edit-gmail-label').value.trim(),
+        iec_contract: document.getElementById('edit-iec-contract').value.trim(),
+        franchise_supplier: document.getElementById('edit-franchise-supplier').value.trim(),
+        active: document.getElementById('edit-active').checked ? 1 : 0,
+    };
+    if (!payload.name) {
+        document.getElementById('edit-branch-error').textContent = 'Branch name is required';
+        document.getElementById('edit-branch-error').style.display = 'block';
+        return;
+    }
+    const resp = await fetch(`/api/admin/branches/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (data.ok) {
+        closeEditBranch();
+        showToast('Branch updated ✓', 'success');
+        loadOpsData();
+    } else {
+        document.getElementById('edit-branch-error').textContent = data.error || 'Save failed';
+        document.getElementById('edit-branch-error').style.display = 'block';
+    }
+}
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeLogModal(); closeEditBranch(); }
+});
+
+function toggleBranchesPanel() {
+    const panel = document.getElementById('branches-panel');
+    const btn = document.getElementById('toggle-branches-btn');
+    const isOpen = panel.style.display !== 'none';
+    panel.style.display = isOpen ? 'none' : 'block';
+    btn.textContent = isOpen ? '➕ הוסף סניף' : '📊 חזור לבקרה';
+}
+
+async function addBranch(e) {
+    e.preventDefault();
+    const form = document.getElementById('add-branch-form');
+    const btn = document.getElementById('submit-branch-btn');
+    const data = {};
+    new FormData(form).forEach((v, k) => { data[k] = v; });
+    btn.disabled = true;
+    btn.textContent = 'מוסיף...';
+    try {
+        const resp = await fetch('/api/admin/branches', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+        if (result.ok) {
+            const banner = document.getElementById('branch-success');
+            let msg = 'סניף #' + result.branch_id + ' נוסף בהצלחה!';
+            if (result.temp_password) {
+                msg += ' סיסמה זמנית למנהל: ' + result.temp_password;
+            }
+            banner.textContent = msg;
+            banner.style.display = 'block';
+            form.reset();
+            setTimeout(() => {
+                toggleBranchesPanel();
+                banner.style.display = 'none';
+                loadAll();
+            }, 3000);
+        } else {
+            showToast('שגיאה: ' + (result.error || 'unknown'), 'error');
+        }
+    } catch (err) {
+        showToast('שגיאה: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'הוסף סניף';
+    }
+}
+
+// Submit button validation
+const branchNameInput = document.getElementById('branch-name');
+const submitBtn = document.getElementById('submit-branch-btn');
+if (branchNameInput && submitBtn) {
+    branchNameInput.addEventListener('input', function() {
+        const hasValue = this.value.trim().length > 0;
+        submitBtn.disabled = !hasValue;
+        submitBtn.style.opacity = hasValue ? '1' : '0.5';
+        submitBtn.style.cursor = hasValue ? 'pointer' : 'not-allowed';
+    });
+}
+
+// ── IEC Onboarding Wizard ────────────────────────────
+const iecWizard = (() => {
+    let sessionToken = null;
+    let branchId = null;
+    let branchName = '';
+    let timerInterval = null;
+    let overallTimeout = null;
+
+    function open(bid, bname) {
+        branchId = bid;
+        branchName = bname;
+        sessionToken = null;
+        document.getElementById('iec-wizard-title').textContent = `הגדרת חשבון חשמל — ${bname}`;
+        showStep(1);
+        document.getElementById('iec-id-number').value = '';
+        document.getElementById('iec-otp-code').value = '';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        document.getElementById('iec-wizard-modal').classList.add('open');
+        document.getElementById('iec-id-number').focus();
+    }
+
+    function close() {
+        document.getElementById('iec-wizard-modal').classList.remove('open');
+        clearTimers();
+        sessionToken = null;
+    }
+
+    function reset() {
+        clearTimers();
+        sessionToken = null;
+        showStep(1);
+        document.getElementById('iec-id-number').value = '';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        document.getElementById('iec-id-number').focus();
+    }
+
+    function showStep(n) {
+        ['1','2','3','expired'].forEach(s => {
+            document.getElementById('iec-step-' + s).style.display = s == n ? 'block' : 'none';
+        });
+        document.querySelectorAll('.iec-step').forEach(el => {
+            const step = parseInt(el.dataset.step);
+            el.classList.toggle('active', step === n);
+            el.classList.toggle('done', step < n);
+            el.textContent = step < n ? '●' : (step === n ? '●' : '○');
+        });
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('iec-wizard-error');
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+
+    function clearTimers() {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        if (overallTimeout) { clearTimeout(overallTimeout); overallTimeout = null; }
+    }
+
+    function startOtpTimer() {
+        let remaining = 600; // 10 minutes
+        const timerEl = document.getElementById('iec-otp-timer');
+        timerInterval = setInterval(() => {
+            remaining--;
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+            if (remaining <= 0) {
+                clearInterval(timerInterval);
+                showStep('expired');
+            }
+        }, 1000);
+        // Overall session timeout (12 min)
+        overallTimeout = setTimeout(() => {
+            close();
+            showToast('פג זמן הגדרת החשבון. נסה שוב.', 'error');
+        }, 720000);
+    }
+
+    async function sendOtp() {
+        const btn = document.getElementById('iec-send-otp-btn');
+        const idNum = document.getElementById('iec-id-number').value.trim();
+        if (!idNum) return;
+        btn.disabled = true;
+        btn.textContent = 'שולח...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: branchId, id_number: idNum})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'שגיאה'); return; }
+            sessionToken = data.session_token;
+            showStep(2);
+            startOtpTimer();
+            document.getElementById('iec-otp-code').focus();
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'שלח קו�� אימות לאימייל';
+        }
+    }
+
+    async function verifyOtp() {
+        const btn = document.getElementById('iec-verify-btn');
+        const otp = document.getElementById('iec-otp-code').value.trim();
+        if (!otp || otp.length < 4) return;
+        btn.disabled = true;
+        btn.textContent = 'מאמת...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/verify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: branchId, session_token: sessionToken, otp: otp})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'אימות נכשל'); return; }
+            // Render contracts
+            const list = document.getElementById('iec-contracts-list');
+            const contracts = data.contracts || [];
+            if (!contracts.length) { showError('לא נמצאו חוזי חשמל'); return; }
+            list.innerHTML = contracts.map((c, i) => `
+                <label class="iec-contract-option" onclick="this.parentElement.querySelectorAll('.iec-contract-option').forEach(e=>e.classList.remove('selected'));this.classList.add('selected');">
+                    <input type="radio" name="iec-contract" value="${c.contract_id}" ${i===0?'checked':''} style="margin-left:8px;">
+                    <span style="font-weight:600;">${c.contract_id}</span>
+                    <span style="color:#94a3b8;font-size:0.85rem;display:block;margin-top:2px;">${c.address}</span>
+                </label>
+            `).join('');
+            if (contracts.length === 1) list.querySelector('.iec-contract-option').classList.add('selected');
+            showStep(3);
+        } catch (e) {
+            showError('שגיאה בח��בור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'אמת';
+        }
+    }
+
+    async function save() {
+        const btn = document.getElementById('iec-save-btn');
+        const selected = document.querySelector('input[name="iec-contract"]:checked');
+        if (!selected) { showError('יש לבחור חוזה'); return; }
+        btn.disabled = true;
+        btn.textContent = 'שומר...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: branchId, session_token: sessionToken, contract_id: selected.value})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'שגיאה בשמירה'); return; }
+            close();
+            showToast('✓ חשבון החשמל הוגדר בהצלחה', 'success');
+            // Refresh ops data to show updated IEC status
+            loadOpsData();
+            // Trigger first IEC sync in the background
+            fetch('/api/iec/sync', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: branchId})
+            }).catch(() => {}).then(() => setTimeout(loadOpsData, 10000));
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'סיום';
+        }
+    }
+
+    return { open, close, reset, sendOtp, verifyOtp, save };
+})();
+
+// Close wizard on Escape too
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.getElementById('iec-wizard-modal').classList.contains('open')) {
+        iecWizard.close();
+    }
+});
+
+// Hourly sales data health
+const STATUS_ICON = {green: '🟢', amber: '🟡', red: '🔴', pending: '⏳'};
+async function loadHourlyHealth() {
+    const container = document.getElementById('hourly-health-container');
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        // Fetch for all active branches (we know 126 and 127)
+        const branches = [126, 127];
+        const results = await Promise.all(branches.map(bid =>
+            fetch(`/api/hourly-health?branch_id=${bid}&date=${today}`).then(r => r.json()).catch(() => null)
+        ));
+
+        let html = '';
+        for (const d of results) {
+            if (!d || d.error) continue;
+            const c = d.checks;
+            const icon = STATUS_ICON[d.overall_status] || '⚪';
+            const hb = c.heartbeat || {};
+            const cov = c.hour_coverage || {};
+            const rec = c.daily_reconciliation || {};
+            const spikes = c.suspicious_spikes || [];
+            const amz = c.amazon_activity;
+
+            html += `<div style="background:rgba(255,255,255,0.03); border:1px solid var(--card-border); border-radius:8px; padding:1rem; margin-bottom:0.75rem;">
+                <div style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;" onclick="this.parentElement.querySelector('.hh-details').toggleAttribute('hidden')">
+                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                        <span style="font-size:1.1rem;">${icon}</span>
+                        <span style="font-weight:700;">סניף ${d.branch_id}</span>
+                    </div>
+                    <div style="display:flex; gap:1rem; font-size:0.82rem; color:var(--text-secondary); flex-wrap:wrap;">
+                        <span>${hb.message || '—'}</span>
+                        <span>${cov.covered !== undefined ? cov.covered + '/' + cov.total + ' שעות' : '—'}</span>
+                        <span>${rec.delta_pct !== null && rec.delta_pct !== undefined ? 'Δ ' + rec.delta_pct + '%' : rec.status === 'pending' ? '⏳ Z-report' : '—'}</span>
+                        <span>${spikes.length} חריגות</span>
+                    </div>
+                </div>
+                <div class="hh-details" hidden style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid rgba(148,163,184,0.15); font-size:0.82rem; color:var(--text-secondary);">
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:0.5rem;">
+                        <div>${STATUS_ICON[hb.status] || '⚪'} <strong>דופק:</strong> ${hb.message || '—'}</div>
+                        <div>${STATUS_ICON[cov.status] || '⚪'} <strong>כיסוי שעות:</strong> ${cov.message || '—'}</div>
+                        <div>${STATUS_ICON[rec.status] || '⚪'} <strong>התאמה יומית:</strong> ${rec.message || '—'}</div>
+                        <div>${spikes.length ? '🔴' : '🟢'} <strong>חריגות:</strong> ${spikes.length ? spikes.map(s => 'שעה ' + s.hour + ': ₪' + Math.round(s.amount).toLocaleString()).join(', ') : 'אין'}</div>
+                        ${amz && !amz.skipped ? '<div>' + STATUS_ICON[amz.status] + ' <strong>אמזון:</strong> ' + (amz.message || '—') + '</div>' : ''}
+                    </div>
+                </div>
+            </div>`;
+        }
+        container.innerHTML = html || '<div style="color:var(--text-muted);">אין נתונים</div>';
+    } catch (e) {
+        container.innerHTML = `<span style="color:#fca5a5">שגיאה: ${e.message}</span>`;
+    }
+}
+
+// Initial load + auto-refresh
+loadAll();
+loadHourlyHealth();
+setInterval(loadOpsData, 60000);
+setInterval(loadHealth, 120000);
+setInterval(loadHourlyHealth, 60000);
+</script>
+{% endblock %}

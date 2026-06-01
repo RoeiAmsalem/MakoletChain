@@ -1,0 +1,768 @@
+{% extends "base.html" %}
+{% block title %}הוצאות קבועות - MakoletChain{% endblock %}
+{% block head %}
+<style>
+    .page-accent { color: #818cf8; }
+    .kpi-card--fixed .kpi-value { font-size: 2.2rem !important; }
+    .kpi-card--fixed { padding: 1.5rem 2rem !important; }
+    .table-card { background: var(--card,#1e293b); border: 1px solid var(--card-border,#334155); border-radius: var(--radius,12px); overflow: hidden; }
+    .table-header { display:flex; align-items:center; justify-content:space-between; padding:1.25rem 1.5rem; border-bottom:1px solid var(--card-border,#334155); }
+    .table-header h2 { font-size:1.15rem; font-weight:600; color:white; display:flex; align-items:center; gap:0.5rem; }
+    .add-form-card {
+        background: linear-gradient(135deg, #162032 0%, #1a1d35 100%);
+        border: 1px solid var(--card-border,#334155); border-radius: var(--radius,12px);
+        padding: 1.5rem 1.75rem; margin-bottom: 1.25rem; display: none;
+    }
+    .add-form-card.open { display: block; }
+    .add-form-card h3 { font-size:1.15rem; font-weight:700; color:white; margin:0 0 1.25rem 0; }
+    .form-row { display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .form-field { display:flex; flex-direction:column; gap:0.4rem; flex:1; min-width:180px; }
+    .form-field label { font-size:0.88rem; font-weight:600; color:#94a3b8; }
+    .form-field input,.form-field select { background:var(--bg,#0f172a); border:1px solid #475569; border-radius:8px; padding:0.6rem 0.85rem; color:white; font-size:1rem; font-family:inherit; }
+    .form-field input:focus,.form-field select:focus { outline:none; border-color:#818cf8; }
+    .toggle-section { margin-bottom:1.25rem; }
+    .toggle-section-label { font-size:0.88rem; font-weight:600; color:#94a3b8; display:block; margin-bottom:0.5rem; }
+    .toggle-row { display:flex; gap:8px; flex-wrap:wrap; }
+    .type-btn { font-size:1rem; font-weight:700; padding:0.65rem 1.25rem; border-radius:10px; cursor:pointer; font-family:inherit; background:rgba(255,255,255,0.04); border:2px solid #334155; color:#94a3b8; transition:all 0.2s; }
+    .type-btn.active-amount { background:rgba(129,140,248,0.15); border-color:rgba(129,140,248,0.5); color:#c7d2fe; }
+    .type-btn.active-percent { background:rgba(251,191,36,0.15); border-color:rgba(251,191,36,0.5); color:#fcd34d; }
+    .type-btn.active-monthly { background:rgba(96,165,250,0.15); border-color:rgba(96,165,250,0.5); color:#93c5fd; }
+    .type-btn.active-onetime { background:rgba(251,146,60,0.15); border-color:rgba(251,146,60,0.5); color:#fdba74; }
+    .fields-amount,.fields-percent { display:none; }
+    .fields-amount.open,.fields-percent.open { display:flex; }
+    .percent-preview { font-size:1rem; color:#86efac; font-weight:600; padding:0.6rem 0; min-height:1.5em; }
+    .form-actions { display:flex; gap:0.75rem; margin-top:0.5rem; }
+    .btn-save-form { font-size:1rem; font-weight:700; padding:0.6rem 1.5rem; background:rgba(129,140,248,0.2); border:1px solid rgba(129,140,248,0.5); border-radius:8px; color:#c7d2fe; cursor:pointer; font-family:inherit; }
+    .btn-save-form:hover { background:rgba(129,140,248,0.35); }
+    .btn-cancel-form { font-size:1rem; padding:0.6rem 1.25rem; background:none; border:1px solid #475569; border-radius:8px; color:#94a3b8; cursor:pointer; font-family:inherit; }
+    .btn-add-main { font-size:1rem; font-weight:700; padding:0.55rem 1.1rem; background:rgba(129,140,248,0.15); border:1px solid rgba(129,140,248,0.45); border-radius:8px; color:#c7d2fe; cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .btn-add-main:hover { background:rgba(129,140,248,0.28); }
+    .type-badge { display:inline-flex; align-items:center; gap:3px; font-size:0.72rem; font-weight:700; border-radius:5px; padding:2px 8px; white-space:nowrap; }
+    .type-badge--monthly { background:rgba(96,165,250,0.15); color:#93c5fd; }
+    .type-badge--onetime { background:rgba(251,146,60,0.15); color:#fdba74; }
+    .type-badge--percent { background:rgba(251,191,36,0.15); color:#fcd34d; }
+    .type-badge--auto { background:rgba(202,138,4,0.15); color:#fbbf24; }
+    #kpi-section { grid-template-columns: 1fr 1fr !important; }
+    .actions-cell { display:flex; gap:0.5rem; align-items:center; white-space:nowrap; }
+    .btn-icon { background:none; border:none; cursor:pointer; font-size:1.15rem; padding:0.4rem 0.5rem; border-radius:6px; color:#94a3b8; }
+    .btn-icon:hover { background:rgba(255,255,255,0.06); }
+    .btn-save-inline { font-size:0.88rem; font-weight:700; padding:0.4rem 0.75rem; background:rgba(129,140,248,0.15); border:1px solid rgba(129,140,248,0.4); border-radius:6px; color:#c7d2fe; cursor:pointer; font-family:inherit; }
+    .btn-cancel-inline { font-size:0.88rem; padding:0.4rem 0.6rem; background:none; border:1px solid #334155; border-radius:6px; color:#94a3b8; cursor:pointer; font-family:inherit; }
+    .btn-delete-icon { background:none; border:none; cursor:pointer; padding:6px 8px; color:#ef4444; border-radius:6px; }
+    .btn-delete-icon:hover { background:rgba(239,68,68,0.15); }
+    .amount-input { width:120px; background:var(--bg,#0f172a); border:1px solid #818cf8; border-radius:6px; padding:0.4rem 0.6rem; color:white; font-size:1rem; font-family:inherit; text-align:left; direction:ltr; }
+    .saved-flash { font-size:0.85rem; color:#86efac; opacity:0; transition:opacity 0.3s; }
+    tfoot td { font-weight:700; font-size:1.05rem; color:#c7d2fe; background:#1a1d35 !important; border-top:2px solid rgba(129,140,248,0.3) !important; padding:14px 16px; }
+    @media (max-width:768px) {
+        .add-form-card { padding:1.25rem 1rem; }
+        .form-field { min-width:100%; }
+        .type-btn { font-size:0.92rem; padding:0.55rem 0.9rem; flex:1; justify-content:center; text-align:center; }
+        .data-table thead th,.data-table tbody td { padding:10px 8px; font-size:0.88rem; }
+        .btn-save-form { flex:1; min-height:44px; }
+        .btn-cancel-form { min-height:44px; }
+        .btn-add-main { min-height:44px; }
+        .kpi-card--fixed .kpi-value { font-size:1.5rem !important; }
+        .kpi-card--fixed { padding:1rem 1.25rem !important; }
+        .table-header { flex-direction:column; align-items:stretch !important; gap:0.75rem; padding:1rem; }
+        .table-header h2 { font-size:1rem; }
+        .actions-cell { gap:0.25rem; }
+        .btn-icon { min-width:40px; min-height:40px; display:flex; align-items:center; justify-content:center; }
+        .btn-delete-icon { min-width:40px; min-height:40px; display:flex; align-items:center; justify-content:center; }
+        #edit-modal-overlay > div { padding:1.25rem !important; max-height:90vh; overflow-y:auto; }
+        #edit-modal-overlay input, #edit-modal-overlay select { font-size:16px !important; }
+        .form-field input, .form-field select { font-size:16px !important; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<section class="cards-grid" id="kpi-section">
+    <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
+</section>
+
+<div class="add-form-card" id="add-form-card">
+    <h3>הוצאה חדשה</h3>
+    <div class="form-row">
+        <div class="form-field" style="flex:2">
+            <label for="new-name">שם ההוצאה</label>
+            <input id="new-name" type="text" placeholder="למשל: שכירות, ביטוח, ארנונה" maxlength="80">
+        </div>
+    </div>
+    <div class="toggle-section">
+        <span class="toggle-section-label">כמה?</span>
+        <div class="toggle-row">
+            <button type="button" id="amt-type-fixed" class="type-btn active-amount" onclick="setAmountType('fixed')">₪ סכום קבוע</button>
+            <button type="button" id="amt-type-percent" class="type-btn" onclick="setAmountType('percent')">% מהכנסות</button>
+        </div>
+    </div>
+    <div class="form-row fields-amount open" id="fields-amount">
+        <div class="form-field" style="max-width:220px">
+            <label for="new-amount">סכום (₪)</label>
+            <input id="new-amount" type="number" min="0" step="0.01" placeholder="0.00" style="direction:ltr">
+        </div>
+    </div>
+    <div class="form-row fields-percent" id="fields-percent">
+        <div class="form-field" style="max-width:140px">
+            <label for="new-pct-value">אחוז %</label>
+            <input id="new-pct-value" type="number" min="0" step="0.1" placeholder="5" style="direction:ltr" oninput="updatePreview()">
+        </div>
+        <div class="form-field" style="max-width:200px">
+            <label>&nbsp;</label>
+            <div class="percent-preview" id="percent-preview"></div>
+        </div>
+    </div>
+    <div class="toggle-section">
+        <span class="toggle-section-label">סוג</span>
+        <div class="toggle-row">
+            <button type="button" id="when-monthly" class="type-btn active-monthly" onclick="setWhenType('monthly')">חודשי</button>
+            <button type="button" id="when-onetime" class="type-btn" onclick="setWhenType('onetime')">חד פעמי</button>
+        </div>
+    </div>
+    <div class="form-actions">
+        <button class="btn-save-form" onclick="saveNewExpense()">שמור</button>
+        <button class="btn-cancel-form" onclick="toggleAddPanel()">ביטול</button>
+    </div>
+</div>
+
+<div class="table-card">
+    <div class="table-header">
+        <h2><span class="page-accent">🏠</span> רשימת הוצאות קבועות</h2>
+        <div style="display:flex;align-items:center;gap:1rem">
+            <span id="header-total" style="font-size:1rem;color:#94a3b8"></span>
+            <button class="btn-add-main" onclick="toggleAddPanel()">+ הוסף הוצאה</button>
+        </div>
+    </div>
+    <div style="overflow-x:auto">
+        <table class="data-table">
+            <thead><tr><th>שם</th><th>סוג</th><th>סכום חודשי</th><th>פעולות</th></tr></thead>
+            <tbody id="expenses-tbody"><tr><td colspan="4"><div class="loading"><div class="spinner"></div><span>טוען...</span></div></td></tr></tbody>
+            <tfoot id="expenses-tfoot"></tfoot>
+        </table>
+    </div>
+</div>
+
+<!-- IEC Onboarding Wizard Modal -->
+<div class="modal-overlay" id="iec-wizard-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--card,#1e293b);border:1px solid var(--card-border,#334155);border-radius:12px;width:90%;max-width:480px;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--card-border,#334155);">
+      <h3 style="font-size:1rem;font-weight:700;margin:0;">הגדרת חשבון חשמל</h3>
+      <button onclick="iecWizard.close()" style="background:none;border:none;color:#94a3b8;font-size:1.25rem;cursor:pointer;">✕</button>
+    </div>
+    <div style="padding:1rem 1.25rem;">
+      <div style="display:flex;justify-content:center;gap:8px;margin-bottom:1.25rem;" id="iec-steps">
+        <span class="iec-step active" data-step="1" style="font-size:1.2rem;color:#818cf8;">●</span>
+        <span class="iec-step" data-step="2" style="font-size:1.2rem;color:#475569;">○</span>
+        <span class="iec-step" data-step="3" style="font-size:1.2rem;color:#475569;">○</span>
+      </div>
+      <div id="iec-wizard-error" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:0.6rem 0.85rem;color:#fca5a5;font-size:0.85rem;margin-bottom:1rem;"></div>
+
+      <div id="iec-step-1">
+        <label style="display:block;font-size:0.88rem;font-weight:600;color:#94a3b8;margin-bottom:0.4rem;">תעודת זהות</label>
+        <input type="text" id="iec-id-number" maxlength="9" inputmode="numeric" autocomplete="off"
+               style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.6rem 0.85rem;color:white;font-size:16px;font-family:inherit;direction:ltr;text-align:center;letter-spacing:2px;">
+        <button id="iec-send-otp-btn" onclick="iecWizard.sendOtp()" style="width:100%;margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.65rem;color:#c7d2fe;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">שלח קוד אימות לאימייל</button>
+        <small style="display:block;text-align:center;color:#64748b;margin-top:0.5rem;font-size:0.78rem;">קוד יישלח לכתובת המייל הרשומה בחשבון החשמל</small>
+      </div>
+
+      <div id="iec-step-2" style="display:none;">
+        <p style="color:#94a3b8;font-size:0.88rem;margin:0 0 0.75rem 0;">קוד נשלח. הזן את ה-6 ספרות מהמייל.</p>
+        <input type="text" id="iec-otp-code" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+               style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.6rem 0.85rem;color:white;font-size:16px;font-family:inherit;direction:ltr;text-align:center;letter-spacing:4px;">
+        <button id="iec-verify-btn" onclick="iecWizard.verifyOtp()" style="width:100%;margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.65rem;color:#c7d2fe;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">אמת</button>
+        <p style="text-align:center;color:#64748b;font-size:0.82rem;margin-top:0.5rem;">הקוד תקף לעוד <span id="iec-otp-timer" style="color:#fbbf24;font-weight:600;">10:00</span></p>
+      </div>
+
+      <div id="iec-step-3" style="display:none;">
+        <p style="color:#94a3b8;font-size:0.88rem;margin:0 0 0.75rem 0;">בחר את חוזה החשמל של הסניף:</p>
+        <div id="iec-contracts-list" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+        <button id="iec-save-btn" onclick="iecWizard.save()" style="width:100%;margin-top:1rem;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.5);border-radius:8px;padding:0.65rem;color:#86efac;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">סיום</button>
+      </div>
+
+      <div id="iec-step-expired" style="display:none;text-align:center;padding:1rem 0;">
+        <p style="color:#fca5a5;font-size:0.95rem;font-weight:600;">פג תוקף הקוד</p>
+        <button onclick="iecWizard.reset()" style="margin-top:0.75rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.55rem 1.25rem;color:#c7d2fe;font-size:0.9rem;font-weight:600;cursor:pointer;font-family:inherit;">התחל מחדש</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="edit-modal-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:500; align-items:center; justify-content:center;" onclick="if(event.target===this) closeEditModal()">
+  <div style="background:#1e293b; border:1px solid #334155; border-radius:12px; padding:1.75rem; width:90%; max-width:480px;">
+    <h3 style="font-size:1.1rem; font-weight:700; color:white; margin:0 0 1.25rem 0;">עריכת הוצאה</h3>
+    <input type="hidden" id="edit-id">
+
+    <div style="margin-bottom:1rem;">
+      <label style="font-size:0.88rem; font-weight:600; color:#94a3b8; display:block; margin-bottom:0.4rem;">שם ההוצאה</label>
+      <input id="edit-name" type="text" maxlength="80" style="width:100%; background:#0f172a; border:1px solid #475569; border-radius:8px; padding:0.6rem 0.85rem; color:white; font-size:1rem; font-family:inherit; box-sizing:border-box;">
+    </div>
+
+    <div style="margin-bottom:1rem;">
+      <span style="font-size:0.88rem; font-weight:600; color:#94a3b8; display:block; margin-bottom:0.5rem;">כמה?</span>
+      <div style="display:flex; gap:8px; margin-bottom:0.75rem;">
+        <button type="button" id="edit-amt-fixed" class="type-btn active-amount" onclick="setEditAmountType('fixed')">₪ סכום קבוע</button>
+        <button type="button" id="edit-amt-percent" class="type-btn" onclick="setEditAmountType('percent')">% מהכנסות</button>
+      </div>
+      <div id="edit-fields-amount" style="display:flex;">
+        <input id="edit-amount" type="number" min="0" step="0.01" placeholder="0.00" style="direction:ltr; background:#0f172a; border:1px solid #475569; border-radius:8px; padding:0.6rem 0.85rem; color:white; font-size:1rem; font-family:inherit; width:180px;">
+      </div>
+      <div id="edit-fields-percent" style="display:none; gap:1rem; align-items:center;">
+        <input id="edit-pct-value" type="number" min="0" step="0.1" placeholder="5" style="direction:ltr; background:#0f172a; border:1px solid #475569; border-radius:8px; padding:0.6rem 0.85rem; color:white; font-size:1rem; font-family:inherit; width:100px;" oninput="updateEditPreview()">
+        <span id="edit-percent-preview" style="font-size:1rem; color:#86efac; font-weight:600;"></span>
+      </div>
+    </div>
+
+    <div style="margin-bottom:1.5rem;">
+      <span style="font-size:0.88rem; font-weight:600; color:#94a3b8; display:block; margin-bottom:0.5rem;">סוג</span>
+      <div style="display:flex; gap:8px;">
+        <button type="button" id="edit-when-monthly" class="type-btn active-monthly" onclick="setEditWhenType('monthly')">חודשי</button>
+        <button type="button" id="edit-when-onetime" class="type-btn" onclick="setEditWhenType('onetime')">חד פעמי</button>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:0.75rem;">
+      <button class="btn-save-form" onclick="saveEditModal()">שמור</button>
+      <button class="btn-cancel-form" onclick="closeEditModal()">ביטול</button>
+    </div>
+  </div>
+</div>
+
+<!-- Electricity Fork Dialog -->
+<div id="elec-fork-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--card,#1e293b);border:1px solid var(--card-border,#334155);border-radius:12px;width:90%;max-width:420px;padding:1.5rem;">
+    <h3 style="font-size:1.1rem;font-weight:700;color:white;margin:0 0 1.25rem 0;text-align:center;">הגדרת עלות חשמל</h3>
+    <div style="display:flex;flex-direction:column;gap:0.75rem;">
+      <button onclick="document.getElementById('elec-fork-modal').style.display='none';iecWizard.open()" style="background:rgba(129,140,248,0.12);border:1px solid rgba(129,140,248,0.4);border-radius:10px;padding:1rem;cursor:pointer;text-align:right;font-family:inherit;">
+        <div style="font-size:0.95rem;font-weight:700;color:#c7d2fe;margin-bottom:0.3rem;">⚡ חיבור ל-IEC (אוטומטי)</div>
+        <div style="font-size:0.82rem;color:#94a3b8;">מתחבר לחשבון חשמל ומושך חשבוניות אוטומטית.</div>
+      </button>
+      <button onclick="document.getElementById('elec-fork-modal').style.display='none';openManualElecDialog()" style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);border-radius:10px;padding:1rem;cursor:pointer;text-align:right;font-family:inherit;">
+        <div style="font-size:0.95rem;font-weight:700;color:#fbbf24;margin-bottom:0.3rem;">✏️ הזנה ידנית</div>
+        <div style="font-size:0.82rem;color:#94a3b8;">הזן את הסכום החודשי בעצמך. פשוט יותר, דורש עדכון חודשי.</div>
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:1rem;">
+      <button onclick="document.getElementById('elec-fork-modal').style.display='none'" style="background:none;border:none;color:#64748b;font-size:0.85rem;cursor:pointer;font-family:inherit;">ביטול</button>
+    </div>
+  </div>
+</div>
+
+<!-- Manual Electricity Entry Dialog -->
+<div id="manual-elec-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:1100;align-items:center;justify-content:center;" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:var(--card,#1e293b);border:1px solid var(--card-border,#334155);border-radius:12px;width:90%;max-width:380px;padding:1.5rem;">
+    <h3 style="font-size:1rem;font-weight:700;color:white;margin:0 0 1rem 0;">⚡ הזנת עלות חשמל</h3>
+    <div id="manual-elec-error" style="display:none;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:0.5rem 0.75rem;color:#fca5a5;font-size:0.82rem;margin-bottom:0.75rem;"></div>
+    <label style="display:block;font-size:0.85rem;font-weight:600;color:#94a3b8;margin-bottom:0.3rem;">חודש</label>
+    <input type="month" id="manual-elec-month" style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.5rem 0.75rem;color:white;font-size:0.95rem;font-family:inherit;margin-bottom:0.75rem;">
+    <label style="display:block;font-size:0.85rem;font-weight:600;color:#94a3b8;margin-bottom:0.3rem;">סכום חשבונית בש״ח</label>
+    <input type="number" id="manual-elec-amount" inputmode="decimal" step="0.01" min="0" placeholder="0.00"
+           style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid #475569;border-radius:8px;padding:0.5rem 0.75rem;color:white;font-size:1.1rem;font-family:inherit;direction:ltr;text-align:center;">
+    <button id="manual-elec-save-btn" onclick="saveManualElectricity()" style="width:100%;margin-top:1rem;background:rgba(34,197,94,0.2);border:1px solid rgba(34,197,94,0.5);border-radius:8px;padding:0.6rem;color:#86efac;font-size:0.95rem;font-weight:700;cursor:pointer;font-family:inherit;">שמור</button>
+    <div style="text-align:center;margin-top:0.5rem;">
+      <button onclick="document.getElementById('manual-elec-modal').style.display='none'" style="background:none;border:none;color:#64748b;font-size:0.85rem;cursor:pointer;font-family:inherit;">ביטול</button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_v('js/charts.js') }}"></script>
+<script>
+'use strict';
+const SELECTED_MONTH = {{ selected_month | tojson }};
+const BRANCH_ID = {{ branch_id | tojson }};
+let allExpenses = [], amountType = 'fixed', whenType = 'monthly', monthIncome = 0, latestElectricity = null, monthlyElectricity = null;
+
+function setAmountType(t) {
+    amountType = t;
+    document.getElementById('amt-type-fixed').className = 'type-btn' + (t==='fixed' ? ' active-amount' : '');
+    document.getElementById('amt-type-percent').className = 'type-btn' + (t==='percent' ? ' active-percent' : '');
+    document.getElementById('fields-amount').classList.toggle('open', t==='fixed');
+    document.getElementById('fields-percent').classList.toggle('open', t==='percent');
+}
+function setWhenType(t) {
+    whenType = t;
+    document.getElementById('when-monthly').className = 'type-btn' + (t==='monthly' ? ' active-monthly' : '');
+    document.getElementById('when-onetime').className = 'type-btn' + (t==='onetime' ? ' active-onetime' : '');
+}
+function updatePreview() {
+    const pct = parseFloat(document.getElementById('new-pct-value').value) || 0;
+    document.getElementById('percent-preview').textContent = pct > 0 ? `≈ ${formatMoney(monthIncome*pct/100)} החודש` : '';
+}
+
+async function loadExpenses() {
+    const kpi = document.getElementById('kpi-section'), tbody = document.getElementById('expenses-tbody');
+    try {
+        const [sRes, res, elecRes, summaryRes] = await Promise.all([
+            fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`),
+            fetch(`/api/fixed-expenses?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`),
+            fetch('/api/electricity-latest'),
+            fetch(`/api/fixed-expenses-summary?month=${SELECTED_MONTH}`)
+        ]);
+        if (sRes.ok) { const s = await sRes.json(); monthIncome = s.income || 0; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        allExpenses = await res.json();
+        latestElectricity = elecRes.ok ? await elecRes.json() : null;
+        monthlyElectricity = summaryRes.ok ? await summaryRes.json() : null;
+        renderKpi(kpi, allExpenses);
+        renderTable(tbody, allExpenses);
+    } catch(err) { console.error(err); kpi.innerHTML = '<p style="color:#ef4444">שגיאה.</p>'; }
+}
+
+function renderKpi(s, exps) {
+    const elec = monthlyElectricity ? monthlyElectricity.electricity : null;
+    const elecSource = elec ? elec.source : 'none';
+    const elecAmount = (elec && elecSource !== 'none') ? elec.amount : 0;
+    const total = exps.reduce((a,e) => a + e.amount, 0) + elecAmount;
+    const hasElec = elecSource !== 'none' && elecAmount > 0;
+    const count = exps.length + (hasElec ? 1 : 0);
+    const isEstimate = elecSource === 'estimate';
+    const tilde = isEstimate ? '~' : '';
+    const monthLabel = monthlyElectricity ? monthlyElectricity.month_label : '';
+
+    let elecTile;
+    if (hasElec) {
+        // Subtitle: month + estimate basis
+        let subtitle = monthLabel;
+        if (isEstimate && elec.estimate_basis) {
+            subtitle += ` (משוער על בסיס ${elec.estimate_basis})`;
+        }
+        // Caption: latest invoice info (informational)
+        let caption = '';
+        if (latestElectricity) {
+            const dd = latestElectricity.due_date;
+            const dueFmt = dd ? dd.split('-').reverse().join('/') : '';
+            caption = `<span style="font-size:0.78rem;color:rgba(241,245,249,0.35);margin-top:4px;display:block">חשבונית אחרונה: ${formatMoney(latestElectricity.amount)} · תשלום עד ${dueFmt}</span>`;
+        }
+        elecTile = `<div class="kpi-card kpi-card--electricity">
+            <div class="kpi-header"><span class="kpi-label">⚡ חשמל</span></div>
+            <span class="kpi-value" style="color:#fbbf24">${tilde}${formatMoney(elecAmount)}</span>
+            <span style="font-size:0.82rem;color:rgba(241,245,249,0.5)">${subtitle}</span>
+            ${caption}
+        </div>`;
+    } else if (elecSource === 'manual_missing') {
+        elecTile = `<div class="kpi-card kpi-card--electricity" style="border-color:rgba(251,191,36,0.4)">
+            <div class="kpi-header"><span class="kpi-label">⚡ חשמל</span></div>
+            <span class="kpi-value" style="color:#fbbf24;font-size:1.1rem">חודש זה לא הוזן</span>
+            <button onclick="openManualElecDialog()" style="margin-top:0.5rem;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:0.45rem 1rem;color:#fbbf24;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">+ הזן סכום</button>
+        </div>`;
+    } else if (latestElectricity === null && elecSource === 'none') {
+        elecTile = `<div class="kpi-card kpi-card--electricity">
+            <div class="kpi-header"><span class="kpi-label">⚡ חשמל</span></div>
+            <span class="kpi-value" style="color:#fbbf24;font-size:1.3rem">טרם הוגדר</span>
+            <button onclick="openElecForkDialog()" style="margin-top:0.5rem;background:rgba(129,140,248,0.2);border:1px solid rgba(129,140,248,0.5);border-radius:8px;padding:0.45rem 1rem;color:#c7d2fe;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">הגדר חשמל</button>
+        </div>`;
+    } else {
+        elecTile = '';
+    }
+
+    // Total tile subtitle
+    let totalSubtitle = `${count} רשומות`;
+    if (hasElec) {
+        totalSubtitle += isEstimate
+            ? ` · כולל ~${formatMoney(elecAmount)} חשמל (משוער)`
+            : ` · כולל ${formatMoney(elecAmount)} חשמל`;
+    }
+
+    s.innerHTML = `<div class="kpi-card kpi-card--fixed"><div class="kpi-header"><span class="kpi-label">סה"כ הוצאות קבועות</span></div><span class="kpi-value fixed">${formatMoney(total)}</span><span style="font-size:0.82rem;color:rgba(241,245,249,0.5)">${totalSubtitle}</span></div>${elecTile}`;
+}
+
+function getTypeBadge(e) {
+    const isPct = e.pct_value && e.pct_value > 0;
+    return (isPct ? '<span class="type-badge type-badge--percent">%</span> ' : '<span class="type-badge type-badge--monthly">₪</span> ') +
+        (e.expense_type==='monthly' ? '<span class="type-badge type-badge--monthly">חודשי</span>' : '<span class="type-badge type-badge--onetime">חד פעמי</span>');
+}
+
+function renderTable(tbody, exps) {
+    const elec = monthlyElectricity ? monthlyElectricity.electricity : null;
+    const elecSource = elec ? elec.source : 'none';
+    const hasElec = elecSource !== 'none' && elec && elec.amount > 0;
+    if (!exps.length && !hasElec) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#94a3b8">אין הוצאות. לחץ "+ הוסף הוצאה".</td></tr>'; updateTotals(exps); return; }
+    let html = exps.map(e => `
+    <tr id="row-${e.id}">
+        <td style="font-weight:600">${e.name}</td>
+        <td>${getTypeBadge(e)}</td>
+        <td class="money fixed" style="font-size:1rem">
+            <span>${formatMoney(e.amount)}</span>
+        </td>
+        <td><div class="actions-cell">
+            <button class="btn-icon" onclick="openEditModal(${e.id})">✏️</button>
+            <button onclick="deleteExpense(${e.id})" class="btn-delete-icon">🗑️</button>
+        </div></td>
+    </tr>`).join('');
+    if (hasElec) {
+        const tilde = elecSource === 'estimate' ? '~' : '';
+        const isManual = elecSource === 'manual';
+        const typeBadge = isManual ? '<span class="type-badge" style="background:rgba(251,191,36,0.15);color:#fbbf24">ידני</span>' : '<span class="type-badge type-badge--auto">אוטומטי</span>';
+        const editBtn = isManual ? `<button class="btn-icon" onclick="openManualElecDialog('${SELECTED_MONTH}')">✏️</button>` : '';
+        html += `<tr>
+            <td style="font-weight:600">⚡ חשמל</td>
+            <td>${typeBadge}</td>
+            <td class="money fixed" style="font-size:1rem"><span>${tilde}${formatMoney(elec.amount)}</span></td>
+            <td>${editBtn}</td>
+        </tr>`;
+    }
+    tbody.innerHTML = html;
+    updateTotals(exps);
+}
+
+function updateTotals(exps) {
+    const elec = monthlyElectricity ? monthlyElectricity.electricity : null;
+    const elecAmount = (elec && elec.source !== 'none' && elec.source !== 'manual_missing') ? elec.amount : 0;
+    const total = exps.reduce((a,e) => a + e.amount, 0) + elecAmount;
+    document.getElementById('expenses-tfoot').innerHTML = `<tr><td colspan="2">סה"כ</td><td class="money" style="color:#c7d2fe">${formatMoney(total)}</td><td></td></tr>`;
+    document.getElementById('header-total').textContent = `סה"כ: ${formatMoney(total)}`;
+}
+
+function toggleAddPanel() { const p = document.getElementById('add-form-card'); p.classList.toggle('open'); if (p.classList.contains('open')) document.getElementById('new-name').focus(); }
+
+async function saveNewExpense() {
+    const name = document.getElementById('new-name').value.trim();
+    if (!name) { document.getElementById('new-name').focus(); return; }
+    let body = { name, branch_id: BRANCH_ID, month: SELECTED_MONTH, expense_type: whenType };
+    if (amountType === 'percent') {
+        const pv = parseFloat(document.getElementById('new-pct-value').value) || 0;
+        if (pv <= 0) return;
+        body.amount = monthIncome * pv / 100;
+        body.pct_value = pv;
+    } else { body.amount = parseFloat(document.getElementById('new-amount').value) || 0; }
+    try {
+        const res = await fetch('/api/fixed-expenses', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await loadExpenses();
+        document.getElementById('new-name').value = ''; document.getElementById('new-amount').value = '';
+        document.getElementById('add-form-card').classList.remove('open');
+    } catch(err) { console.error(err); await mkAlert({ type: 'danger', title: 'שגיאה', message: 'אירעה שגיאה — נסה שוב.' }); }
+}
+
+async function deleteExpense(id) {
+    const exp = allExpenses.find(e => e.id === id);
+    if (!await mkConfirm({ type: 'danger', title: 'מחיקת הוצאה', message: `האם למחוק את "${exp.name}"?`, confirmText: 'מחק' })) return;
+    try {
+        const res = await fetch(`/api/fixed-expenses/${id}`, { method:'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        allExpenses = allExpenses.filter(e => e.id !== id);
+        renderTable(document.getElementById('expenses-tbody'), allExpenses);
+    } catch(err) { console.error(err); await mkAlert({ type: 'danger', title: 'שגיאה', message: 'אירעה שגיאה — נסה שוב.' }); }
+}
+
+let editAmountType = 'fixed', editWhenType = 'monthly';
+
+function setEditAmountType(t) {
+    editAmountType = t;
+    document.getElementById('edit-amt-fixed').className = 'type-btn' + (t==='fixed' ? ' active-amount' : '');
+    document.getElementById('edit-amt-percent').className = 'type-btn' + (t==='percent' ? ' active-percent' : '');
+    document.getElementById('edit-fields-amount').style.display = t==='fixed' ? 'flex' : 'none';
+    document.getElementById('edit-fields-percent').style.display = t==='percent' ? 'flex' : 'none';
+}
+
+function setEditWhenType(t) {
+    editWhenType = t;
+    document.getElementById('edit-when-monthly').className = 'type-btn' + (t==='monthly' ? ' active-monthly' : '');
+    document.getElementById('edit-when-onetime').className = 'type-btn' + (t==='onetime' ? ' active-onetime' : '');
+}
+
+function updateEditPreview() {
+    const pct = parseFloat(document.getElementById('edit-pct-value').value) || 0;
+    document.getElementById('edit-percent-preview').textContent = pct > 0 ? `≈ ${formatMoney(monthIncome*pct/100)} החודש` : '';
+}
+
+function openEditModal(id) {
+    const e = allExpenses.find(x => x.id === id);
+    if (!e) return;
+    document.getElementById('edit-id').value = id;
+    document.getElementById('edit-name').value = e.name;
+    const isPct = e.pct_value && e.pct_value > 0;
+    setEditAmountType(isPct ? 'percent' : 'fixed');
+    setEditWhenType(e.expense_type === 'monthly' ? 'monthly' : 'onetime');
+    if (isPct) {
+        document.getElementById('edit-pct-value').value = e.pct_value;
+        document.getElementById('edit-amount').value = '';
+        updateEditPreview();
+    } else {
+        document.getElementById('edit-amount').value = e.amount;
+        document.getElementById('edit-pct-value').value = '';
+        document.getElementById('edit-percent-preview').textContent = '';
+    }
+    document.getElementById('edit-modal-overlay').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('edit-modal-overlay').style.display = 'none';
+}
+
+async function saveEditModal() {
+    const id = parseInt(document.getElementById('edit-id').value);
+    const name = document.getElementById('edit-name').value.trim();
+    if (!name) { document.getElementById('edit-name').focus(); return; }
+
+    let body = { name, expense_type: editWhenType };
+    if (editAmountType === 'percent') {
+        const pv = parseFloat(document.getElementById('edit-pct-value').value) || 0;
+        if (pv <= 0) return;
+        body.amount = monthIncome * pv / 100;
+        body.pct_value = pv;
+    } else {
+        body.amount = parseFloat(document.getElementById('edit-amount').value) || 0;
+        body.pct_value = null;
+    }
+
+    try {
+        const res = await fetch(`/api/fixed-expenses/${id}`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        closeEditModal();
+        await loadExpenses();
+    } catch(err) {
+        console.error(err);
+        await mkAlert({ type: 'danger', title: 'שגיאה', message: 'אירעה שגיאה — נסה שוב.' });
+    }
+}
+
+loadExpenses();
+
+// ── Electricity fork / manual entry dialogs ────────
+function openElecForkDialog() {
+    document.getElementById('elec-fork-modal').style.display = 'flex';
+}
+
+function openManualElecDialog(prefillMonth) {
+    const monthInput = document.getElementById('manual-elec-month');
+    monthInput.value = prefillMonth || SELECTED_MONTH;
+    document.getElementById('manual-elec-amount').value = '';
+    document.getElementById('manual-elec-error').style.display = 'none';
+    document.getElementById('manual-elec-modal').style.display = 'flex';
+    document.getElementById('manual-elec-amount').focus();
+}
+
+async function saveManualElectricity() {
+    const month = document.getElementById('manual-elec-month').value;
+    const amount = parseFloat(document.getElementById('manual-elec-amount').value);
+    const errEl = document.getElementById('manual-elec-error');
+    if (!month || isNaN(amount) || amount < 0) {
+        errEl.textContent = 'נא למלא חודש וסכום תקין';
+        errEl.style.display = 'block';
+        return;
+    }
+    const btn = document.getElementById('manual-elec-save-btn');
+    btn.disabled = true;
+    btn.textContent = 'שומר...';
+    try {
+        const res = await fetch('/api/electricity/manual', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({month, amount})
+        });
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        document.getElementById('manual-elec-modal').style.display = 'none';
+        if (typeof mkAlert === 'function') mkAlert({type: 'success', title: 'נשמר', message: 'עלות חשמל נשמרה בהצלחה.'});
+        loadExpenses();
+    } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'שמור';
+    }
+}
+
+// ── IEC Onboarding Wizard (for fixed-expenses page) ────────
+const iecWizard = (() => {
+    let sessionToken = null;
+    let timerInterval = null;
+    let overallTimeout = null;
+
+    function open() {
+        sessionToken = null;
+        showStep(1);
+        document.getElementById('iec-id-number').value = '';
+        document.getElementById('iec-otp-code').value = '';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        document.getElementById('iec-wizard-modal').style.display = 'flex';
+        document.getElementById('iec-id-number').focus();
+    }
+
+    function close() {
+        document.getElementById('iec-wizard-modal').style.display = 'none';
+        clearTimers();
+        sessionToken = null;
+    }
+
+    function reset() {
+        clearTimers();
+        sessionToken = null;
+        showStep(1);
+        document.getElementById('iec-id-number').value = '';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        document.getElementById('iec-id-number').focus();
+    }
+
+    function showStep(n) {
+        ['1','2','3','expired'].forEach(s => {
+            document.getElementById('iec-step-' + s).style.display = s == n ? 'block' : 'none';
+        });
+        document.querySelectorAll('.iec-step').forEach(el => {
+            const step = parseInt(el.dataset.step);
+            el.classList.toggle('active', step === n);
+            el.style.color = step < n ? '#22c55e' : (step === n ? '#818cf8' : '#475569');
+            el.textContent = step < n ? '●' : (step === n ? '●' : '○');
+        });
+    }
+
+    function showError(msg) {
+        const el = document.getElementById('iec-wizard-error');
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+
+    function clearTimers() {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        if (overallTimeout) { clearTimeout(overallTimeout); overallTimeout = null; }
+    }
+
+    function startOtpTimer() {
+        let remaining = 600;
+        const timerEl = document.getElementById('iec-otp-timer');
+        timerInterval = setInterval(() => {
+            remaining--;
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+            if (remaining <= 0) {
+                clearInterval(timerInterval);
+                showStep('expired');
+            }
+        }, 1000);
+        overallTimeout = setTimeout(() => {
+            close();
+            // Show expired toast using mkAlert if available
+            if (typeof mkAlert === 'function') mkAlert({type: 'danger', title: 'פג זמן', message: 'פג זמן הגדרת החשבון. נסה שוב.'});
+        }, 720000);
+    }
+
+    async function sendOtp() {
+        const btn = document.getElementById('iec-send-otp-btn');
+        const idNum = document.getElementById('iec-id-number').value.trim();
+        if (!idNum) return;
+        btn.disabled = true;
+        btn.textContent = 'שולח...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID, id_number: idNum})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'שגיאה'); return; }
+            sessionToken = data.session_token;
+            showStep(2);
+            startOtpTimer();
+            document.getElementById('iec-otp-code').focus();
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'שלח קוד אימות לאימייל';
+        }
+    }
+
+    async function verifyOtp() {
+        const btn = document.getElementById('iec-verify-btn');
+        const otp = document.getElementById('iec-otp-code').value.trim();
+        if (!otp || otp.length < 4) return;
+        btn.disabled = true;
+        btn.textContent = 'מאמת...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/verify', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID, session_token: sessionToken, otp: otp})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'אימות נכשל'); return; }
+            const list = document.getElementById('iec-contracts-list');
+            const contracts = data.contracts || [];
+            if (!contracts.length) { showError('לא נמצאו חוזי חשמל'); return; }
+            list.innerHTML = contracts.map((c, i) => `
+                <label style="display:block;background:rgba(255,255,255,0.04);border:1px solid #334155;border-radius:8px;padding:0.75rem;cursor:pointer;" onclick="this.parentElement.querySelectorAll('label').forEach(e=>e.style.borderColor='#334155');this.style.borderColor='#818cf8';">
+                    <input type="radio" name="iec-contract" value="${c.contract_id}" ${i===0?'checked':''} style="margin-left:8px;">
+                    <span style="font-weight:600;">${c.contract_id}</span>
+                    <span style="color:#94a3b8;font-size:0.85rem;display:block;margin-top:2px;">${c.address}</span>
+                </label>
+            `).join('');
+            showStep(3);
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'אמת';
+        }
+    }
+
+    async function save() {
+        const btn = document.getElementById('iec-save-btn');
+        const selected = document.querySelector('input[name="iec-contract"]:checked');
+        if (!selected) { showError('יש לבחור חוזה'); return; }
+        btn.disabled = true;
+        btn.textContent = 'שומר...';
+        document.getElementById('iec-wizard-error').style.display = 'none';
+        try {
+            const resp = await fetch('/api/iec/onboard/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID, session_token: sessionToken, contract_id: selected.value})
+            });
+            const data = await resp.json();
+            if (!data.ok) { showError(data.error || 'שגיאה בשמירה'); return; }
+            close();
+            if (typeof mkAlert === 'function') mkAlert({type: 'success', title: 'הצלחה', message: 'חשבון החשמל הוגדר בהצלחה. טוען נתונים...'});
+            // Trigger first IEC sync in background
+            fetch('/api/iec/sync', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({branch_id: BRANCH_ID})
+            }).catch(() => {});
+            // Poll for invoice data (max 30s)
+            let polls = 0;
+            const pollTimer = setInterval(async () => {
+                polls++;
+                if (polls > 15) {
+                    clearInterval(pollTimer);
+                    if (typeof mkAlert === 'function') mkAlert({type: 'info', title: 'הנתונים יופיעו בקרוב', message: 'ההגדרה נשמרה. הנתונים יופיעו תוך דקות ספורות.'});
+                    return;
+                }
+                try {
+                    const r = await fetch('/api/electricity-latest');
+                    const d = await r.json();
+                    if (d && d.amount != null) {
+                        clearInterval(pollTimer);
+                        loadExpenses();
+                    }
+                } catch (_) {}
+            }, 2000);
+        } catch (e) {
+            showError('שגיאה בחיבור לשרת');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'סיום';
+        }
+    }
+
+    // Close on Escape
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && document.getElementById('iec-wizard-modal').style.display === 'flex') close();
+    });
+
+    return { open, close, reset, sendOtp, verifyOtp, save };
+})();
+</script>
+{% endblock %}
