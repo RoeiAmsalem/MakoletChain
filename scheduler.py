@@ -309,6 +309,31 @@ scheduler.add_job(
 )
 
 
+def run_monthly_hours_reconciliation():
+    """10th-of-month final re-check of the PREVIOUS month (BilBoy-style).
+
+    Re-pulls only the previous month for all branches, full-overwrites silently
+    (late corrections self-heal), then compares stored totals before vs after
+    and alerts if last month's hours/salary moved. The agent owns the 10th date
+    gate, chain login, branch loop, jitter, and the reconciliation log.
+    """
+    from agents.aviv_employees_report import reconcile_previous_month
+    log.info("=== Monthly hours reconciliation triggered ===")
+    result = reconcile_previous_month()
+    log.info("=== Monthly hours reconciliation result: %s ===", result)
+
+
+# 10th of month, 23:00 IL — runs BEFORE the 23:30 night job so the "before"
+# snapshot reflects last night's stored totals (the numbers considered final),
+# not a same-minute re-pull. Previous month only, once a month (low Aviv load).
+scheduler.add_job(
+    func=run_monthly_hours_reconciliation,
+    trigger=CronTrigger(day=10, hour=23, minute=0, timezone=IL_TZ),
+    id='aviv_report_monthly_recon',
+    name='Monthly hours reconciliation (10th, prev month)',
+)
+
+
 def run_iec_sync():
     """06:00 — daily IEC electricity invoice sync via SSH to Israeli VPS.
 
