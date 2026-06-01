@@ -25,7 +25,8 @@ def _db(tmp_path):
         CREATE TABLE employees (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             branch_id INTEGER, name TEXT, role TEXT,
-            hourly_rate REAL, active INTEGER DEFAULT 1
+            hourly_rate REAL, active INTEGER DEFAULT 1,
+            salary_type TEXT DEFAULT 'hourly', global_salary REAL
         );
         CREATE TABLE employee_hours (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
