@@ -59,7 +59,8 @@ DEMO_EMPLOYEES = [
     ('יואב לוי',  'hourly', 38.0, None,   'בוקר'),
     ('מאיה כהן',  'hourly', 42.0, None,   'ערב'),
     ('דניאל פרץ', 'hourly', 40.0, None,   'ערב'),
-    ('אורי בר',   'global', None, 9000.0, 'מנהל'),
+    # Global: hourly_rate is NOT NULL in the schema and unused for flat pay → 0.0.
+    ('אורי בר',   'global', 0.0,  9000.0, 'מנהל'),
 ]
 
 # name -> [(shift_date, start_hm, end_hm, day_of_week), ...]
