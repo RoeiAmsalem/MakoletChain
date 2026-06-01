@@ -9,9 +9,11 @@ Usage: python scripts/verify_premium_port.py [BRANCH:MONTH ...]
 Default targets: 126 & 127 for 2026-05 and 2026-06, plus a flat check.
 Writes NOTHING.
 """
+import os
 import sys
 
-from app import app, get_db, _calculate_salary_cost, _employee_premium_costs
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root
+from app import app, get_db, _calculate_salary_cost, _employee_premium_costs  # noqa: E402
 
 
 def _global_total(db, branch_id):
