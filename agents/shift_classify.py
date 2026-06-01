@@ -87,6 +87,106 @@ def _shabbat_overlap_hours(start_ts, end_ts, windows):
     return total
 
 
+# ── Payroll premium brackets (Israeli law, cumulative/stacking method) ──────
+# Each worked hour is paid:
+#     base       = 150% if the hour falls in a Shabbat/chag window, else 100%
+#     OT increment (daily basis, by CHRONOLOGICAL position of overtime time):
+#         first 2 overtime hours of the day  → +25%
+#         overtime hours after the first 2   → +50%
+#     rate% = base + increment
+# → weekday {regular 100, OT 125, OT 150}; Shabbat {regular 150, OT 175, OT 200}.
+#
+# ORDERING RULE for a day that mixes Shabbat and non-Shabbat overtime:
+#   Overtime = the worked time past 8h cumulative that day, taken in CLOCK order.
+#   The first-2-OT (+25%) tier is the EARLIEST overtime time, regardless of
+#   whether it is Shabbat. The Shabbat +50% base is decided independently, per
+#   segment, by the clock time of that segment. So a late OT stretch that
+#   crosses candle-lighting is +25%/+50% by its position in the day's overtime,
+#   and 100%/150% base by whether each minute is inside the Shabbat window.
+#
+# Precise to the minute: each shift interval is split at the daily 8h and 10h
+# cumulative boundaries and at every Shabbat-window edge, so every segment is
+# homogeneous in (overtime tier, Shabbat) and priced exactly once.
+OT_TIER1_AFTER = 8.0    # hours/day worked before overtime begins
+OT_TIER2_AFTER = 10.0   # first 2 OT hours (8→10), then the higher tier
+
+
+def _is_shabbat_at(dt, windows):
+    return any(ws <= dt < we for ws, we in windows)
+
+
+def _ot_increment(cum_hours_at_mid):
+    """OT premium increment for a segment whose day-cumulative midpoint is given."""
+    if cum_hours_at_mid <= OT_TIER1_AFTER:
+        return 0.0
+    if cum_hours_at_mid <= OT_TIER2_AFTER:
+        return 0.25
+    return 0.50
+
+
+def premium_pay_for_month(shifts, hourly_rate, shabbat_windows):
+    """Premium-weighted pay for one hourly employee's month of shifts.
+
+    Returns {'cost', 'paid_hours', 'buckets'} where buckets maps rate% (100,
+    125, 150, 175, 200) → hours at that rate. Open shifts and rows missing
+    start/end are skipped (no paid time). DISPLAY/classification buckets on
+    employee_shifts are not used here — pay is recomputed from the timeline so
+    the daily-overtime tiering is correct across multiple shifts in a day.
+    """
+    from collections import defaultdict
+    from datetime import timedelta
+
+    by_date = defaultdict(list)
+    for s in shifts:
+        if s.get('is_open'):
+            continue
+        st = _parse_ts(s.get('start_ts'))
+        en = _parse_ts(s.get('end_ts'))
+        if not st or not en or en <= st:
+            continue
+        by_date[s.get('shift_date')].append((st, en))
+
+    cost = 0.0
+    paid_hours = 0.0
+    buckets = defaultdict(float)
+    for _date, intervals in by_date.items():
+        intervals.sort()
+        cum = 0.0  # cumulative worked hours so far this day
+        for st, en in intervals:
+            dur = (en - st).total_seconds() / 3600.0
+            breakpoints = {st, en}
+            # Daily OT boundaries (8h, 10h) mapped into this interval's clock time.
+            for thr in (OT_TIER1_AFTER, OT_TIER2_AFTER):
+                off = thr - cum
+                if 0 < off < dur:
+                    breakpoints.add(st + timedelta(hours=off))
+            # Shabbat/chag window edges that fall inside the interval.
+            for ws, we in shabbat_windows:
+                if st < ws < en:
+                    breakpoints.add(ws)
+                if st < we < en:
+                    breakpoints.add(we)
+            pts = sorted(breakpoints)
+            for a, b in zip(pts, pts[1:]):
+                seg = (b - a).total_seconds() / 3600.0
+                if seg <= 0:
+                    continue
+                mid = a + (b - a) / 2
+                cum_at_mid = cum + (a - st).total_seconds() / 3600.0 + seg / 2
+                mult = (1.50 if _is_shabbat_at(mid, shabbat_windows) else 1.00) \
+                    + _ot_increment(cum_at_mid)
+                cost += seg * mult * hourly_rate
+                paid_hours += seg
+                buckets[round(mult * 100)] += seg
+            cum += dur
+
+    return {
+        'cost': round(cost, 2),
+        'paid_hours': round(paid_hours, 4),
+        'buckets': {int(k): round(v, 4) for k, v in sorted(buckets.items())},
+    }
+
+
 def classify_shifts(shifts, shabbat_windows, is_global=False):
     """Annotate each shift dict with regular_hours / overtime_hours / shabbat_hours.
 

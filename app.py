@@ -994,13 +994,42 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
     if not rows and global_count == 0:
         return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
 
+    # Premium pay (overtime + Shabbat/chag) is computed PER EMPLOYEE from their
+    # classified per-shift timeline (employee_shifts), via the single bracket
+    # function in agents.shift_classify. Hourly pay = Σ rate-bucket hours × rate
+    # instead of flat total_hours × rate. The displayed `hours` stays the report
+    # subtotal (employee_hours.total_hours) so the KPI hours are unchanged; only
+    # the salary AMOUNT reflects premiums. Fallback to flat hours×rate when an
+    # employee has no shift rows (e.g. historical aviv_api months pre-migration
+    # 023) so nothing regresses.
+    from agents.shift_classify import load_shabbat_windows, premium_pay_for_month
+    shabbat_windows = load_shabbat_windows(db)
+    shifts_by_emp = {}
+    try:
+        shift_rows = db.execute(
+            "SELECT employee_name, shift_date, start_ts, end_ts, hours, is_open "
+            "FROM employee_shifts WHERE branch_id = ? AND month = ?",
+            (branch_id, current_month)).fetchall()
+        for sr in shift_rows:
+            shifts_by_emp.setdefault(sr['employee_name'], []).append(dict(sr))
+    except sqlite3.OperationalError:
+        # employee_shifts not present (pre-migration-022 / minimal test DB):
+        # fall back to flat hours×rate for everyone.
+        shifts_by_emp = {}
+
     total_salary = 0
     total_hours = 0
     sources = set()
     for r in rows:
         hours = r['total_hours'] or 0
         rate = r['hourly_rate'] or 0
-        salary = round(hours * rate, 2) if rate > 0 else (r['total_salary'] or 0)
+        emp_shifts = shifts_by_emp.get(r['employee_name'])
+        if rate > 0 and emp_shifts:
+            salary = premium_pay_for_month(emp_shifts, rate, shabbat_windows)['cost']
+        elif rate > 0:
+            salary = round(hours * rate, 2)  # no shift data → flat fallback
+        else:
+            salary = r['total_salary'] or 0
         total_salary += salary
         total_hours += hours
         sources.add(r['source'] or 'unknown')
