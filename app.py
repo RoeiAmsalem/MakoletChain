@@ -2797,15 +2797,18 @@ def api_employee_shifts():
         return jsonify({'shifts': [], 'total_hours': 0, 'open_count': 0})
 
     emp = db.execute(
-        "SELECT name FROM employees WHERE id = ? AND branch_id = ?",
+        "SELECT name, COALESCE(salary_type, 'hourly') AS salary_type "
+        "FROM employees WHERE id = ? AND branch_id = ?",
         (emp_id, branch_id)
     ).fetchone()
     if not emp:
         return jsonify({'error': 'not found'}), 404
     emp_name = emp['name']
+    is_global = emp['salary_type'] == 'global'
 
     shift_rows = db.execute(
-        "SELECT shift_date, start_ts, end_ts, hours, day_of_week, is_open "
+        "SELECT shift_date, start_ts, end_ts, hours, day_of_week, is_open, "
+        "regular_hours, overtime_hours, shabbat_hours "
         "FROM employee_shifts "
         "WHERE branch_id = ? AND month = ? AND employee_name = ? "
         "ORDER BY shift_date, start_ts",
@@ -2824,10 +2827,20 @@ def api_employee_shifts():
 
     shifts = [dict(r) for r in shift_rows]
     open_count = sum(1 for s in shifts if s['is_open'])
+    # Monthly classification summary (display only — salary is unaffected).
+    # regular + overtime = classified shift hours; shabbat is an orthogonal
+    # overlay (can coincide with either), shown as "of which on Shabbat/chag".
+    summary = {
+        'regular': round(sum(s.get('regular_hours') or 0 for s in shifts), 2),
+        'overtime': round(sum(s.get('overtime_hours') or 0 for s in shifts), 2),
+        'shabbat': round(sum(s.get('shabbat_hours') or 0 for s in shifts), 2),
+    }
     return jsonify({
         'shifts': shifts,
         'total_hours': total_hours,
         'open_count': open_count,
+        'is_global': is_global,
+        'summary': summary,
     })
 
 

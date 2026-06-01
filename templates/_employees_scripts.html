@@ -393,6 +393,7 @@ async function toggleShifts(empId) {
             box.innerHTML = '<div class="emp-shifts-empty">אין משמרות החודש</div>';
             return;
         }
+        const isGlobal = !!d.is_global;
         const rows = shifts.map(s => {
             const dow = s.day_of_week ? `${s.day_of_week} · ` : '';
             const dm = fmtDayMonth(s.shift_date);
@@ -405,14 +406,31 @@ async function toggleShifts(empId) {
             }
             const t1 = fmtTime(s.start_ts), t2 = fmtTime(s.end_ts);
             const span = (t1 || t2) ? `${t1}–${t2}` : '';
+            // Classification tags (hourly only): overtime + Shabbat/chag.
+            let tags = '';
+            if (!isGlobal) {
+                if ((s.overtime_hours || 0) > 0.01)
+                    tags += `<span class="shift-tag ot">נוספות ${fmtHoursHM(s.overtime_hours)}</span>`;
+                if ((s.shabbat_hours || 0) > 0.01)
+                    tags += `<span class="shift-tag shabbat">🕯 שבת ${fmtHoursHM(s.shabbat_hours)}</span>`;
+            }
             return `<div class="emp-shift-row">
                 <span>${dow}${dm}${span ? ' · ' + span : ''}</span>
-                <span class="emp-shift-hours">${fmtHoursHM(s.hours)} שעות</span>
+                <span class="emp-shift-meta">${tags}<span class="emp-shift-hours">${fmtHoursHM(s.hours)} שעות</span></span>
             </div>`;
         }).join('');
         const total = (d.total_hours || 0);
-        box.innerHTML = rows +
-            `<div class="emp-shift-total">סה״כ: ${total.toFixed(1)} שעות</div>`;
+        const sum = d.summary || {};
+        let summaryHtml = `<div class="emp-shift-total">סה״כ: ${total.toFixed(1)} שעות</div>`;
+        if (!isGlobal) {
+            const parts = [`${(sum.regular || 0).toFixed(1)} רגילות`];
+            if ((sum.overtime || 0) > 0.01) parts.push(`${sum.overtime.toFixed(1)} נוספות`);
+            const shab = (sum.shabbat || 0) > 0.01
+                ? `<div class="emp-shift-breakdown shabbat">מתוכן בשבת/חג: ${sum.shabbat.toFixed(1)} שעות</div>` : '';
+            summaryHtml = `<div class="emp-shift-total">סה״כ: ${total.toFixed(1)} שעות</div>`
+                + `<div class="emp-shift-breakdown">${parts.join(' · ')}</div>${shab}`;
+        }
+        box.innerHTML = rows + summaryHtml;
     } catch (err) {
         console.error('toggleShifts:', err);
         box.innerHTML = '<div class="emp-shifts-empty">שגיאה בטעינת משמרות</div>';

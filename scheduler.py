@@ -334,6 +334,27 @@ scheduler.add_job(
 )
 
 
+def run_shabbat_times_refresh():
+    """Weekly — refresh cached Hebcal Shabbat/chag windows for Haifa.
+
+    Feeds shift overtime/Shabbat classification (display only). Fail-soft: the
+    agent logs and leaves the cache unchanged if Hebcal is unreachable.
+    """
+    from agents.shabbat_times import fetch_and_store
+    log.info("=== Shabbat-times refresh triggered ===")
+    result = fetch_and_store()
+    log.info("=== Shabbat-times refresh result: %s ===", result)
+
+
+# Sunday 05:00 IL — weekly refresh of Shabbat/chag windows (recent + upcoming).
+scheduler.add_job(
+    func=run_shabbat_times_refresh,
+    trigger=CronTrigger(day_of_week='sun', hour=5, minute=0, timezone=IL_TZ),
+    id='shabbat_times_refresh',
+    name='Shabbat-times refresh (weekly, Haifa)',
+)
+
+
 def run_iec_sync():
     """06:00 — daily IEC electricity invoice sync via SSH to Israeli VPS.
 
