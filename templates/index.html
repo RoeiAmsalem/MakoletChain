@@ -189,6 +189,7 @@ async function setViewMode(mode) {
     </div>
 </section>
 
+{% include '_open_shifts_banner.html' %}
 {% include '_unknown_employees_banner.html' %}
 
 <!-- Electricity + hourly cluster (single flex child to avoid .main-content 1.5rem gap between them) -->
@@ -780,5 +781,6 @@ loadHourlyChart();
 {% if branch_id == 126 %}loadAmazonDeliveries();{% endif %}
 if (typeof loadLiveSales === 'function') loadLiveSales();
 if (typeof loadPendingMatches === 'function') loadPendingMatches();
+if (typeof loadOpenShifts === 'function') loadOpenShifts();
 </script>
 {% endblock %}

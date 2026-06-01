@@ -209,7 +209,11 @@ def fetch_employer_report(aviv_branch_id: int, from_date: str, to_date: str,
 
 
 def parse_hh_mm(s) -> float:
-    """'108:34' → 108.5667, '49:26' → 49.4333. Returns 0.0 on empty/invalid."""
+    """'108:34' → 108.5667, '49:26' → 49.4333. Returns 0.0 on empty/invalid.
+
+    Per-shift cells carry seconds ('02:59:01'); subtotal cells are HH:MM. Both
+    are accepted — a third ':' part is read as seconds when present.
+    """
     if not s:
         return 0.0
     s = str(s).strip()
@@ -219,9 +223,26 @@ def parse_hh_mm(s) -> float:
     try:
         h = int(parts[0])
         m = int(parts[1])
-        return h + m / 60.0
+        sec = int(parts[2]) if len(parts) >= 3 and parts[2] != '' else 0
+        return h + m / 60.0 + sec / 3600.0
     except (ValueError, IndexError):
         return 0.0
+
+
+def _parse_aviv_dt(s) -> datetime | None:
+    """'13/04/2026 19:01:34' → datetime, '13/04/2026 19:01' → datetime.
+
+    Returns None on empty/unparseable. Aviv emits day-first dd/mm/yyyy.
+    """
+    s = (s or '').strip()
+    if not s:
+        return None
+    for fmt in ('%d/%m/%Y %H:%M:%S', '%d/%m/%Y %H:%M', '%d/%m/%Y'):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def _split_id_prefix(raw: str) -> tuple[int | None, str]:
@@ -242,19 +263,30 @@ def _split_id_prefix(raw: str) -> tuple[int | None, str]:
 
 
 def parse_employer_report(xls_bytes: bytes) -> list[dict]:
-    """Parse legacy .xls → list of {raw_name, aviv_employee_id, total_hours, shift_count, open_shift_count}.
+    """Parse legacy .xls → list of per-employee dicts.
+
+    Each dict: {raw_name, aviv_employee_id, total_hours, shift_count,
+    open_shift_count, shifts}. `shifts` is a list of per-shift dicts:
+    {shift_date, start_ts, end_ts, hours, day_of_week, is_open} where:
+      - shift_date / start_ts / end_ts are 'YYYY-MM-DD[ HH:MM:SS]' or None
+      - hours is a float (0.0 for open shifts — no clock-out, no hours)
+      - is_open is True for the "אין יציאה" (no clock-out) case
 
     Sheet 0 has 9 columns; row 0 is header, then groups of rows per employee
     ending with a "סה''כ שורות N" subtotal row. Final row of file is a
     grand-total row which we skip.
 
+    col 2 = "HH:MM:SS" shift hours / "HH:MM" subtotal hours (can exceed 24h).
+    col 3 = "אין יציאה" on shifts with no clock-out.
+    col 4 = exit timestamp "dd/mm/yyyy HH:MM:SS".
+    col 5 = entry timestamp "dd/mm/yyyy HH:MM:SS".
+    col 6 = day-of-week ("יום ב").
     col 8 = "{id} {name} {store_suffix}" on first row of each group; blank on
             continuation rows; "סה''כ שורות N" on subtotal rows.
-    col 3 = "אין יציאה" on shifts with no clock-out.
-    col 2 = "HH:MM" hours (can exceed 24h).
 
-    The numeric id prefix is split off into aviv_employee_id; raw_name keeps
-    the (possibly suffixed) name for downstream matching.
+    total_hours comes from the subtotal row (authoritative — NEVER the sum of
+    shift rows). The numeric id prefix is split off into aviv_employee_id;
+    raw_name keeps the (possibly suffixed) name for downstream matching.
     """
     import xlrd
     wb = xlrd.open_workbook(file_contents=xls_bytes)
@@ -264,10 +296,14 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
     current_name = None
     current_aviv_id = None
     current_open = 0
+    current_shifts: list[dict] = []
 
     for i in range(1, sh.nrows):
         col2 = str(sh.cell(i, 2).value).strip()
         col3 = str(sh.cell(i, 3).value).strip()
+        col4 = str(sh.cell(i, 4).value).strip()
+        col5 = str(sh.cell(i, 5).value).strip()
+        col6 = str(sh.cell(i, 6).value).strip()
         col8 = str(sh.cell(i, 8).value).strip()
 
         if col8.startswith(SUBTOTAL_PREFIX):
@@ -280,18 +316,37 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
                     'total_hours': round(parse_hh_mm(col2), 4),
                     'shift_count': shift_count,
                     'open_shift_count': current_open,
+                    'shifts': current_shifts,
                 })
                 current_name = None
                 current_aviv_id = None
                 current_open = 0
+                current_shifts = []
             continue
 
         if col8:
             current_aviv_id, current_name = _split_id_prefix(col8)
-            current_open = 1 if col3 == NO_CLOCKOUT else 0
-        else:
-            if col3 == NO_CLOCKOUT:
-                current_open += 1
+            current_open = 0
+            current_shifts = []
+
+        # Append a shift row for any line that carries shift data. The first
+        # row of a group (with col8 set) is itself a shift; continuation rows
+        # have a blank col8. Subtotal rows are handled above and never reach here.
+        is_open = (col3 == NO_CLOCKOUT)
+        start_dt = _parse_aviv_dt(col5)
+        end_dt = _parse_aviv_dt(col4)
+        if is_open:
+            current_open += 1
+        if start_dt or end_dt or is_open:
+            ref_dt = start_dt or end_dt
+            current_shifts.append({
+                'shift_date': ref_dt.strftime('%Y-%m-%d') if ref_dt else None,
+                'start_ts': start_dt.strftime('%Y-%m-%d %H:%M:%S') if start_dt else None,
+                'end_ts': end_dt.strftime('%Y-%m-%d %H:%M:%S') if end_dt else None,
+                'hours': round(parse_hh_mm(col2), 4),
+                'day_of_week': col6 or None,
+                'is_open': is_open,
+            })
 
     return results
 
@@ -320,6 +375,18 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
     conn.execute(
         "DELETE FROM employee_hours WHERE branch_id=? AND month=? AND source='aviv_report'",
         (branch_id, month))
+
+    # Per-shift drill-down rows (migration 022). Full-overwrite alongside the
+    # monthly total so a re-sync replaces cleanly with no duplicate shifts.
+    # Display-only — never summed for the salary total. Guarded so the agent
+    # keeps working on a DB that has not yet applied migration 022.
+    shifts_table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='employee_shifts'"
+    ).fetchone() is not None
+    if shifts_table_exists:
+        conn.execute(
+            "DELETE FROM employee_shifts WHERE branch_id=? AND month=? AND source='aviv_report'",
+            (branch_id, month))
 
     branch_row = conn.execute('SELECT name FROM branches WHERE id=?', (branch_id,)).fetchone()
     branch_name = branch_row[0] if branch_row else ''
@@ -362,6 +429,21 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
             ''', (branch_id, month, db_name, round(hours, 2), salary))
             matched += 1
             written_names.append(db_name)
+
+            # Write this employee's shift rows under the same canonical db_name
+            # so /api/employee-shifts can join on employee_hours.employee_name.
+            if shifts_table_exists:
+                for sh in row.get('shifts', []):
+                    conn.execute('''
+                        INSERT INTO employee_shifts
+                        (branch_id, month, employee_name, shift_date, start_ts,
+                         end_ts, hours, day_of_week, is_open, source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report')
+                    ''', (branch_id, month, db_name, sh.get('shift_date'),
+                          sh.get('start_ts'), sh.get('end_ts'),
+                          round(float(sh.get('hours') or 0), 4),
+                          sh.get('day_of_week'),
+                          1 if sh.get('is_open') else 0))
         else:
             unmatched += 1
             # Store the suffix-stripped name so pending rows match what the

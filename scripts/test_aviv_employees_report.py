@@ -82,6 +82,41 @@ class TestParseEmployerReport(unittest.TestCase):
         total_shifts = sum(p['shift_count'] for p in self.parsed)
         self.assertEqual(total_shifts, 62)
 
+    def test_each_employee_has_shifts_list(self):
+        for p in self.parsed:
+            self.assertIn('shifts', p)
+            self.assertIsInstance(p['shifts'], list)
+            self.assertGreater(len(p['shifts']), 0)
+
+    def test_first_shift_fields(self):
+        # אגם צאצאן row 1: entry 13/04/2026 16:02:33, exit 19:01:34, 02:59:01.
+        first = self.parsed[0]['shifts'][0]
+        self.assertEqual(first['shift_date'], '2026-04-13')
+        self.assertEqual(first['start_ts'], '2026-04-13 16:02:33')
+        self.assertEqual(first['end_ts'], '2026-04-13 19:01:34')
+        self.assertEqual(first['day_of_week'], 'יום ב')
+        self.assertFalse(first['is_open'])
+        self.assertAlmostEqual(first['hours'], 2 + 59/60 + 1/3600, places=3)
+
+    def test_open_shift_in_shifts_list(self):
+        # דביר פישר has one open shift (17/04/2026 entry, no exit/hours).
+        by_name = {p['raw_name']: p for p in self.parsed}
+        dvir = by_name['דביר פישר תיכון']
+        opens = [s for s in dvir['shifts'] if s['is_open']]
+        self.assertEqual(len(opens), 1)
+        o = opens[0]
+        self.assertEqual(o['start_ts'], '2026-04-17 07:28:00')
+        self.assertIsNone(o['end_ts'])
+        self.assertEqual(o['hours'], 0.0)
+        self.assertEqual(o['shift_date'], '2026-04-17')
+
+    def test_shift_count_matches_shifts_len_when_dated(self):
+        # Every parsed shift row has at least a date (orphan exit-only rows
+        # carry the exit date). Shifts list length equals the reported count.
+        for p in self.parsed:
+            self.assertEqual(len(p['shifts']), p['shift_count'],
+                             f"{p['raw_name']}: {len(p['shifts'])} != {p['shift_count']}")
+
 
 class TestFetchReportList(unittest.TestCase):
     @patch('agents.aviv_employees_report.time.sleep')
@@ -233,6 +268,20 @@ def _make_test_db():
             duration_seconds REAL,
             dismissed INTEGER DEFAULT 0
         );
+        CREATE TABLE employee_shifts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch_id INTEGER NOT NULL,
+            month TEXT NOT NULL,
+            employee_name TEXT NOT NULL,
+            shift_date TEXT,
+            start_ts TEXT,
+            end_ts TEXT,
+            hours REAL DEFAULT 0,
+            day_of_week TEXT,
+            is_open INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'aviv_report',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     ''')
     conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password, active) "
                  "VALUES (127, 'תיכון', 'Tichon123', 'Tichon123', 1)")
@@ -377,6 +426,50 @@ class TestUpdateEmployeeHours(unittest.TestCase):
             "SELECT COUNT(*) c FROM employee_match_pending WHERE branch_id=127 AND resolved=0"
         ).fetchone()
         self.assertEqual(pend['c'], 1)
+
+    def _parsed_with_shifts(self):
+        return [
+            {'raw_name': 'אגם צאצאן תיכון', 'aviv_employee_id': 551,
+             'total_hours': 5.0, 'shift_count': 2, 'open_shift_count': 0,
+             'shifts': [
+                 {'shift_date': '2026-05-03', 'start_ts': '2026-05-03 13:59:00',
+                  'end_ts': '2026-05-03 23:03:04', 'hours': 9.07,
+                  'day_of_week': 'יום א', 'is_open': False},
+                 {'shift_date': '2026-05-06', 'start_ts': '2026-05-06 15:56:30',
+                  'end_ts': None, 'hours': 0.0, 'day_of_week': 'יום ד',
+                  'is_open': True},
+             ]},
+            {'raw_name': 'רנדומלי תיכון', 'aviv_employee_id': 999,
+             'total_hours': 10.0, 'shift_count': 1, 'open_shift_count': 0,
+             'shifts': [
+                 {'shift_date': '2026-05-01', 'start_ts': '2026-05-01 07:00:00',
+                  'end_ts': '2026-05-01 17:00:00', 'hours': 10.0,
+                  'day_of_week': 'יום ה', 'is_open': False},
+             ]},
+        ]
+
+    def test_shifts_written_for_matched_only(self):
+        from agents.aviv_employees_report import update_employee_hours
+        update_employee_hours(127, '2026-05', self._parsed_with_shifts(), self.conn)
+        rows = self.conn.execute(
+            "SELECT employee_name, is_open FROM employee_shifts "
+            "WHERE branch_id=127 AND month='2026-05' ORDER BY id"
+        ).fetchall()
+        # Only the matched employee (אגם צאצאן) gets shift rows; the unmatched
+        # 'רנדומלי' goes to pending and writes no shifts.
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r['employee_name'] == 'אגם צאצאן' for r in rows))
+        self.assertEqual(sum(r['is_open'] for r in rows), 1)
+
+    def test_shifts_overwrite_cleanly_on_resync(self):
+        from agents.aviv_employees_report import update_employee_hours
+        update_employee_hours(127, '2026-05', self._parsed_with_shifts(), self.conn)
+        update_employee_hours(127, '2026-05', self._parsed_with_shifts(), self.conn)
+        c = self.conn.execute(
+            "SELECT COUNT(*) c FROM employee_shifts "
+            "WHERE branch_id=127 AND month='2026-05' AND source='aviv_report'"
+        ).fetchone()['c']
+        self.assertEqual(c, 2)
 
 
 class _SharedConnContext:

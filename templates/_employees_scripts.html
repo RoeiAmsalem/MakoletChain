@@ -337,15 +337,86 @@ function renderCards(employees, csvProcessed) {
                 ${statsHtml}
             </div>
             <div class="emp-card-actions">
+                <button class="btn-sm" onclick="toggleShifts(${emp.id})" id="shifts-btn-${emp.id}">משמרות ▾</button>
                 <button class="btn-sm" onclick="openEdit(${emp.id})">ערוך</button>
                 <button class="btn-sm danger" onclick="deleteEmployee(${emp.id}, '${emp.name.replace(/'/g, "\\'")}')">מחק</button>
             </div>
+            <div class="emp-shifts" id="shifts-${emp.id}" style="display:none"></div>
         </div>`;
     });
 
     // Add employee card
     html += `<div class="emp-card-add" onclick="openAdd()">+ הוסף עובד</div>`;
     grid.innerHTML = html;
+}
+
+// Format a fractional-hours float as "H:MM" (e.g. 2.9836 → "2:59").
+function fmtHoursHM(hours) {
+    const total = Math.max(0, Math.round((hours || 0) * 60));
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    return `${h}:${String(m).padStart(2, '0')}`;
+}
+
+// "YYYY-MM-DD HH:MM:SS" → "HH:MM" (empty string if missing).
+function fmtTime(ts) {
+    if (!ts) return '';
+    const m = String(ts).match(/[ T](\d{2}):(\d{2})/);
+    return m ? `${m[1]}:${m[2]}` : '';
+}
+
+// "YYYY-MM-DD" → "d/m".
+function fmtDayMonth(d) {
+    if (!d) return '';
+    const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${parseInt(m[3])}/${parseInt(m[2])}` : '';
+}
+
+async function toggleShifts(empId) {
+    const box = document.getElementById(`shifts-${empId}`);
+    const btn = document.getElementById(`shifts-btn-${empId}`);
+    if (!box) return;
+    if (box.style.display !== 'none') {
+        box.style.display = 'none';
+        if (btn) btn.textContent = 'משמרות ▾';
+        return;
+    }
+    box.style.display = '';
+    if (btn) btn.textContent = 'משמרות ▴';
+    box.innerHTML = '<div class="emp-shifts-loading">טוען משמרות...</div>';
+    try {
+        const res = await fetch(`/api/employee-shifts?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}&employee_id=${empId}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        const shifts = d.shifts || [];
+        if (!shifts.length) {
+            box.innerHTML = '<div class="emp-shifts-empty">אין משמרות החודש</div>';
+            return;
+        }
+        const rows = shifts.map(s => {
+            const dow = s.day_of_week ? `${s.day_of_week} · ` : '';
+            const dm = fmtDayMonth(s.shift_date);
+            if (s.is_open) {
+                const t = fmtTime(s.start_ts);
+                return `<div class="emp-shift-row open">
+                    <span>${dow}${dm}${t ? ' · כניסה ' + t : ''}</span>
+                    <span class="emp-shift-open-tag">⚠️ ללא יציאה</span>
+                </div>`;
+            }
+            const t1 = fmtTime(s.start_ts), t2 = fmtTime(s.end_ts);
+            const span = (t1 || t2) ? `${t1}–${t2}` : '';
+            return `<div class="emp-shift-row">
+                <span>${dow}${dm}${span ? ' · ' + span : ''}</span>
+                <span class="emp-shift-hours">${fmtHoursHM(s.hours)} שעות</span>
+            </div>`;
+        }).join('');
+        const total = (d.total_hours || 0);
+        box.innerHTML = rows +
+            `<div class="emp-shift-total">סה״כ: ${total.toFixed(1)} שעות</div>`;
+    } catch (err) {
+        console.error('toggleShifts:', err);
+        box.innerHTML = '<div class="emp-shifts-empty">שגיאה בטעינת משמרות</div>';
+    }
 }
 
 async function loadEmployees() {
@@ -605,6 +676,7 @@ document.addEventListener('click', e => {
 
 loadEmployees();
 loadPendingMatches();
+if (typeof loadOpenShifts === 'function') loadOpenShifts();
 // DISABLED 2026-04-18: loadDiscrepancies() removed — CSV path retired
 renderLaborChart();
 </script>

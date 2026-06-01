@@ -88,6 +88,16 @@
     .btn-new { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.25); border-radius: 6px; padding: 0.3rem 0.6rem; color: #a5b4fc; cursor: pointer; font-size: 0.75rem; font-family: inherit; font-weight: 600; }
     .btn-new:hover { background: rgba(99,102,241,0.3); }
 
+    /* Per-shift drill-down (משמרות) inside an employee card */
+    .emp-shifts { margin-top: 0.5rem; border-top: 1px dashed var(--card-border); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.2rem; }
+    .emp-shifts-loading, .emp-shifts-empty { font-size: 0.78rem; color: var(--text-muted); padding: 0.35rem 0; }
+    .emp-shift-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.78rem; color: var(--text-secondary); padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .emp-shift-row:last-of-type { border-bottom: none; }
+    .emp-shift-hours { color: var(--text-primary); font-weight: 600; direction: ltr; }
+    .emp-shift-row.open { color: #fca5a5; }
+    .emp-shift-open-tag { color: #fecaca; font-weight: 700; font-size: 0.74rem; white-space: nowrap; }
+    .emp-shift-total { margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px solid var(--card-border); font-size: 0.82rem; font-weight: 700; color: var(--text-primary); text-align: left; direction: ltr; }
+
     /* Toast */
     .toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
     .toast.show { opacity: 1; }

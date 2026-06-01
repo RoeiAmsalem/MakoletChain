@@ -2775,6 +2775,99 @@ def api_employees_list():
     })
 
 
+@app.route('/api/employee-shifts', methods=['GET'])
+@login_required
+def api_employee_shifts():
+    """Per-shift drill-down for one employee in a month (migration 022).
+
+    Query: ?month=YYYY-MM&employee_id=N. Branch comes from the session — never
+    a URL param. Shifts are display-only; the authoritative monthly total comes
+    from employee_hours (the salary source of truth), returned as total_hours so
+    the UI total reconciles with the card. Honors the branch visibility floor.
+    """
+    branch_id = get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    try:
+        emp_id = int(request.args.get('employee_id', ''))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'employee_id required'}), 400
+    db = get_db()
+
+    if _month_below_floor(branch_id, month, db):
+        return jsonify({'shifts': [], 'total_hours': 0, 'open_count': 0})
+
+    emp = db.execute(
+        "SELECT name FROM employees WHERE id = ? AND branch_id = ?",
+        (emp_id, branch_id)
+    ).fetchone()
+    if not emp:
+        return jsonify({'error': 'not found'}), 404
+    emp_name = emp['name']
+
+    shift_rows = db.execute(
+        "SELECT shift_date, start_ts, end_ts, hours, day_of_week, is_open "
+        "FROM employee_shifts "
+        "WHERE branch_id = ? AND month = ? AND employee_name = ? "
+        "ORDER BY shift_date, start_ts",
+        (branch_id, month, emp_name)
+    ).fetchall()
+
+    # Authoritative monthly total — from employee_hours, NOT a sum of shift rows
+    # (report subtotals can exceed a naive shift sum; open shifts carry no hours).
+    total_row = db.execute(
+        "SELECT total_hours FROM employee_hours "
+        "WHERE branch_id = ? AND month = ? AND employee_name = ? "
+        "AND source IN ('aviv_api', 'aviv_report')",
+        (branch_id, month, emp_name)
+    ).fetchone()
+    total_hours = (total_row['total_hours'] or 0) if total_row else 0
+
+    shifts = [dict(r) for r in shift_rows]
+    open_count = sum(1 for s in shifts if s['is_open'])
+    return jsonify({
+        'shifts': shifts,
+        'total_hours': total_hours,
+        'open_count': open_count,
+    })
+
+
+@app.route('/api/open-shifts', methods=['GET'])
+@login_required
+def api_open_shifts():
+    """Open shifts (אין יציאה — no clock-out) for the branch in a month.
+
+    Powers the URGENT red flag on /employees and the home page. An open shift
+    means hours are miscounted → salary is wrong, so this is higher-severity
+    than the passive amber "unrecognized employee" banner. Branch from session;
+    honors the visibility floor. Names are display-cleaned for the UI.
+    """
+    branch_id = get_branch_id()
+    month = request.args.get('month', _now_il().strftime('%Y-%m'))
+    db = get_db()
+
+    if _month_below_floor(branch_id, month, db):
+        return jsonify({'open_shifts': [], 'count': 0})
+
+    branch_row = db.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)).fetchone()
+    branch_name = (branch_row['name'] or '') if branch_row else ''
+
+    rows = db.execute(
+        "SELECT employee_name, shift_date, start_ts, day_of_week "
+        "FROM employee_shifts "
+        "WHERE branch_id = ? AND month = ? AND is_open = 1 "
+        "ORDER BY shift_date, employee_name",
+        (branch_id, month)
+    ).fetchall()
+
+    open_shifts = [{
+        'employee_name': _clean_display_name(r['employee_name'], branch_name),
+        'shift_date': r['shift_date'],
+        'start_ts': r['start_ts'],
+        'day_of_week': r['day_of_week'],
+    } for r in rows]
+    return jsonify({'open_shifts': open_shifts, 'count': len(open_shifts)})
+
+
 def _clean_display_name(name: str, branch_name: str = '') -> str:
     """Strip store name suffix from employee names for clean display."""
     store_words = ['איינשטיין', 'אינשטיין', 'einstein']
