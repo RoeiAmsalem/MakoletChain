@@ -949,30 +949,29 @@ def fixed_expenses():
 
 # ── Shared helpers ────────────────────────────────────────────
 
-def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
-    """Single source of truth for salary calculation.
-    Used by both /employees page and /api/summary.
+def _employee_premium_costs(branch_id: int, month: str, db) -> dict:
+    """The ONE per-employee hourly-salary pass, shared by the branch KPI
+    (_calculate_salary_cost) and the /api/employees per-employee list — so
+    Σ(per-employee salary) == the branch total by construction; they can never
+    diverge.
 
-    Current month: ONLY source='aviv_api' rows count.
-    Past months: all sources count.
-    Hourly:  SUM(employee_hours.total_hours × employees.hourly_rate).
-    Global:  + SUM(employees.global_salary) for active salary_type='global'
-             employees — a FLAT monthly amount, hours ignored, no proration.
+    Returns {employee_name: {'hours', 'salary', 'source'}} for ACTIVE,
+    non-global employees that have an employee_hours row this month (source
+    aviv_api/aviv_report), keyed by the exact employee_hours.employee_name.
 
-    Returns {'amount', 'source', 'hours', 'label'}
+    Salary = premium_pay_for_month (overtime + Shabbat/chag from the classified
+    employee_shifts timeline) when shift rows exist; else flat hours×rate when a
+    rate is set (historical aviv_api months pre-migration 023 / no shift data);
+    else the stored total_salary when rate is 0. Globals are excluded — their
+    flat monthly amount is handled by the caller.
+
+    UPDATED 2026-04-18: API-only rows (CSV path retired).
+    UPDATED 2026-05-09: Include 'aviv_report' source (employer-report agent).
+    UPDATED 2026-05-31: Exclude salary_type='global' — flat amount, never hours×rate.
     """
-    db = get_db()
-
-    # UPDATED 2026-04-18: Always use API-only rows (CSV path retired).
-    # UPDATED 2026-05-09: Include 'aviv_report' source (new employer-report agent).
-    # UPDATED 2026-05-31: Exclude salary_type='global' employees — their cost is
-    #   a flat amount added below, never hours×rate. Excluding them here also
-    #   prevents Aviv hours for a global employee from double-counting via the
-    #   rate=0 → total_salary fallback.
-    # Only include hours for ACTIVE employees (inactive employees excluded from salary).
     rows = db.execute('''
         SELECT eh.employee_name, eh.total_hours, eh.total_salary, eh.source,
-               e.hourly_rate, e.id as emp_id
+               e.hourly_rate
         FROM employee_hours eh
         JOIN employees e ON (
             e.branch_id = eh.branch_id AND e.name = eh.employee_name AND e.active = 1
@@ -980,28 +979,8 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         WHERE eh.branch_id = ? AND eh.month = ?
           AND eh.source IN ('aviv_api', 'aviv_report')
           AND COALESCE(e.salary_type, 'hourly') != 'global'
-    ''', (branch_id, current_month)).fetchall()
+    ''', (branch_id, month)).fetchall()
 
-    # Global employees: flat monthly amount, regardless of hours.
-    grow = db.execute('''
-        SELECT COALESCE(SUM(global_salary), 0) AS g, COUNT(*) AS c
-        FROM employees
-        WHERE branch_id = ? AND active = 1 AND salary_type = 'global'
-    ''', (branch_id,)).fetchone()
-    global_total = grow['g'] or 0
-    global_count = grow['c'] or 0
-
-    if not rows and global_count == 0:
-        return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
-
-    # Premium pay (overtime + Shabbat/chag) is computed PER EMPLOYEE from their
-    # classified per-shift timeline (employee_shifts), via the single bracket
-    # function in agents.shift_classify. Hourly pay = Σ rate-bucket hours × rate
-    # instead of flat total_hours × rate. The displayed `hours` stays the report
-    # subtotal (employee_hours.total_hours) so the KPI hours are unchanged; only
-    # the salary AMOUNT reflects premiums. Fallback to flat hours×rate when an
-    # employee has no shift rows (e.g. historical aviv_api months pre-migration
-    # 023) so nothing regresses.
     from agents.shift_classify import load_shabbat_windows, premium_pay_for_month
     shabbat_windows = load_shabbat_windows(db)
     shifts_by_emp = {}
@@ -1009,7 +988,7 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         shift_rows = db.execute(
             "SELECT employee_name, shift_date, start_ts, end_ts, hours, is_open "
             "FROM employee_shifts WHERE branch_id = ? AND month = ?",
-            (branch_id, current_month)).fetchall()
+            (branch_id, month)).fetchall()
         for sr in shift_rows:
             shifts_by_emp.setdefault(sr['employee_name'], []).append(dict(sr))
     except sqlite3.OperationalError:
@@ -1017,9 +996,7 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
         # fall back to flat hours×rate for everyone.
         shifts_by_emp = {}
 
-    total_salary = 0
-    total_hours = 0
-    sources = set()
+    out = {}
     for r in rows:
         hours = r['total_hours'] or 0
         rate = r['hourly_rate'] or 0
@@ -1030,9 +1007,46 @@ def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
             salary = round(hours * rate, 2)  # no shift data → flat fallback
         else:
             salary = r['total_salary'] or 0
-        total_salary += salary
-        total_hours += hours
-        sources.add(r['source'] or 'unknown')
+        out[r['employee_name']] = {
+            'hours': hours, 'salary': salary, 'source': r['source'] or 'unknown',
+        }
+    return out
+
+
+def _calculate_salary_cost(branch_id: int, current_month: str) -> dict:
+    """Single source of truth for salary calculation.
+    Used by both /employees page and /api/summary.
+
+    Current month: ONLY source='aviv_api' rows count.
+    Past months: all sources count.
+    Hourly:  Σ per-employee premium salary via _employee_premium_costs (overtime
+             + Shabbat/chag), the SAME pass /api/employees uses for its list.
+    Global:  + SUM(employees.global_salary) for active salary_type='global'
+             employees — a FLAT monthly amount, hours ignored, no proration.
+
+    Returns {'amount', 'source', 'hours', 'label'}
+    """
+    db = get_db()
+
+    # Per-employee hourly costs from the ONE shared pass — Σ here == the
+    # per-employee list on /api/employees by construction.
+    per_emp = _employee_premium_costs(branch_id, current_month, db)
+
+    # Global employees: flat monthly amount, regardless of hours.
+    grow = db.execute('''
+        SELECT COALESCE(SUM(global_salary), 0) AS g, COUNT(*) AS c
+        FROM employees
+        WHERE branch_id = ? AND active = 1 AND salary_type = 'global'
+    ''', (branch_id,)).fetchone()
+    global_total = grow['g'] or 0
+    global_count = grow['c'] or 0
+
+    if not per_emp and global_count == 0:
+        return {'amount': 0, 'source': 'none', 'hours': 0, 'label': 'אין נתונים'}
+
+    total_salary = sum(v['salary'] for v in per_emp.values())
+    total_hours = sum(v['hours'] for v in per_emp.values())
+    sources = {v['source'] for v in per_emp.values()}
 
     total_salary += global_total
 
@@ -2113,6 +2127,11 @@ def api_employees_list():
     hours_map = {r['employee_name']: dict(r) for r in hours_rows}
     csv_processed = len(hours_map) > 0
 
+    # Per-employee premium salary from the ONE shared pass — same function the
+    # branch KPI sums, so each row's salary includes OT/Shabbat premium and
+    # Σ(list) == the branch KPI total. Keyed by employee_hours.employee_name.
+    per_emp_costs = _employee_premium_costs(branch_id, month, db)
+
     # Branch KPI data
     branch_row = db.execute(
         "SELECT name, hours_this_month, avg_hourly_rate, hours_updated_at FROM branches WHERE id = ?",
@@ -2136,7 +2155,10 @@ def api_employees_list():
             continue
         if matched:
             emp['hours'] = matched['total_hours']
-            emp['salary'] = matched['total_salary']
+            # Premium salary from the shared pass (OT/Shabbat applied); fall
+            # back to the flat stored value only if this row isn't in the pass.
+            pe = per_emp_costs.get(matched['employee_name'])
+            emp['salary'] = pe['salary'] if pe else matched['total_salary']
             emp['hours_source'] = matched.get('source', 'unknown')
         else:
             emp['hours'] = 0
