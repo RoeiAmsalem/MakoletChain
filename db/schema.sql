@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS branches (
   bilboy_pass TEXT,
   gmail_label TEXT,
   franchise_supplier TEXT,
+  visible_from DATE,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

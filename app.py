@@ -453,34 +453,38 @@ def _utc_str_to_il_iso(utc_str):
         '%Y-%m-%dT%H:%M:%S')
 
 
-def _parse_month():
-    """Return the active month, clamped to DATA_FLOOR_MONTH.
+def _parse_month(floor=DATA_FLOOR_MONTH):
+    """Return the active month, clamped to `floor` (defaults to DATA_FLOOR_MONTH;
+    callers pass a per-branch effective floor so a floored branch can never
+    select a month below its own visibility floor).
 
     A URL `?month=` below the floor (or a stale session value) is silently
     bumped up to the floor — never below it.
     """
+    floor = floor or DATA_FLOOR_MONTH
     month = request.args.get('month')
     if month:
-        if month < DATA_FLOOR_MONTH:
-            month = DATA_FLOOR_MONTH
+        if month < floor:
+            month = floor
         session['selected_month'] = month
     else:
         month = session.get('selected_month')
     if not month:
         month = _now_il().strftime('%Y-%m')
-    if month < DATA_FLOOR_MONTH:
-        month = DATA_FLOOR_MONTH
+    if month < floor:
+        month = floor
     return month
 
 
-def _month_nav(selected):
+def _month_nav(selected, floor=DATA_FLOOR_MONTH):
+    floor = floor or DATA_FLOOR_MONTH
     year, mon = map(int, selected.split('-'))
     pm = mon - 1 if mon > 1 else 12
     py = year if mon > 1 else year - 1
     prev_candidate = f'{py:04d}-{pm:02d}'
-    # Hide the back arrow at the data floor — there's nothing useful to show
-    # earlier than DATA_FLOOR_MONTH.
-    prev_month = prev_candidate if prev_candidate >= DATA_FLOOR_MONTH else None
+    # Hide the back arrow at the floor — there's nothing useful (and, for a
+    # floored branch, nothing permitted) earlier than it.
+    prev_month = prev_candidate if prev_candidate >= floor else None
     current = _now_il().strftime('%Y-%m')
     nm = mon + 1 if mon < 12 else 1
     ny = year if mon < 12 else year + 1
@@ -565,6 +569,47 @@ def _demo_exclusion_sql(column='id'):
     return f' AND {column} NOT IN ({ids})'
 
 
+# ── Per-branch visibility FLOOR ──────────────────────────────
+# A branch's `visible_from` (migration 021) is a rolling-forward floor: when
+# set, that branch never sees its own operational data from before that date.
+# NULL = no floor (branches 126/127 and the demo stores). Because the floor is
+# always the 1st of a month, it is month-granular in practice — a month is
+# visible iff it is >= the floor month. Applied at the single-branch route
+# layer only; admin cross-branch aggregates (network/ops) are deliberately
+# left unfloored, so the shared salary/fixed/electricity helpers stay
+# floor-agnostic.
+
+def _branch_visible_from(branch_id, db=None):
+    """The branch's hard visibility floor as 'YYYY-MM-DD', or None for no floor."""
+    if not branch_id:
+        return None
+    db = db or get_db()
+    row = db.execute(
+        'SELECT visible_from FROM branches WHERE id = ?', (branch_id,)
+    ).fetchone()
+    return row['visible_from'] if row and row['visible_from'] else None
+
+
+def _branch_floor_month(branch_id, db=None):
+    """The branch floor as 'YYYY-MM' (or None for no floor)."""
+    vf = _branch_visible_from(branch_id, db)
+    return vf[:7] if vf else None
+
+
+def _effective_floor_month(branch_id, db=None):
+    """Strictest of the global DATA_FLOOR_MONTH and the per-branch floor.
+    Used to clamp the month picker / navigation for a given branch."""
+    bf = _branch_floor_month(branch_id, db)
+    return max(DATA_FLOOR_MONTH, bf) if bf else DATA_FLOOR_MONTH
+
+
+def _month_below_floor(branch_id, month, db=None):
+    """True iff this branch must NOT see `month` (strictly before its floor).
+    Branches with no floor — and any month at/after the floor — return False."""
+    bf = _branch_floor_month(branch_id, db)
+    return bool(bf and month and month < bf)
+
+
 def _list_visible_branches(user_id, role):
     """Return [{id, name}, ...] of active branches the user can see.
 
@@ -592,14 +637,35 @@ def _list_visible_branches(user_id, role):
     return [dict(r) for r in rows]
 
 
+def _reclamp_ctx_to_branch(ctx, branch_id, db=None):
+    """Re-apply the month picker clamp/nav for a *specific* branch.
+
+    `_page_context` clamps to the page branch's floor, but the v2 pages can
+    render a different picked store in single-store mode. If that store has a
+    stricter floor than the currently-selected month, bump the month up and
+    rebuild the nav so the picker can't sit on a below-floor month."""
+    if not branch_id:
+        return ctx
+    floor = _effective_floor_month(branch_id, db)
+    ctx['data_floor_month'] = floor
+    if ctx['selected_month'] < floor:
+        ctx['selected_month'] = floor
+        (ctx['prev_month'], ctx['next_month'], ctx['month_display'],
+         ctx['show_today_btn'], ctx['current_month']) = _month_nav(floor, floor)
+    return ctx
+
+
 def _page_context(active_page):
     requested = request.args.get('month')
-    selected = _parse_month()
+    # Resolve the branch first so the month clamp respects this branch's own
+    # visibility floor (max of the global floor and branches.visible_from).
+    branch_id = _get_branch_id()
+    floor = _effective_floor_month(branch_id)
+    selected = _parse_month(floor)
     # True iff the URL explicitly asked for a pre-floor month — used by the
     # template to render the "first month with data" notice.
-    floor_clamped = bool(requested and requested < DATA_FLOOR_MONTH)
-    branch_id = _get_branch_id()
-    prev_month, next_month, month_display, show_today, current = _month_nav(selected)
+    floor_clamped = bool(requested and requested < floor)
+    prev_month, next_month, month_display, show_today, current = _month_nav(selected, floor)
     role = session.get('user_role')
     user_branches = session.get('user_branches', [])
     # Same "multi-branch account" definition the navbar branch switcher uses
@@ -608,7 +674,7 @@ def _page_context(active_page):
     return {
         'active_page': active_page,
         'selected_month': selected,
-        'data_floor_month': DATA_FLOOR_MONTH,
+        'data_floor_month': floor,
         'floor_clamped': floor_clamped,
         'branch_id': branch_id,
         'branch_name': _branch_name(branch_id),
@@ -727,6 +793,7 @@ def network_revenue_v2_page():
         # Build the exact ctx /sales builds so the reused _sales_* partials
         # render identically for the picked store.
         db = get_db()
+        _reclamp_ctx_to_branch(ctx, store, db)
         rows = db.execute(
             "SELECT date, amount, transactions FROM daily_sales "
             "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date ASC",
@@ -782,6 +849,7 @@ def network_goods_v2_page():
         view_mode = session.get('goods_view_mode', 'list')
 
         db = get_db()
+        _reclamp_ctx_to_branch(ctx, store, db)
         ctx.update(_goods_doc_context(store, ctx['selected_month'], db))
         ctx['view_mode'] = view_mode
         ctx['branch_id'] = store
@@ -1238,6 +1306,19 @@ def api_summary():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
 
     db = get_db()
+    # Visibility floor: a below-floor month shows nothing for this branch.
+    if _month_below_floor(branch_id, month, db):
+        return jsonify({
+            'income': 0, 'goods': 0, 'fixed': 0, 'fixed_only': 0,
+            'electricity': {'amount': 0, 'source': 'none', 'estimate_basis': None},
+            'salary': 0, 'salary_source': 'none', 'salary_label': '',
+            'profit': 0, 'live': None, 'has_z': False, 'live_amount_today': 0,
+            'branch_id': branch_id, 'month': month,
+            'cancellation_total': 0, 'discount_total': 0,
+            'running_total': 0, 'running_count': 0,
+            'latest_electricity': None, 'iec_last_sync_at': None,
+            'electricity_source': None,
+        })
     # Income from daily_sales
     income = db.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM daily_sales "
@@ -1348,12 +1429,22 @@ def api_summary():
             'last_date': stale_row['date'],
         }
 
-    # Latest electricity invoice for the strip
-    latest_elec = db.execute(
-        "SELECT period_label, amount, due_date FROM electricity_invoices "
-        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
-        (branch_id,)
-    ).fetchone()
+    # Latest electricity invoice for the strip. Respect the branch floor so a
+    # pre-floor bill never surfaces as the "latest" on a floored branch.
+    vf = _branch_visible_from(branch_id, db)
+    if vf:
+        latest_elec = db.execute(
+            "SELECT period_label, amount, due_date FROM electricity_invoices "
+            "WHERE branch_id = ? AND COALESCE(month, strftime('%Y-%m', due_date)) >= ? "
+            "ORDER BY due_date DESC LIMIT 1",
+            (branch_id, vf[:7])
+        ).fetchone()
+    else:
+        latest_elec = db.execute(
+            "SELECT period_label, amount, due_date FROM electricity_invoices "
+            "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+            (branch_id,)
+        ).fetchone()
     # IEC last sync time + electricity_source
     branch_elec = db.execute(
         "SELECT iec_last_sync_at, electricity_source FROM branches WHERE id = ?", (branch_id,)
@@ -1427,13 +1518,24 @@ def api_department_sales():
     branch_id = get_branch_id()
     db = get_db()
 
+    # Visibility floor: never surface a dept day before the branch floor.
+    vf = _branch_visible_from(branch_id, db)
     target_date = request.args.get('date')
-    if not target_date:
-        # Latest date this branch has any dept data for.
-        row = db.execute(
-            'SELECT MAX(date) AS d FROM z_department_sales WHERE branch_id=?',
-            (branch_id,)
-        ).fetchone()
+    if target_date and vf and target_date < vf:
+        target_date = None
+    elif not target_date:
+        # Latest date this branch has any dept data for (>= floor).
+        if vf:
+            row = db.execute(
+                'SELECT MAX(date) AS d FROM z_department_sales '
+                'WHERE branch_id=? AND date >= ?',
+                (branch_id, vf)
+            ).fetchone()
+        else:
+            row = db.execute(
+                'SELECT MAX(date) AS d FROM z_department_sales WHERE branch_id=?',
+                (branch_id,)
+            ).fetchone()
         target_date = row['d'] if row and row['d'] else None
 
     departments: list[dict] = []
@@ -1510,6 +1612,15 @@ def api_department_sales_monthly():
     branch_id = get_branch_id()
     month = request.args.get('month') or session.get('selected_month')
     db = get_db()
+
+    # Visibility floor: a below-floor month has no qualifying days for this branch.
+    if _month_below_floor(branch_id, month, db):
+        return jsonify({
+            'branch_id': branch_id, 'month': month, 'days_counted': 0,
+            'tiles': [{'code': t['code'], 'label': t['label'], 'icon': t['icon'],
+                       'accent': t['accent'], 'avg_pct': None, 'total': 0}
+                      for t in SALES_DEPT_TILES],
+        })
 
     # Qualifying days: real Z (amount > 0, non-provisional) that also has a
     # parsed 902 (at least one z_department_sales row that day).
@@ -2169,6 +2280,12 @@ def api_history():
         return jsonify([])
 
     start_y, start_m = start
+    # Visibility floor: never start the history before the branch floor month.
+    fm = _branch_floor_month(branch_id, db)
+    if fm:
+        fy, fmo = map(int, fm.split('-'))
+        if (start_y, start_m) < (fy, fmo):
+            start_y, start_m = fy, fmo
     end_y, end_m = map(int, month.split('-'))
     months = []
     y, m = start_y, start_m
@@ -2383,7 +2500,10 @@ def api_sales_by_hour():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
 
-    rows = db.execute(
+    # Visibility floor: a below-floor month yields the empty (all-zero) payload.
+    floored = _month_below_floor(branch_id, month, db)
+
+    rows = [] if floored else db.execute(
         '''SELECT hour, SUM(amount) as total, SUM(transactions) as count
            FROM hourly_sales
            WHERE branch_id = ? AND strftime('%Y-%m', date) = ?
@@ -2440,7 +2560,7 @@ def api_sales_by_hour():
         peak = quiet = None
         hourly_avg = 0
 
-    days_with_data = db.execute(
+    days_with_data = 0 if floored else db.execute(
         '''SELECT COUNT(DISTINCT date) FROM hourly_sales
            WHERE branch_id = ? AND strftime('%Y-%m', date) = ?''',
         (branch_id, month)
@@ -2536,6 +2656,14 @@ def api_employees_list():
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
 
+    # Visibility floor: a below-floor month shows no employee/hours data.
+    if _month_below_floor(branch_id, month, db):
+        return jsonify({
+            'employees': [], 'hours_this_month': 0, 'avg_hourly_rate': 0,
+            'hours_updated_at': '', 'salary_cost': 0, 'salary_hours': 0,
+            'salary_source': 'none', 'csv_processed': False, 'history': [],
+        })
+
     # All active employees from employees table
     emp_rows = db.execute(
         "SELECT id, name, role, hourly_rate, "
@@ -2607,6 +2735,12 @@ def api_employees_list():
     history = []
     if earliest and earliest['m']:
         start_y, start_m = map(int, earliest['m'].split('-'))
+        # Visibility floor: never start the history table before the floor month.
+        fm = _branch_floor_month(branch_id, db)
+        if fm:
+            fy, fmo = map(int, fm.split('-'))
+            if (start_y, start_m) < (fy, fmo):
+                start_y, start_m = fy, fmo
         end_y, end_m = map(int, month.split('-'))
         y, m2 = start_y, start_m
         while (y, m2) <= (end_y, end_m):
@@ -2877,19 +3011,23 @@ def api_employee_match_pending():
         )
     ''')
 
-    rows = db.execute('''
-        SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
-               p.hours, p.salary, p.month, p.aviv_employee_id,
-               COALESCE(p.source, 'csv') as source,
-               COALESCE(p.is_new_employee, 0) as is_new_employee,
-               COALESCE(p.is_csv_only, 0) as is_csv_only,
-               e.name as suggested_name, e.hourly_rate as suggested_rate
-        FROM employee_match_pending p
-        LEFT JOIN employees e ON e.id = p.suggested_employee_id
-        WHERE p.branch_id = ? AND p.month = ? AND p.resolved = 0
-          AND COALESCE(p.source, 'csv') IN ('csv', 'aviv_api', 'aviv_report')
-        ORDER BY p.hours DESC
-    ''', (branch_id, month)).fetchall()
+    # Visibility floor: don't surface pre-floor unmatched hours for this branch.
+    if _month_below_floor(branch_id, month, db):
+        rows = []
+    else:
+        rows = db.execute('''
+            SELECT p.id, p.csv_name, p.suggested_employee_id, p.confidence,
+                   p.hours, p.salary, p.month, p.aviv_employee_id,
+                   COALESCE(p.source, 'csv') as source,
+                   COALESCE(p.is_new_employee, 0) as is_new_employee,
+                   COALESCE(p.is_csv_only, 0) as is_csv_only,
+                   e.name as suggested_name, e.hourly_rate as suggested_rate
+            FROM employee_match_pending p
+            LEFT JOIN employees e ON e.id = p.suggested_employee_id
+            WHERE p.branch_id = ? AND p.month = ? AND p.resolved = 0
+              AND COALESCE(p.source, 'csv') IN ('csv', 'aviv_api', 'aviv_report')
+            ORDER BY p.hours DESC
+        ''', (branch_id, month)).fetchall()
 
     # Also get all active employees for reassignment dropdown
     employees = [dict(r) for r in db.execute(
@@ -3151,6 +3289,10 @@ def api_labor_cost_ratio():
     ''', (branch_id, branch_id)).fetchall()
 
     months = sorted([r['m'] for r in months_rows if r['m']])
+    # Visibility floor: drop any month before the branch floor.
+    fm = _branch_floor_month(branch_id, db)
+    if fm:
+        months = [m for m in months if m >= fm]
     result = []
     for m_str in months:
         sal = _calculate_salary_cost(branch_id, m_str)
@@ -3400,6 +3542,9 @@ def api_fixed_expenses_list():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
+    # Visibility floor: a below-floor month has no expenses for this branch.
+    if _month_below_floor(branch_id, month, db):
+        return jsonify([])
     _ensure_monthly_expenses(branch_id, month, db)
     income = db.execute(
         "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
@@ -3514,6 +3659,15 @@ def api_fixed_expenses_summary():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
+    # Visibility floor: a below-floor month has no expenses for this branch.
+    if _month_below_floor(branch_id, month, db):
+        y, m = map(int, month.split('-'))
+        return jsonify({
+            'fixed_only': 0,
+            'electricity': {'amount': 0, 'source': 'none', 'estimate_basis': None},
+            'total': 0,
+            'month_label': f'{HEBREW_MONTHS[m]} {y}',
+        })
     _ensure_monthly_expenses(branch_id, month, db)
 
     # Income calc — same logic as api_fixed_expenses_list
@@ -3549,11 +3703,21 @@ def api_electricity_latest():
     """Return the most recent electricity invoice for the branch, or null."""
     branch_id = get_branch_id()
     db = get_db()
-    row = db.execute(
-        "SELECT period_label, amount, due_date FROM electricity_invoices "
-        "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
-        (branch_id,)
-    ).fetchone()
+    # Visibility floor: never surface a pre-floor invoice as "latest".
+    vf = _branch_visible_from(branch_id, db)
+    if vf:
+        row = db.execute(
+            "SELECT period_label, amount, due_date FROM electricity_invoices "
+            "WHERE branch_id = ? AND COALESCE(month, strftime('%Y-%m', due_date)) >= ? "
+            "ORDER BY due_date DESC LIMIT 1",
+            (branch_id, vf[:7])
+        ).fetchone()
+    else:
+        row = db.execute(
+            "SELECT period_label, amount, due_date FROM electricity_invoices "
+            "WHERE branch_id = ? ORDER BY due_date DESC LIMIT 1",
+            (branch_id,)
+        ).fetchone()
     if not row:
         return jsonify(None)
     return jsonify({
@@ -3573,6 +3737,12 @@ def api_sales():
     branch_id = get_branch_id()
     month = request.args.get('month', _now_il().strftime('%Y-%m'))
     db = get_db()
+    # Visibility floor: a below-floor month shows no sales for this branch.
+    if _month_below_floor(branch_id, month, db):
+        return jsonify({
+            'sales': [], 'total': 0, 'avg': 0, 'highest': 0, 'lowest': 0,
+            'days': 0, 'avg_daily_txn': 0, 'avg_txn_value': 0,
+        })
     rows = db.execute(
         "SELECT date, amount, transactions, source, fetched_at FROM daily_sales "
         "WHERE branch_id = ? AND strftime('%Y-%m', date) = ? ORDER BY date DESC",
@@ -4685,11 +4855,22 @@ def api_electricity_history():
     """Return all electricity entries for the branch, for history display."""
     branch_id = get_branch_id()
     db = get_db()
-    rows = db.execute(
-        "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
-        "FROM electricity_invoices WHERE branch_id = ? ORDER BY COALESCE(month, due_date) DESC",
-        (branch_id,)
-    ).fetchall()
+    # Visibility floor: hide invoices whose period falls before the branch floor.
+    vf = _branch_visible_from(branch_id, db)
+    if vf:
+        rows = db.execute(
+            "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
+            "FROM electricity_invoices WHERE branch_id = ? "
+            "AND COALESCE(month, strftime('%Y-%m', due_date)) >= ? "
+            "ORDER BY COALESCE(month, due_date) DESC",
+            (branch_id, vf[:7])
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT id, invoice_number, period_label, amount, due_date, is_paid, source, month, created_at "
+            "FROM electricity_invoices WHERE branch_id = ? ORDER BY COALESCE(month, due_date) DESC",
+            (branch_id,)
+        ).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
