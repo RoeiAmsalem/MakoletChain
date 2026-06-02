@@ -34,6 +34,12 @@
         display: flex; align-items: flex-start; justify-content: center;
         padding: 4vh 1rem; z-index: 1000; overflow-y: auto;
     }
+    /* The `hidden` attribute is the ONLY thing that closes this modal. A bare
+       `.doc-modal-overlay { display:flex }` overrides the UA `[hidden]{display:none}`
+       rule, leaving a full-viewport overlay that silently swallows every row
+       click (-> closeDocDetail -> stuck spinner). This attribute selector
+       outranks the class, so `hidden` actually hides. */
+    .doc-modal-overlay[hidden] { display: none; }
     .doc-modal {
         position: relative; width: 100%; max-width: 640px;
         background: #0d1526; border: 1px solid #334155; border-radius: 14px;
