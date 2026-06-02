@@ -2281,7 +2281,12 @@ def api_employee_shifts():
     total_hours = (total_row['total_hours'] or 0) if total_row else 0
 
     shifts = [dict(r) for r in shift_rows]
-    open_count = sum(1 for s in shifts if s['is_open'])
+    # Only count a no-clock-out shift as "open" once its calendar day has passed
+    # (Israel local). An in-progress shift TODAY is silent — Aviv reports it as
+    # אין יציאה while the employee is still clocked in, which is not a forgotten
+    # exit. Keeps the per-employee card consistent with /api/open-shifts.
+    today_il = _now_il().strftime('%Y-%m-%d')
+    open_count = sum(1 for s in shifts if s['is_open'] and s['shift_date'] and s['shift_date'] < today_il)
     # Monthly classification summary (display only — salary is unaffected).
     # regular + overtime = classified shift hours; shabbat is an orthogonal
     # overlay (can coincide with either), shown as "of which on Shabbat/chag".
@@ -2319,12 +2324,18 @@ def api_open_shifts():
     branch_row = db.execute("SELECT name FROM branches WHERE id = ?", (branch_id,)).fetchone()
     branch_name = (branch_row['name'] or '') if branch_row else ''
 
+    # Calendar-day guard: only flag a no-clock-out shift once its day has PASSED
+    # (Israel local date). Aviv reports a shift as אין יציאה the same day someone
+    # is still clocked in, so an in-progress shift today must NOT light the red
+    # banner — only a genuinely forgotten clock-out (day already ended) should.
+    today_il = _now_il().strftime('%Y-%m-%d')
     rows = db.execute(
         "SELECT employee_name, shift_date, start_ts, day_of_week "
         "FROM employee_shifts "
         "WHERE branch_id = ? AND month = ? AND is_open = 1 "
+        "AND shift_date IS NOT NULL AND shift_date < ? "
         "ORDER BY shift_date, employee_name",
-        (branch_id, month)
+        (branch_id, month, today_il)
     ).fetchall()
 
     open_shifts = [{
