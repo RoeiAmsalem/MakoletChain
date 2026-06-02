@@ -1135,12 +1135,19 @@ def api_goods_doc_detail(row_id):
         return jsonify({'error': 'no_detail',
                         'message': 'מסמך זה סונכרן לפני הוספת פירוט פריטים'}), 404
 
+    import requests as _requests
     try:
         from agents.bilboy import fetch_doc_detail
         raw = fetch_doc_detail(branch_id, bilboy_doc_id)
     except PermissionError:
         return jsonify({'error': 'token_expired',
                         'message': 'התחברות ל-BilBoy פגה — יש לרענן את הטוקן'}), 502
+    except (_requests.exceptions.Timeout, _requests.exceptions.ConnectionError) as e:
+        # Hung/slow BilBoy connection — surface a clean 504 fast instead of
+        # holding the request open. The modal shows an error + retry.
+        app.logger.warning("goods doc detail timeout (row %s): %s", row_id, e)
+        return jsonify({'error': 'timeout',
+                        'message': 'הטעינה ארכה זמן רב מדי, נסה שוב'}), 504
     except Exception as e:
         app.logger.warning("goods doc detail fetch failed (row %s): %s", row_id, e)
         return jsonify({'error': 'fetch_failed',

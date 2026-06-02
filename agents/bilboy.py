@@ -89,9 +89,9 @@ def _setup_logger(branch_id: int) -> logging.Logger:
     return logger
 
 
-def _api_get(session: requests.Session, path: str, params=None):
+def _api_get(session: requests.Session, path: str, params=None, timeout=30):
     url = f"{API_BASE}{path}"
-    resp = session.get(url, params=params, timeout=30)
+    resp = session.get(url, params=params, timeout=timeout)
     if resp.status_code == 401:
         raise PermissionError("BilBoy token expired")
     resp.raise_for_status()
@@ -124,7 +124,11 @@ def fetch_doc_detail(branch_id: int, bilboy_doc_id: str) -> dict:
     """
     branch = _get_branch_config(branch_id)
     session = _branch_session(branch, branch_id)
-    return _api_get(session, '/customer/doc', params={'docId': bilboy_doc_id})
+    # Shorter timeout than the nightly sync — this serves a live user click, so
+    # a hung BilBoy connection must surface as an error fast, not hold the
+    # request open. The frontend's abort timeout sits just above this (12s).
+    return _api_get(session, '/customer/doc', params={'docId': bilboy_doc_id},
+                    timeout=10)
 
 
 def run_bilboy(branch_id: int) -> dict:

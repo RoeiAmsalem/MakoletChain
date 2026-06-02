@@ -24,22 +24,63 @@ function esc(s) {
 function openDocDetail(rowId) {
     const overlay = document.getElementById('doc-detail-overlay');
     const body = document.getElementById('doc-modal-body');
-    body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
     overlay.hidden = false;
     document.body.style.overflow = 'hidden';
+    fetchDocDetail(rowId, body);
+}
 
-    fetch('/api/goods/doc/' + encodeURIComponent(rowId))
-        .then(r => r.json().then(j => ({ ok: r.ok, j })))
+// Client-side timeout for the on-demand BilBoy detail fetch. Slightly longer
+// than the backend's 10s outbound timeout so the server's clean error usually
+// wins the race; this is the safety net for a truly hung connection.
+const DOC_FETCH_TIMEOUT_MS = 12000;
+let _docFetchController = null;
+
+function _clearDocFetch() {
+    if (_docFetchController) {
+        _docFetchController.abort();
+        _docFetchController = null;
+    }
+}
+
+function docErrorHtml(rowId, msg) {
+    return '<div class="doc-modal-error">' +
+        '<div class="dm-err-msg">' + esc(msg) + '</div>' +
+        '<button class="dm-retry" onclick="fetchDocDetail(' + Number(rowId) +
+        ', document.getElementById(\'doc-modal-body\'))">נסה שוב</button>' +
+        '</div>';
+}
+
+function fetchDocDetail(rowId, body) {
+    // Cancel any in-flight attempt (e.g. rapid retry) so its late resolution
+    // can't overwrite this one's result.
+    _clearDocFetch();
+    body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
+
+    const controller = new AbortController();
+    _docFetchController = controller;
+    const timer = setTimeout(() => controller.abort(), DOC_FETCH_TIMEOUT_MS);
+
+    fetch('/api/goods/doc/' + encodeURIComponent(rowId), { signal: controller.signal })
+        .then(r => r.json().catch(() => ({})).then(j => ({ ok: r.ok, j })))
         .then(({ ok, j }) => {
+            if (controller !== _docFetchController) return; // superseded
             if (!ok) {
-                body.innerHTML = '<div class="doc-modal-error">' +
-                    esc(j.message || 'לא ניתן לטעון את פירוט המסמך') + '</div>';
+                body.innerHTML = docErrorHtml(rowId,
+                    (j && j.message) || 'לא ניתן לטעון את פירוט המסמך, נסה שוב');
                 return;
             }
             body.innerHTML = renderDocDetail(j);
         })
-        .catch(() => {
-            body.innerHTML = '<div class="doc-modal-error">שגיאת רשת — נסה שוב</div>';
+        .catch(err => {
+            if (controller !== _docFetchController) return; // superseded by close/retry
+            const msg = (err && err.name === 'AbortError')
+                ? 'הטעינה ארכה זמן רב מדי, נסה שוב'
+                : 'לא ניתן לטעון את פירוט המסמך, נסה שוב';
+            body.innerHTML = docErrorHtml(rowId, msg);
+        })
+        .finally(() => {
+            clearTimeout(timer);
+            if (controller === _docFetchController) _docFetchController = null;
         });
 }
 
@@ -89,9 +130,13 @@ function renderDocDetail(d) {
 }
 
 function closeDocDetail() {
+    _clearDocFetch();
     const overlay = document.getElementById('doc-detail-overlay');
     overlay.hidden = true;
     document.body.style.overflow = '';
+    // Reset so a stale spinner/error never flashes on the next open.
+    const body = document.getElementById('doc-modal-body');
+    if (body) body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
 }
 
 document.addEventListener('click', e => {
