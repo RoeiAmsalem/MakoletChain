@@ -614,27 +614,6 @@ async function renderLaborChart() {
                 }
             },
             plugins: [{
-                id: 'benchmarkLine',
-                beforeDraw(chart) {
-                    const yScale = chart.scales.y;
-                    const yPos = yScale.getPixelForValue(10);
-                    if (yPos < yScale.top || yPos > yScale.bottom) return;
-                    const { ctx: c } = chart;
-                    c.save();
-                    c.setLineDash([6, 4]);
-                    c.strokeStyle = 'rgba(239,68,68,0.5)';
-                    c.lineWidth = 1.5;
-                    c.beginPath();
-                    c.moveTo(chart.chartArea.left, yPos);
-                    c.lineTo(chart.chartArea.right, yPos);
-                    c.stroke();
-                    c.fillStyle = 'rgba(239,68,68,0.7)';
-                    c.font = '10px sans-serif';
-                    c.textAlign = 'left';
-                    c.fillText('שיעור מומלץ 10%', chart.chartArea.left + 4, yPos - 6);
-                    c.restore();
-                }
-            }, {
                 id: 'valueLabels',
                 afterDatasetsDraw(chart) {
                     const { ctx: c } = chart;
