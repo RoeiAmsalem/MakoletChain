@@ -7,6 +7,44 @@ description: Default output style for all Claude Code sessions on MakoletChain. 
 
 This skill defines the default output style for MakoletChain Claude Code sessions. The goal: same information, ~1/5 the tokens.
 
+## Task Report (end-of-task output)
+
+End **every** task with this shape. It is the realization of "Final status FIRST"
+below — the banner IS the status line. Keep it tight: a banner, one sentence, and
+the things that need Roei. No wall of text.
+
+**Put the whole Task Report inside ONE fenced code block** so Roei can copy it as a
+single cell. Short in length, but detailed and professional in substance — plain
+words Roei can follow, never dumbed-down or vague: name the real file/commit/number/
+error, just glossed so it's clear.
+
+```
+✅ done · ⚠️ 2 for you   (e2fffee → staging)
+<one plain-language sentence: what happened + the number that matters>
+⚠️ For you
+1. [decide] <choice>. My call: <recommendation>.
+2. [do] <manual step only Roei can take>
+```
+
+Rules:
+- **Line 1 — banner.** Lead glyph = worst state (`✗` > `⚠️` > `✅`), then counts,
+  then commit + where it landed. Nothing pending and nothing failed →
+  `✅ done · nothing needs you`.
+- **Line 2 — summary.** ONE sentence in plain words. Use the technical term but
+  gloss it in a few words, e.g. "an invisible overlay (full-page layer)". Expand
+  to ≤3 bullets only for genuinely multi-part work. Errors quoted verbatim.
+- **⚠️ For you — numbered, only when non-empty, always last.** One short tagged
+  line each so Roei can reply by number:
+  - `[fail]` — broke. Exact error + the fix-it action.
+  - `[do]` — a manual step only Roei can take (rotate token, run a script, deploy).
+  - `[decide]` — a choice waiting on him. **Must end with `My call: <recommendation>`.**
+  - `[risk]` — couldn't verify / assumption made / might bite later.
+- **Trivial task = one line.** `✅ 3/3 tests pass · no action needed`. Don't force
+  the full report onto a one-liner.
+
+For multi-check audits, the body uses the PASS/FAIL + ANOMALIES style (see below);
+the banner + "⚠️ For you" wrapper still applies.
+
 ## Universal rules
 
 ### Deploy logs
@@ -74,7 +112,7 @@ Suppress these unless explicitly requested:
 ## What to ALWAYS show
 
 - Final git commit hash (short form, 7 chars) when commits are made
-- Final status (success/fail) BEFORE everything else in long responses
+- Final status (success/fail) BEFORE everything else in long responses — this is the Task Report banner (see top)
 - Exact error messages verbatim — never paraphrase, never truncate errors
 - Backup paths when DB backups are made
 - The actual numbers from any user-facing KPI being verified
