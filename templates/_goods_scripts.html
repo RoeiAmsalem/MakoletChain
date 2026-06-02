@@ -8,4 +8,103 @@ function filterDocs(type, btn) {
         else { row.style.display = row.dataset.type === type ? '' : 'none'; }
     });
 }
+
+// ── Invoice line-item detail (on-demand BilBoy /customer/doc) ──
+const DOC_TYPE_LABELS = { 2: 'תעודת משלוח', 3: 'חשבונית', 4: 'חשבונית זיכוי', 5: 'תעודת החזרה' };
+
+function nis(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    return '₪ ' + Number(v).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function openDocDetail(rowId) {
+    const overlay = document.getElementById('doc-detail-overlay');
+    const body = document.getElementById('doc-modal-body');
+    body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
+    overlay.hidden = false;
+    document.body.style.overflow = 'hidden';
+
+    fetch('/api/goods/doc/' + encodeURIComponent(rowId))
+        .then(r => r.json().then(j => ({ ok: r.ok, j })))
+        .then(({ ok, j }) => {
+            if (!ok) {
+                body.innerHTML = '<div class="doc-modal-error">' +
+                    esc(j.message || 'לא ניתן לטעון את פירוט המסמך') + '</div>';
+                return;
+            }
+            body.innerHTML = renderDocDetail(j);
+        })
+        .catch(() => {
+            body.innerHTML = '<div class="doc-modal-error">שגיאת רשת — נסה שוב</div>';
+        });
+}
+
+function renderDocDetail(d) {
+    const h = d.header || {};
+    const items = d.items || [];
+    const typeLabel = DOC_TYPE_LABELS[h.doc_type] || 'מסמך';
+    const payPill = h.paid
+        ? '<span class="pay-pill paid">שולם</span>'
+        : '<span class="pay-pill unpaid">לא שולם</span>';
+
+    let rows = '';
+    if (!items.length) {
+        rows = '<tr><td colspan="4" style="text-align:center;color:#94a3b8">אין פריטים במסמך</td></tr>';
+    } else {
+        rows = items.map(it => {
+            const disc = it.discount_pct ? ' <span class="line-disc">−' + esc(it.discount_pct) + '%</span>' : '';
+            const bc = it.barcode ? '<div class="line-bc">' + esc(it.barcode) + '</div>' : '';
+            return '<tr>' +
+                '<td><div class="line-name">' + esc(it.name) + disc + '</div>' + bc + '</td>' +
+                '<td style="direction:ltr;text-align:left">' + (it.qty == null ? '—' : esc(it.qty)) + '</td>' +
+                '<td class="money" style="direction:ltr;text-align:left">' + nis(it.unit_price) + '</td>' +
+                '<td class="money" style="direction:ltr;text-align:left;font-weight:600">' + nis(it.line_total) + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    return '' +
+        '<div class="dm-head">' +
+            '<h3 id="dm-title">' + esc(h.supplier) + '</h3>' +
+            '<div class="dm-meta">' +
+                '<span class="doc-badge invoice">' + esc(typeLabel) + '</span>' +
+                payPill +
+                '<span class="dm-ref">אסמכתא ' + esc(h.ref_number) + '</span>' +
+                '<span class="dm-date">' + esc((h.date || '').slice(0, 10)) + '</span>' +
+            '</div>' +
+        '</div>' +
+        '<div class="dm-vat">' +
+            '<div><span>לפני מע"מ</span><strong>' + nis(h.total_without_vat) + '</strong></div>' +
+            '<div><span>מע"מ</span><strong>' + nis(h.total_vat) + '</strong></div>' +
+            '<div class="dm-vat-total"><span>סה"כ</span><strong>' + nis(h.total_with_vat) + '</strong></div>' +
+        '</div>' +
+        '<div class="dm-table-wrap"><table class="data-table dm-table">' +
+            '<thead><tr><th>מוצר</th><th>כמות</th><th>מחיר יח׳</th><th>סה"כ שורה</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+        '</table></div>';
+}
+
+function closeDocDetail() {
+    const overlay = document.getElementById('doc-detail-overlay');
+    overlay.hidden = true;
+    document.body.style.overflow = '';
+}
+
+document.addEventListener('click', e => {
+    const row = e.target.closest('.doc-row');
+    if (row) { openDocDetail(row.dataset.rowId); return; }
+    if (e.target.id === 'doc-detail-overlay') closeDocDetail();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeDocDetail();
+    if ((e.key === 'Enter' || e.key === ' ') && document.activeElement &&
+        document.activeElement.classList.contains('doc-row')) {
+        e.preventDefault();
+        openDocDetail(document.activeElement.dataset.rowId);
+    }
+});
 </script>

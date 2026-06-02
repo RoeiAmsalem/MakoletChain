@@ -56,6 +56,7 @@
                         <tr>
                             <th>תאריך</th>
                             <th>סוג</th>
+                            <th>תשלום</th>
                             <th>אסמכתא</th>
                             <th>לפני מע"מ</th>
                             <th>כולל מע"מ</th>
@@ -63,8 +64,8 @@
                     </thead>
                     <tbody>
                         {% for d in g.docs %}
-                        <tr>
-                            <td>{{ d.doc_date }}</td>
+                        <tr {% if d.has_detail %}class="doc-row" data-row-id="{{ d.id }}" tabindex="0" role="button"{% endif %}>
+                            <td>{{ d.doc_date }}{% if d.has_detail %}<span class="row-chevron">›</span>{% endif %}</td>
                             <td>
                                 {% if d.doc_type == 3 %}
                                 <span class="doc-badge invoice">חשבונית</span>
@@ -75,6 +76,10 @@
                                 {% elif d.doc_type == 5 %}
                                 <span class="doc-badge return">ת. החזרה</span>
                                 {% endif %}
+                            </td>
+                            <td>
+                                {% if d.paid == 1 %}<span class="pay-pill paid">שולם</span>
+                                {% elif d.paid == 0 %}<span class="pay-pill unpaid">לא שולם</span>{% endif %}
                             </td>
                             <td style="direction:ltr;text-align:left">{{ d.ref_number }}</td>
                             <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(d.amount_before_vat) }}</td>
@@ -99,6 +104,7 @@
                     <th>תאריך</th>
                     <th>ספק</th>
                     <th>סוג</th>
+                    <th>תשלום</th>
                     <th>אסמכתא</th>
                     <th>לפני מע"מ</th>
                     <th>כולל מע"מ</th>
@@ -106,9 +112,10 @@
             </thead>
             <tbody>
                 {% for d in docs %}
-                <tr data-type="{{ 'invoice' if d.doc_type == 3 else ('delivery' if d.doc_type == 2 else 'return') }}">
+                <tr data-type="{{ 'invoice' if d.doc_type == 3 else ('delivery' if d.doc_type == 2 else 'return') }}"
+                    {% if d.has_detail %}class="doc-row" data-row-id="{{ d.id }}" tabindex="0" role="button"{% endif %}>
                     <td>{{ d.doc_date }}</td>
-                    <td>{{ d.supplier }}</td>
+                    <td>{{ d.supplier }}{% if d.has_detail %}<span class="row-chevron">›</span>{% endif %}</td>
                     <td>
                         {% if d.doc_type == 3 %}
                         <span class="doc-badge invoice">חשבונית</span>
@@ -120,6 +127,10 @@
                         <span class="doc-badge return">ת. החזרה</span>
                         {% endif %}
                     </td>
+                    <td>
+                        {% if d.paid == 1 %}<span class="pay-pill paid">שולם</span>
+                        {% elif d.paid == 0 %}<span class="pay-pill unpaid">לא שולם</span>{% endif %}
+                    </td>
                     <td style="direction:ltr;text-align:left">{{ d.ref_number }}</td>
                     <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(d.amount_before_vat) }}</td>
                     <td class="money" style="direction:ltr;text-align:left;font-weight:600">₪ {{ '{:,.2f}'.format(d.amount) }}</td>
@@ -128,7 +139,7 @@
             </tbody>
             <tfoot>
                 <tr class="tfoot-total">
-                    <td colspan="4" style="text-align:right">סה"כ</td>
+                    <td colspan="5" style="text-align:right">סה"כ</td>
                     <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(total_before_vat) }}</td>
                     <td class="money" style="direction:ltr;text-align:left">₪ {{ '{:,.2f}'.format(total) }}</td>
                 </tr>
@@ -144,4 +155,14 @@
     </div>
     {% endif %}
 </section>
+
+<!-- Invoice line-item detail modal (loaded on demand) -->
+<div id="doc-detail-overlay" class="doc-modal-overlay" hidden>
+    <div class="doc-modal" role="dialog" aria-modal="true" aria-labelledby="dm-title">
+        <button class="doc-modal-close" onclick="closeDocDetail()" aria-label="סגור">✕</button>
+        <div id="doc-modal-body">
+            <div class="doc-modal-loading">טוען פירוט מסמך…</div>
+        </div>
+    </div>
+</div>
 

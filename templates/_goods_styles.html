@@ -17,6 +17,59 @@
     .doc-badge.delivery { background: rgba(34,197,94,0.2); color: #86efac; }
     .doc-badge.credit { background: rgba(239,68,68,0.2); color: #fca5a5; }
     .doc-badge.return { background: rgba(250,204,21,0.2); color: #fde68a; }
+    .pay-pill {
+        display: inline-block; font-size: 0.7rem; font-weight: 700;
+        padding: 0.12rem 0.5rem; border-radius: 999px; white-space: nowrap;
+    }
+    .pay-pill.paid { background: rgba(34,197,94,0.18); color: #86efac; }
+    .pay-pill.unpaid { background: rgba(239,68,68,0.16); color: #fca5a5; }
+    /* clickable invoice rows */
+    tr.doc-row { cursor: pointer; transition: background 0.12s; }
+    tr.doc-row:hover, tr.doc-row:focus { background: rgba(59,130,246,0.08); outline: none; }
+    .row-chevron { color: #64748b; font-weight: 700; margin-inline-start: 0.35rem; }
+    tr.doc-row:hover .row-chevron { color: #93c5fd; }
+    /* detail modal */
+    .doc-modal-overlay {
+        position: fixed; inset: 0; background: rgba(2,6,23,0.72);
+        display: flex; align-items: flex-start; justify-content: center;
+        padding: 4vh 1rem; z-index: 1000; overflow-y: auto;
+    }
+    .doc-modal {
+        position: relative; width: 100%; max-width: 640px;
+        background: #0d1526; border: 1px solid #334155; border-radius: 14px;
+        padding: 1.25rem 1.25rem 1rem; box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+    }
+    .doc-modal-close {
+        position: absolute; top: 0.6rem; left: 0.6rem; width: 32px; height: 32px;
+        background: rgba(255,255,255,0.06); border: 1px solid #334155; border-radius: 8px;
+        color: #94a3b8; cursor: pointer; font-size: 0.9rem; line-height: 1;
+    }
+    .doc-modal-close:hover { background: rgba(255,255,255,0.12); color: white; }
+    .doc-modal-loading, .doc-modal-error { padding: 2.5rem 1rem; text-align: center; color: #94a3b8; }
+    .doc-modal-error { color: #fca5a5; }
+    .dm-head { margin-bottom: 0.85rem; padding-inline-end: 2rem; }
+    .dm-head h3 { margin: 0 0 0.5rem; color: white; font-size: 1.1rem; }
+    .dm-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.55rem; align-items: center; }
+    .dm-ref { font-size: 0.8rem; color: #94a3b8; direction: ltr; }
+    .dm-date { font-size: 0.8rem; color: #64748b; direction: ltr; }
+    .dm-vat {
+        display: flex; gap: 0.5rem; margin-bottom: 1rem;
+        background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 0.6rem 0.5rem;
+    }
+    .dm-vat > div { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; }
+    .dm-vat span { font-size: 0.72rem; color: #94a3b8; }
+    .dm-vat strong { font-size: 0.95rem; color: #e2e8f0; direction: ltr; }
+    .dm-vat-total strong { color: #93c5fd; }
+    .dm-table-wrap { overflow-x: auto; }
+    .dm-table { margin: 0; }
+    .dm-table .line-name { color: #e2e8f0; }
+    .dm-table .line-bc { font-size: 0.72rem; color: #64748b; direction: ltr; text-align: right; margin-top: 0.15rem; }
+    .dm-table .line-disc { color: #fde68a; font-size: 0.72rem; font-weight: 700; }
+    @media (max-width: 768px) {
+        .doc-modal { padding: 1rem 0.85rem 0.85rem; }
+        .dm-vat strong { font-size: 0.85rem; }
+        .dm-table thead th, .dm-table tbody td { padding: 8px 6px; font-size: 0.78rem; }
+    }
     .tfoot-total td { font-weight: 700; border-top: 2px solid #334155; background: #0f172a !important; }
     .view-toggle { display: flex; gap: 0.5rem; align-items: center; }
     .view-toggle-label { font-size: 0.82rem; color: #94a3b8; font-weight: 600; }

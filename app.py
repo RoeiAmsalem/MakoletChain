@@ -1044,22 +1044,27 @@ def _goods_doc_context(branch_id, month, db):
     of /network/goods-v2 so the reused _goods_* partials render identically.
     Does NOT include view_mode — the caller owns that (session-driven)."""
     rows = db.execute(
-        "SELECT id, doc_date, supplier, ref_number, amount, doc_type "
+        "SELECT id, doc_date, supplier, ref_number, amount, doc_type, "
+        "       total_without_vat, paid, bilboy_status, bilboy_doc_id "
         "FROM goods_documents WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ? "
         "ORDER BY doc_date DESC, id DESC",
         (branch_id, month)
     ).fetchall()
     docs = [dict(r) for r in rows]
 
+    # Prefer BilBoy's authoritative pre-VAT total (migration 024); fall back to
+    # the /1.17 derivation for rows synced before the column existed.
+    for d in docs:
+        twv = d.get('total_without_vat')
+        d['amount_before_vat'] = round(twv, 2) if twv else round(d['amount'] / 1.17, 2)
+        d['has_detail'] = bool(d.get('bilboy_doc_id'))
+
     total = sum(d['amount'] for d in docs)
-    total_before_vat = round(total / 1.17, 2)
+    total_before_vat = round(sum(d['amount_before_vat'] for d in docs), 2)
     invoices_total = sum(d['amount'] for d in docs if d['doc_type'] == 3)
     delivery_total = sum(d['amount'] for d in docs if d['doc_type'] == 2)
     returns_total = sum(d['amount'] for d in docs if d['doc_type'] in (4, 5))
     count = len(docs)
-
-    for d in docs:
-        d['amount_before_vat'] = round(d['amount'] / 1.17, 2)
 
     groups_map = {}
     for d in docs:
@@ -1100,6 +1105,89 @@ def goods():
     ctx.update(_goods_doc_context(ctx['branch_id'], ctx['selected_month'], db))
     ctx['view_mode'] = view_mode
     return render_template('goods.html', **ctx)
+
+
+@app.route('/api/goods/doc/<int:row_id>')
+@login_required
+def api_goods_doc_detail(row_id):
+    """ON-DEMAND line-item detail for one goods document (BilBoy /customer/doc).
+    Fetched only when the user clicks a row — never pre-fetched or stored.
+    Branch isolation: the row must belong to the session's branch."""
+    branch_id = _get_branch_id()
+    db = get_db()
+    row = db.execute(
+        "SELECT id, doc_date, supplier, ref_number, amount, doc_type, "
+        "       total_without_vat, paid, bilboy_status, bilboy_doc_id "
+        "FROM goods_documents WHERE id = ? AND branch_id = ?",
+        (row_id, branch_id)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'not_found'}), 404
+    row = dict(row)
+
+    # Respect the per-branch visibility floor (floored branches: no pre-floor docs).
+    doc_month = (row['doc_date'] or '')[:7]
+    if _month_below_floor(branch_id, doc_month, db):
+        return jsonify({'error': 'not_found'}), 404
+
+    bilboy_doc_id = row.get('bilboy_doc_id')
+    if not bilboy_doc_id:
+        return jsonify({'error': 'no_detail',
+                        'message': 'מסמך זה סונכרן לפני הוספת פירוט פריטים'}), 404
+
+    try:
+        from agents.bilboy import fetch_doc_detail
+        raw = fetch_doc_detail(branch_id, bilboy_doc_id)
+    except PermissionError:
+        return jsonify({'error': 'token_expired',
+                        'message': 'התחברות ל-BilBoy פגה — יש לרענן את הטוקן'}), 502
+    except Exception as e:
+        app.logger.warning("goods doc detail fetch failed (row %s): %s", row_id, e)
+        return jsonify({'error': 'fetch_failed',
+                        'message': 'לא ניתן לטעון את פירוט המסמך כעת'}), 502
+
+    header = (raw or {}).get('header') or {}
+    body = (raw or {}).get('body') or {}
+    raw_items = body.get('items') or []
+
+    items = []
+    for it in raw_items:
+        unit_price = it.get('priceWithoutVat')
+        disc = it.get('discountPercent')
+        items.append({
+            'name': it.get('name') or '',
+            'barcode': it.get('barcode') or it.get('catalogNumber') or '',
+            'qty': it.get('qty'),
+            'unit_price': round(unit_price, 2) if unit_price is not None else None,
+            'line_total': it.get('total'),
+            'discount_pct': disc if disc else None,
+        })
+
+    # VAT breakdown — prefer stored/header values; derive VAT if BilBoy left it null.
+    total_with_vat = header.get('totalWithVat')
+    if total_with_vat is None:
+        total_with_vat = row['amount']
+    without_vat = header.get('totalWithoutVat')
+    if without_vat is None:
+        without_vat = row.get('total_without_vat')
+    total_vat = header.get('totalVat')
+    if total_vat is None and total_with_vat is not None and without_vat is not None:
+        total_vat = round(total_with_vat - without_vat, 2)
+
+    return jsonify({
+        'header': {
+            'supplier': header.get('supplierName') or row['supplier'] or '',
+            'ref_number': row['ref_number'],
+            'date': row['doc_date'],
+            'doc_type': row['doc_type'],
+            'status': row.get('bilboy_status'),
+            'paid': bool(row.get('paid')),
+            'total_without_vat': without_vat,
+            'total_vat': total_vat,
+            'total_with_vat': total_with_vat,
+        },
+        'items': items,
+    })
 
 
 @app.route('/employees')
