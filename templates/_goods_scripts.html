@@ -14,7 +14,13 @@ const DOC_TYPE_LABELS = { 2: 'תעודת משלוח', 3: 'חשבונית', 4: '�
 
 function nis(v) {
     if (v === null || v === undefined || isNaN(v)) return '—';
-    return '₪ ' + Number(v).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    var n = Number(v);
+    try {
+        return '₪ ' + n.toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } catch (e) {
+        // Older WebKit with incomplete Intl — fall back to a plain fixed format.
+        return '₪ ' + n.toFixed(2);
+    }
 }
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
@@ -31,13 +37,17 @@ function openDocDetail(rowId) {
 
 // Client-side timeout for the on-demand BilBoy detail fetch. Slightly longer
 // than the backend's 10s outbound timeout so the server's clean error usually
-// wins the race; this is the safety net for a truly hung connection.
+// wins the race; this is also the WATCHDOG that guarantees the spinner clears
+// even when AbortController/fetch/.finally are unavailable or misbehave
+// (e.g. older iPadOS Safari, where `new AbortController()` throws).
 const DOC_FETCH_TIMEOUT_MS = 12000;
 let _docFetchController = null;
+let _docFetchToken = null;
 
 function _clearDocFetch() {
+    _docFetchToken = null;          // invalidate any pending settle()
     if (_docFetchController) {
-        _docFetchController.abort();
+        try { _docFetchController.abort(); } catch (e) {}
         _docFetchController = null;
     }
 }
@@ -51,37 +61,63 @@ function docErrorHtml(rowId, msg) {
 }
 
 function fetchDocDetail(rowId, body) {
-    // Cancel any in-flight attempt (e.g. rapid retry) so its late resolution
-    // can't overwrite this one's result.
-    _clearDocFetch();
-    body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
+    // Hardened against WebKit/older-iOS quirks: ANY failure — a synchronous
+    // throw (unsupported API), a non-200, a network error, or a fetch that
+    // never settles — must clear the spinner and show error + retry. It must
+    // NEVER leave an infinite "טוען פירוט מסמך…".
+    try {
+        _clearDocFetch();
+        body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
 
-    const controller = new AbortController();
-    _docFetchController = controller;
-    const timer = setTimeout(() => controller.abort(), DOC_FETCH_TIMEOUT_MS);
-
-    fetch('/api/goods/doc/' + encodeURIComponent(rowId), { signal: controller.signal })
-        .then(r => r.json().catch(() => ({})).then(j => ({ ok: r.ok, j })))
-        .then(({ ok, j }) => {
-            if (controller !== _docFetchController) return; // superseded
-            if (!ok) {
-                body.innerHTML = docErrorHtml(rowId,
-                    (j && j.message) || 'לא ניתן לטעון את פירוט המסמך, נסה שוב');
-                return;
+        // Feature-detect AbortController — older iPadOS Safari throws on `new`.
+        var controller = null, signal;
+        try {
+            if (typeof AbortController !== 'undefined') {
+                controller = new AbortController();
+                signal = controller.signal;
             }
-            body.innerHTML = renderDocDetail(j);
-        })
-        .catch(err => {
-            if (controller !== _docFetchController) return; // superseded by close/retry
-            const msg = (err && err.name === 'AbortError')
-                ? 'הטעינה ארכה זמן רב מדי, נסה שוב'
-                : 'לא ניתן לטעון את פירוט המסמך, נסה שוב';
-            body.innerHTML = docErrorHtml(rowId, msg);
-        })
-        .finally(() => {
-            clearTimeout(timer);
-            if (controller === _docFetchController) _docFetchController = null;
-        });
+        } catch (e) { controller = null; signal = undefined; }
+        _docFetchController = controller;
+
+        var token = {};
+        _docFetchToken = token;
+        var done = false;
+
+        var settle = function (html) {
+            if (done || _docFetchToken !== token) return;   // superseded/closed
+            done = true;
+            clearTimeout(watchdog);
+            if (controller && _docFetchController === controller) _docFetchController = null;
+            body.innerHTML = html;
+        };
+
+        // Watchdog — fires regardless of AbortController/fetch behaviour.
+        var watchdog = setTimeout(function () {
+            if (controller) { try { controller.abort(); } catch (e) {} }
+            settle(docErrorHtml(rowId, 'הטעינה ארכה זמן רב מדי, נסה שוב'));
+        }, DOC_FETCH_TIMEOUT_MS);
+
+        var opts = signal ? { signal: signal } : {};
+        fetch('/api/goods/doc/' + encodeURIComponent(rowId), opts)
+            .then(function (r) {
+                return r.json().catch(function () { return {}; })
+                    .then(function (j) { return { ok: r.ok, j: j }; });
+            })
+            .then(function (res) {
+                if (res.ok) settle(renderDocDetail(res.j));
+                else settle(docErrorHtml(rowId, (res.j && res.j.message) ||
+                    'לא ניתן לטעון את פירוט המסמך, נסה שוב'));
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;  // watchdog handled it
+                settle(docErrorHtml(rowId, 'לא ניתן לטעון את פירוט המסמך, נסה שוב'));
+            });
+    } catch (e) {
+        // Last-resort: a synchronous throw before/around the fetch must still
+        // surface an error + retry, never a frozen spinner.
+        try { body.innerHTML = docErrorHtml(rowId, 'לא ניתן לטעון את פירוט המסמך, נסה שוב'); }
+        catch (e2) {}
+    }
 }
 
 function renderDocDetail(d) {
