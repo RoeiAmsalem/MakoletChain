@@ -554,6 +554,7 @@ async function renderLaborChart() {
         document.getElementById('labor-chart-section').style.display = '';
         const ctx = document.getElementById('chart-labor');
         if (laborChart) laborChart.destroy();
+        const maxRatio = Math.max(...withData.map(d => d.ratio));
         laborChart = new Chart(ctx, {
             type: 'line',
             data: {
@@ -581,6 +582,7 @@ async function renderLaborChart() {
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
+                layout: { padding: { top: 24 } },
                 plugins: {
                     legend: { display: false },
                     tooltip: {
@@ -606,7 +608,8 @@ async function renderLaborChart() {
                         grid: { color: 'rgba(148,163,184,0.08)' },
                         ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + '%' },
                         border: { color: '#334155' },
-                        beginAtZero: true
+                        beginAtZero: true,
+                        suggestedMax: Math.max(12, maxRatio * 1.25)
                     }
                 }
             },
