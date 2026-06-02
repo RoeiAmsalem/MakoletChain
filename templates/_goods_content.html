@@ -157,9 +157,14 @@
 </section>
 
 <!-- Invoice line-item detail modal (loaded on demand) -->
-<div id="doc-detail-overlay" class="doc-modal-overlay" hidden>
+<!-- The overlay + close button carry an INLINE direct-hide fallback so the
+     modal is always dismissable even if the script block fails to run on some
+     device — never trap the user behind an un-closable overlay. -->
+<div id="doc-detail-overlay" class="doc-modal-overlay" hidden
+     onclick="if(event.target===this){this.hidden=true;document.body.style.overflow='';try{closeDocDetail()}catch(e){}}">
     <div class="doc-modal" role="dialog" aria-modal="true" aria-labelledby="dm-title">
-        <button class="doc-modal-close" onclick="closeDocDetail()" aria-label="סגור">✕</button>
+        <button class="doc-modal-close" aria-label="סגור"
+                onclick="var o=document.getElementById('doc-detail-overlay');o.hidden=true;document.body.style.overflow='';try{closeDocDetail()}catch(e){}">✕</button>
         <div id="doc-modal-body">
             <div class="doc-modal-loading">טוען פירוט מסמך…</div>
         </div>
