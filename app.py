@@ -2888,14 +2888,25 @@ def _prorate_invoice(from_date_str: str, to_date_str: str, amount: float, year: 
 
 
 def _get_real_electricity(branch_id: int, year: int, month: int, db) -> float:
-    """Sum prorated electricity from invoices (<=90 days) that intersect (year, month). Returns 0 if none."""
+    """Sum prorated electricity from invoices (<=90 days) that intersect (year, month). Returns 0 if none.
+
+    Overlap-safe: when two invoices cover the same calendar days (e.g. a 1-month
+    bill and a 2-month combined bill that both start on the same date), each day
+    in the target month is assigned to exactly ONE invoice — the most specific
+    (shortest span; tie-break later start, then higher id) — so a shared day is
+    never billed twice. Each invoice then contributes amount × (its assigned
+    days) / span. With no competing invoice this reduces to the old per-invoice
+    proration, so normal single-bill months are unchanged.
+    """
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])
     rows = db.execute(
-        "SELECT amount, raw_json FROM electricity_invoices WHERE branch_id = ?",
+        "SELECT id, amount, raw_json FROM electricity_invoices WHERE branch_id = ?",
         (branch_id,)
     ).fetchall()
-    total = 0.0
+
+    # Candidate invoices that intersect the target month.
+    candidates = []  # (from_d, to_d, span, amount, id)
     for r in rows:
         try:
             rj = json.loads(r['raw_json'])
@@ -2910,10 +2921,29 @@ def _get_real_electricity(branch_id: int, year: int, month: int, db) -> float:
         span = (to_d - from_d).days
         if span <= 0 or span > 90:
             continue
-        # Check intersection with target month
         if to_d < month_start or from_d > month_end:
             continue
-        total += _prorate_invoice(from_d_str, to_d_str, r['amount'], year, month)
+        candidates.append((from_d, to_d, span, r['amount'], r['id']))
+
+    if not candidates:
+        return 0.0
+
+    # Assign each day in the month to the single most-specific covering invoice.
+    assigned_days = {}  # invoice_id -> day count
+    day = month_start
+    while day <= month_end:
+        covering = [c for c in candidates if c[0] <= day <= c[1]]
+        if covering:
+            # shortest span wins; tie-break later start date, then higher id
+            winner = min(covering, key=lambda c: (c[2], -c[0].toordinal(), -c[4]))
+            assigned_days[winner[4]] = assigned_days.get(winner[4], 0) + 1
+        day += timedelta(days=1)
+
+    by_id = {c[4]: c for c in candidates}
+    total = 0.0
+    for inv_id, days in assigned_days.items():
+        _, _, span, amount, _ = by_id[inv_id]
+        total += amount * days / span
     return round(total, 2)
 
 
