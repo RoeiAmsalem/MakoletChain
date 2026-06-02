@@ -147,7 +147,16 @@ def main():
     if not data:
         print('NO_DATA', file=sys.stderr)
         sys.exit(1)
-    low, normal = pick_branches(data)
+    # Optional: force explicit branch ids — `verify_labor_chart.py <id1> <id2>`
+    if len(sys.argv) >= 3:
+        a, b = int(sys.argv[1]), int(sys.argv[2])
+        if a not in data or b not in data:
+            print(f'BRANCH_NO_DATA a={a in data} b={b in data}', file=sys.stderr)
+            sys.exit(2)
+        low = (a, data[a], max_ratio(data[a]['rows']))
+        normal = (b, data[b], max_ratio(data[b]['rows']))
+    else:
+        low, normal = pick_branches(data)
     print(f"LOW   : id={low[0]} {low[1]['name']!r} maxRatio={low[2]} rows={low[1]['rows']}")
     print(f"NORMAL: id={normal[0]} {normal[1]['name']!r} maxRatio={normal[2]} rows={normal[1]['rows']}")
 
