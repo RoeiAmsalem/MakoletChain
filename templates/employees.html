@@ -92,20 +92,36 @@
     .btn-new:hover { background: rgba(99,102,241,0.3); }
 
     /* Per-shift drill-down (משמרות) inside an employee card */
-    .emp-shifts { margin-top: 0.5rem; border-top: 1px dashed var(--card-border); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.2rem; }
+    .emp-shifts { margin-top: 0.5rem; border-top: 1px dashed var(--card-border); padding-top: 0.6rem; }
     .emp-shifts-loading, .emp-shifts-empty { font-size: 0.78rem; color: var(--text-muted); padding: 0.35rem 0; }
-    .emp-shift-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.78rem; color: var(--text-secondary); padding: 0.25rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
-    .emp-shift-row:last-of-type { border-bottom: none; }
-    .emp-shift-hours { color: var(--text-primary); font-weight: 600; direction: ltr; }
-    .emp-shift-row.open { color: #fca5a5; }
-    .emp-shift-open-tag { color: #fecaca; font-weight: 700; font-size: 0.74rem; white-space: nowrap; }
-    .emp-shift-total { margin-top: 0.35rem; padding-top: 0.35rem; border-top: 1px solid var(--card-border); font-size: 0.82rem; font-weight: 700; color: var(--text-primary); text-align: left; direction: ltr; }
-    .emp-shift-meta { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; justify-content: flex-end; }
+    .shift-cards { display: flex; flex-direction: column; gap: 0.45rem; }
+    .shift-card { background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); border-radius: 10px; padding: 0.5rem 0.7rem; }
+    .shift-card .sc-line1 { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+    .shift-card .sc-day { font-weight: 700; color: var(--text-primary); font-size: 0.85rem; }
+    .shift-card .sc-hours { font-weight: 700; color: #93c5fd; direction: ltr; font-size: 0.85rem; white-space: nowrap; }
+    .shift-card .sc-line2 { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.3rem; }
+    .shift-card .sc-time { color: var(--text-secondary); font-size: 0.8rem; direction: ltr; }
+    .shift-card .sc-chips { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; justify-content: flex-end; }
+    /* open shift — red-tinted card, hours not counted */
+    .shift-card.open { background: rgba(239,68,68,0.10); border-color: rgba(239,68,68,0.5); }
+    .shift-card.open .sc-day { color: #fecaca; }
+    .shift-card .sc-open-pill { background: #fff; color: #991b1b; font-weight: 800; font-size: 0.7rem; border-radius: 999px; padding: 0.08rem 0.5rem; white-space: nowrap; }
+    .shift-card .sc-open-note { color: #fca5a5; font-size: 0.72rem; }
+    /* classification chips */
     .shift-tag { font-size: 0.68rem; font-weight: 700; border-radius: 999px; padding: 0.05rem 0.4rem; white-space: nowrap; direction: rtl; }
     .shift-tag.ot { background: rgba(245,158,11,0.18); color: #fcd34d; border: 1px solid rgba(245,158,11,0.35); }
     .shift-tag.shabbat { background: rgba(96,165,250,0.16); color: #93c5fd; border: 1px solid rgba(96,165,250,0.35); }
-    .emp-shift-breakdown { font-size: 0.76rem; color: var(--text-secondary); margin-top: 0.15rem; text-align: left; direction: rtl; }
-    .emp-shift-breakdown.shabbat { color: #93c5fd; }
+    /* monthly summary footer */
+    .shift-summary { margin-top: 0.6rem; padding: 0.6rem 0.75rem; background: #0f172a; border: 1px solid var(--card-border); border-radius: 10px; }
+    .shift-summary .ss-total { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+    .shift-summary .ss-total span { font-size: 0.8rem; color: var(--text-secondary); }
+    .shift-summary .ss-total strong { font-size: 1.05rem; font-weight: 800; color: var(--text-primary); direction: ltr; }
+    .shift-summary .ss-segs { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; margin-top: 0.5rem; }
+    .shift-summary .ss-seg { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.76rem; color: var(--text-secondary); direction: rtl; }
+    .shift-summary .ss-seg .ss-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+    .shift-summary .ss-seg.reg .ss-dot { background: #93c5fd; }
+    .shift-summary .ss-seg.ot .ss-dot { background: #fcd34d; }
+    .shift-summary .ss-seg.shab .ss-dot { background: #818cf8; }
 
     /* Toast */
     .toast { position: fixed; bottom: 2rem; left: 50%; transform: translateX(-50%); padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.9rem; font-weight: 600; z-index: 2000; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
@@ -747,43 +763,61 @@ async function toggleShifts(empId) {
             return;
         }
         const isGlobal = !!d.is_global;
+        // Two-line cards: line 1 = day+date / total hours; line 2 = time range
+        // + נוספות/שבת chips. Open shifts get their own red-tinted card.
         const rows = shifts.map(s => {
-            const dow = s.day_of_week ? `${s.day_of_week} · ` : '';
+            const dow = s.day_of_week ? `${s.day_of_week} ` : '';
             const dm = fmtDayMonth(s.shift_date);
             if (s.is_open) {
                 const t = fmtTime(s.start_ts);
-                return `<div class="emp-shift-row open">
-                    <span>${dow}${dm}${t ? ' · כניסה ' + t : ''}</span>
-                    <span class="emp-shift-open-tag">⚠️ ללא יציאה</span>
+                return `<div class="shift-card open">
+                    <div class="sc-line1">
+                        <span class="sc-day">${dow}${dm}</span>
+                        <span class="sc-open-pill">⚠️ ללא יציאה</span>
+                    </div>
+                    <div class="sc-line2">
+                        <span class="sc-time">${t ? 'כניסה ' + t : 'משמרת פתוחה'}</span>
+                        <span class="sc-open-note">טרם נסגרה — שעות לא נספרות</span>
+                    </div>
                 </div>`;
             }
             const t1 = fmtTime(s.start_ts), t2 = fmtTime(s.end_ts);
-            const span = (t1 || t2) ? `${t1}–${t2}` : '';
-            // Classification tags (hourly only): overtime + Shabbat/chag.
-            let tags = '';
+            const span = (t1 || t2) ? `${t1}–${t2}` : '—';
+            // Classification chips (hourly only): overtime + Shabbat/chag.
+            let chips = '';
             if (!isGlobal) {
                 if ((s.overtime_hours || 0) > 0.01)
-                    tags += `<span class="shift-tag ot">נוספות ${fmtHoursHM(s.overtime_hours)}</span>`;
+                    chips += `<span class="shift-tag ot">נוספות ${fmtHoursHM(s.overtime_hours)}</span>`;
                 if ((s.shabbat_hours || 0) > 0.01)
-                    tags += `<span class="shift-tag shabbat">🕯 שבת ${fmtHoursHM(s.shabbat_hours)}</span>`;
+                    chips += `<span class="shift-tag shabbat">🕯 שבת ${fmtHoursHM(s.shabbat_hours)}</span>`;
             }
-            return `<div class="emp-shift-row">
-                <span>${dow}${dm}${span ? ' · ' + span : ''}</span>
-                <span class="emp-shift-meta">${tags}<span class="emp-shift-hours">${fmtHoursHM(s.hours)} שעות</span></span>
+            return `<div class="shift-card">
+                <div class="sc-line1">
+                    <span class="sc-day">${dow}${dm}</span>
+                    <span class="sc-hours">${fmtHoursHM(s.hours)} שעות</span>
+                </div>
+                <div class="sc-line2">
+                    <span class="sc-time">${span}</span>
+                    <span class="sc-chips">${chips}</span>
+                </div>
             </div>`;
         }).join('');
         const total = (d.total_hours || 0);
         const sum = d.summary || {};
-        let summaryHtml = `<div class="emp-shift-total">סה״כ: ${total.toFixed(1)} שעות</div>`;
+        let segsHtml = '';
         if (!isGlobal) {
-            const parts = [`${(sum.regular || 0).toFixed(1)} רגילות`];
-            if ((sum.overtime || 0) > 0.01) parts.push(`${sum.overtime.toFixed(1)} נוספות`);
-            const shab = (sum.shabbat || 0) > 0.01
-                ? `<div class="emp-shift-breakdown shabbat">מתוכן בשבת/חג: ${sum.shabbat.toFixed(1)} שעות</div>` : '';
-            summaryHtml = `<div class="emp-shift-total">סה״כ: ${total.toFixed(1)} שעות</div>`
-                + `<div class="emp-shift-breakdown">${parts.join(' · ')}</div>${shab}`;
+            const seg = [`<span class="ss-seg reg"><span class="ss-dot"></span>רגילות ${fmtHoursHM(sum.regular || 0)}</span>`];
+            if ((sum.overtime || 0) > 0.01)
+                seg.push(`<span class="ss-seg ot"><span class="ss-dot"></span>נוספות ${fmtHoursHM(sum.overtime)}</span>`);
+            if ((sum.shabbat || 0) > 0.01)
+                seg.push(`<span class="ss-seg shab"><span class="ss-dot"></span>🕯 שבת ${fmtHoursHM(sum.shabbat)}</span>`);
+            segsHtml = `<div class="ss-segs">${seg.join('')}</div>`;
         }
-        box.innerHTML = rows + summaryHtml;
+        const summaryHtml = `<div class="shift-summary">
+            <div class="ss-total"><span>סה״כ חודשי</span><strong>${fmtHoursHM(total)} שעות</strong></div>
+            ${segsHtml}
+        </div>`;
+        box.innerHTML = `<div class="shift-cards">${rows}</div>` + summaryHtml;
     } catch (err) {
         console.error('toggleShifts:', err);
         box.innerHTML = '<div class="emp-shifts-empty">שגיאה בטעינת משמרות</div>';
