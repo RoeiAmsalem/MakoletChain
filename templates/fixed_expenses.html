@@ -28,6 +28,8 @@
     .type-btn.active-percent { background:rgba(251,191,36,0.15); border-color:rgba(251,191,36,0.5); color:#fcd34d; }
     .type-btn.active-monthly { background:rgba(96,165,250,0.15); border-color:rgba(96,165,250,0.5); color:#93c5fd; }
     .type-btn.active-onetime { background:rgba(251,146,60,0.15); border-color:rgba(251,146,60,0.5); color:#fdba74; }
+    .pl-mode-btn { font-family:inherit; font-size:0.82rem; font-weight:600; cursor:pointer; padding:0.4rem 0.95rem; border:none; background:transparent; color:rgba(241,245,249,0.6); transition:background 0.15s, color 0.15s; }
+    .pl-mode-btn.pl-mode-active { background:#6366f1; color:#fff; }
     .fields-amount,.fields-percent { display:none; }
     .fields-amount.open,.fields-percent.open { display:flex; }
     .percent-preview { font-size:1rem; color:#86efac; font-weight:600; padding:0.6rem 0; min-height:1.5em; }
@@ -76,6 +78,12 @@
 {% endblock %}
 
 {% block content %}
+
+<!-- P/L compute-mode toggle (חודש מלא / עד היום) — current month only -->
+<div id="pl-mode-toggle" style="display:none; align-items:center; gap:0; margin:0 0 0.75rem; border:1px solid rgba(148,163,184,0.25); border-radius:10px; overflow:hidden; background:rgba(15,21,38,0.6);">
+    <button type="button" id="pl-mode-full" class="pl-mode-btn pl-mode-active" onclick="setPLMode('full')">חודש מלא</button>
+    <button type="button" id="pl-mode-mtd" class="pl-mode-btn" onclick="setPLMode('mtd')">עד היום</button>
+</div>
 
 <section class="cards-grid" id="kpi-section">
     <div class="loading"><div class="spinner"></div><span>טוען...</span></div>
@@ -273,6 +281,14 @@
 const SELECTED_MONTH = {{ selected_month | tojson }};
 const BRANCH_ID = {{ branch_id | tojson }};
 let allExpenses = [], amountType = 'fixed', whenType = 'monthly', monthIncome = 0, latestElectricity = null, monthlyElectricity = null;
+// P/L compute-mode: 'full' (חודש מלא, default) or 'mtd' (עד היום — pro-rated). summaryMtd
+// holds the /api/summary payload (mtd_applicable, days_elapsed, days_in_month).
+let plMode = 'full', summaryMtd = null;
+
+function setPLMode(mode) {
+    plMode = mode;
+    renderKpi(document.getElementById('kpi-section'), allExpenses);
+}
 
 function setAmountType(t) {
     amountType = t;
@@ -300,7 +316,7 @@ async function loadExpenses() {
             fetch('/api/electricity-latest'),
             fetch(`/api/fixed-expenses-summary?month=${SELECTED_MONTH}`)
         ]);
-        if (sRes.ok) { const s = await sRes.json(); monthIncome = s.income || 0; }
+        if (sRes.ok) { const s = await sRes.json(); monthIncome = s.income || 0; summaryMtd = s; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         allExpenses = await res.json();
         latestElectricity = elecRes.ok ? await elecRes.json() : null;
@@ -313,13 +329,37 @@ async function loadExpenses() {
 function renderKpi(s, exps) {
     const elec = monthlyElectricity ? monthlyElectricity.electricity : null;
     const elecSource = elec ? elec.source : 'none';
-    const elecAmount = (elec && elecSource !== 'none') ? elec.amount : 0;
-    const total = exps.reduce((a,e) => a + e.amount, 0) + elecAmount;
-    const hasElec = elecSource !== 'none' && elecAmount > 0;
+    const elecMonthly = (elec && elecSource !== 'none') ? elec.amount : 0;
+
+    // "עד היום" mode: pro-rate truly-monthly fixed rows + electricity estimate by
+    // days-elapsed/days-in-month. One-time (חד פעמי) and % מהכנסות rows are NOT
+    // pro-rated (already actual). Current month only.
+    const isMtd = plMode === 'mtd' && summaryMtd && summaryMtd.mtd_applicable;
+    const round2 = (x) => Math.round(x * 100) / 100;
+    const factor = isMtd ? (summaryMtd.days_elapsed / summaryMtd.days_in_month) : 1;
+    const elecAmount = isMtd ? round2(elecMonthly * factor) : elecMonthly;
+    const expTotal = exps.reduce((a, e) => {
+        const isPct = e.pct_value && e.pct_value > 0;
+        const proratable = isMtd && !isPct && e.expense_type === 'monthly';
+        return a + (proratable ? e.amount * factor : e.amount);
+    }, 0);
+    const total = round2(expTotal + elecAmount);
+
+    const hasElec = elecSource !== 'none' && elecMonthly > 0;
     const count = exps.length + (hasElec ? 1 : 0);
     const isEstimate = elecSource === 'estimate';
     const tilde = isEstimate ? '~' : '';
     const monthLabel = monthlyElectricity ? monthlyElectricity.month_label : '';
+    const mtdNote = isMtd ? ` · עד יום ${summaryMtd.days_elapsed} מתוך ${summaryMtd.days_in_month}` : '';
+
+    // Mode toggle visibility/active state (current month only).
+    const toggleWrap = document.getElementById('pl-mode-toggle');
+    if (toggleWrap) {
+        const showToggle = summaryMtd && summaryMtd.mtd_applicable;
+        toggleWrap.style.display = showToggle ? 'inline-flex' : 'none';
+        document.getElementById('pl-mode-full').classList.toggle('pl-mode-active', !isMtd);
+        document.getElementById('pl-mode-mtd').classList.toggle('pl-mode-active', isMtd);
+    }
 
     let elecTile;
     if (hasElec) {
@@ -364,6 +404,7 @@ function renderKpi(s, exps) {
             ? ` · כולל ~${formatMoney(elecAmount)} חשמל (משוער)`
             : ` · כולל ${formatMoney(elecAmount)} חשמל`;
     }
+    totalSubtitle += mtdNote;
 
     s.innerHTML = `<div class="kpi-card kpi-card--fixed"><div class="kpi-header"><span class="kpi-label">סה"כ הוצאות קבועות</span></div><span class="kpi-value fixed">${formatMoney(total)}</span><span style="font-size:0.82rem;color:rgba(241,245,249,0.5)">${totalSubtitle}</span></div>${elecTile}`;
 }

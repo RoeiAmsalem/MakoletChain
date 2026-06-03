@@ -7,6 +7,14 @@
     html { overflow-x: clip; max-width: 100vw; }
     body { overflow-x: clip; max-width: 100vw; }
 
+    /* P/L compute-mode toggle (חודש מלא / עד היום) */
+    .pl-mode-btn {
+        font-family: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+        padding: 0.4rem 0.95rem; border: none; background: transparent;
+        color: rgba(241,245,249,0.6); transition: background 0.15s, color 0.15s;
+    }
+    .pl-mode-btn.pl-mode-active { background: #6366f1; color: #fff; }
+
     /* Electricity strip state styling */
     .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
     .electricity-strip[data-source="estimate"] { border-inline-start: 3px solid #D97706; }
@@ -114,6 +122,12 @@ async function setViewMode(mode) {
 }
 </script>
 {% endif %}
+
+<!-- P/L compute-mode toggle (חודש מלא / עד היום) — current month only -->
+<div id="pl-mode-toggle" style="display:none; align-items:center; gap:0; margin:0 0 0.75rem; border:1px solid rgba(148,163,184,0.25); border-radius:10px; overflow:hidden; background:rgba(15,21,38,0.6);">
+    <button type="button" id="pl-mode-full" class="pl-mode-btn pl-mode-active" onclick="setPLMode('full')">חודש מלא</button>
+    <button type="button" id="pl-mode-mtd" class="pl-mode-btn" onclick="setPLMode('mtd')">עד היום</button>
+</div>
 
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
@@ -377,27 +391,19 @@ async function loadSummary() {
         const res = await fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
+        lastSummary = d;
         const income = d.income || 0;
         const goods = d.goods || 0;
-        const fixed = d.fixed || 0;
         const salary = d.salary || 0;
-        const profit = d.profit || 0;
 
         document.getElementById('income-value').textContent = formatMoney(income);
         document.getElementById('goods-value').textContent = formatMoney(goods);
-        document.getElementById('fixed-value').textContent = formatMoney(fixed);
         document.getElementById('salary-value').textContent = formatMoney(salary);
 
-        // Electricity subtitle on orange tile
-        const elecSub = document.getElementById('fixed-elec-sub');
+        // Fixed-expenses tile + profit tile depend on the חודש מלא / עד היום mode.
+        renderPLMode();
+
         const elec = d.electricity;
-        if (elec && elec.source !== 'none' && elec.source !== 'manual_missing' && elec.amount > 0) {
-            const prefix = elec.source === 'estimate' ? 'כולל ~' : 'כולל ';
-            const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : (elec.source === 'manual' ? ' חשמל (ידני)' : ' חשמל');
-            elecSub.textContent = prefix + formatMoney(elec.amount) + suffix;
-        } else {
-            elecSub.textContent = '';
-        }
 
         // Electricity strip — state-driven rendering
         const strip = document.getElementById('elec-strip');
@@ -459,32 +465,79 @@ async function loadSummary() {
             liveSub.textContent = '';
         }
 
-        // Color the profit tile green/red
-        document.getElementById('profit-value').textContent = formatMoney(profit);
-        const profitTile = document.getElementById('profit-tile');
-        const profitValue = document.getElementById('profit-value');
-        if (profit >= 0) {
-            profitTile.className = 'kpi-card kpi-card--profit';
-            profitValue.className = 'kpi-value profit';
-        } else {
-            profitTile.className = 'kpi-card kpi-card--loss';
-            profitValue.className = 'kpi-value loss';
-        }
-
-        // Profitability pill
-        const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
-        document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
-        const badge = document.getElementById('profit-pct-badge');
-        badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
-        badge.style.color = pct >= 0 ? '#052e16' : '#fff';
-        const today = new Date();
-        const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
-        const dayOfMonth = today.getDate();
-        document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
-        document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
-
     } catch (err) {
         console.error('summary:', err);
+    }
+}
+
+// P/L compute-mode toggle: 'full' (חודש מלא, default — unchanged behavior) or
+// 'mtd' (עד היום — pro-rated fixed + recomputed profit). Only the הוצאות קבועות
+// and רווח tiles change; income/goods/salary are identical in both modes.
+let plMode = 'full';
+let lastSummary = null;
+
+function setPLMode(mode) {
+    plMode = mode;
+    renderPLMode();
+}
+
+function renderPLMode() {
+    const d = lastSummary;
+    if (!d) return;
+    const income = d.income || 0;
+    const isMtd = plMode === 'mtd' && d.mtd_applicable;
+    const fixed = isMtd ? (d.fixed_mtd || 0) : (d.fixed || 0);
+    const profit = isMtd ? (d.profit_mtd || 0) : (d.profit || 0);
+    const elec = d.electricity;
+    const elecAmount = isMtd ? (d.electricity_mtd || 0) : (elec ? elec.amount : 0);
+
+    // Fixed-expenses tile
+    document.getElementById('fixed-value').textContent = formatMoney(fixed);
+    const elecSub = document.getElementById('fixed-elec-sub');
+    if (elec && elec.source !== 'none' && elec.source !== 'manual_missing' && elecAmount > 0) {
+        const prefix = elec.source === 'estimate' ? 'כולל ~' : 'כולל ';
+        const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : (elec.source === 'manual' ? ' חשמל (ידני)' : ' חשמל');
+        elecSub.textContent = prefix + formatMoney(elecAmount) + suffix;
+    } else {
+        elecSub.textContent = '';
+    }
+
+    // Profit tile color
+    document.getElementById('profit-value').textContent = formatMoney(profit);
+    const profitTile = document.getElementById('profit-tile');
+    const profitValue = document.getElementById('profit-value');
+    if (profit >= 0) {
+        profitTile.className = 'kpi-card kpi-card--profit';
+        profitValue.className = 'kpi-value profit';
+    } else {
+        profitTile.className = 'kpi-card kpi-card--loss';
+        profitValue.className = 'kpi-value loss';
+    }
+
+    // Profitability pill
+    const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
+    document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
+    const badge = document.getElementById('profit-pct-badge');
+    badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
+    badge.style.color = pct >= 0 ? '#052e16' : '#fff';
+    const today = new Date();
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
+    const dayOfMonth = today.getDate();
+    document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
+    document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
+
+    // Toggle control: only meaningful for the current month.
+    const toggleWrap = document.getElementById('pl-mode-toggle');
+    if (toggleWrap) {
+        toggleWrap.style.display = d.mtd_applicable ? 'inline-flex' : 'none';
+        const fullBtn = document.getElementById('pl-mode-full');
+        const mtdBtn = document.getElementById('pl-mode-mtd');
+        const active = isMtd ? mtdBtn : fullBtn;
+        const inactive = isMtd ? fullBtn : mtdBtn;
+        if (active && inactive) {
+            active.classList.add('pl-mode-active');
+            inactive.classList.remove('pl-mode-active');
+        }
     }
 }
 
