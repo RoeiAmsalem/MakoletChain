@@ -23,10 +23,12 @@ OUT = "/tmp"
 
 
 def make_user(db):
+    # admin role so the "תצוגה על סניף / כל הרשת" control renders alongside the
+    # P/L toggle; branch 126 assigned so the home shows that branch's KPIs.
     db.execute("DELETE FROM user_branches WHERE user_id IN (SELECT id FROM users WHERE email=?)", (EMAIL,))
     db.execute("DELETE FROM users WHERE email=?", (EMAIL,))
     cur = db.execute(
-        "INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,'manager',1)",
+        "INSERT INTO users (name, email, password_hash, role, active) VALUES (?,?,?,'admin',1)",
         ("MTD Shot", EMAIL, generate_password_hash(PASSWORD)),
     )
     uid = cur.lastrowid
@@ -41,35 +43,32 @@ def drop_user(db):
     db.commit()
 
 
+def login(pg):
+    pg.goto(f"{BASE}/login", wait_until="domcontentloaded")
+    pg.fill("input[name=email]", EMAIL)
+    pg.fill("input[name=password]", PASSWORD)
+    pg.click("button[type=submit]")
+    pg.wait_for_url(f"{BASE}/", wait_until="domcontentloaded")
+
+
 def shoot():
     with sync_playwright() as p:
         b = p.chromium.launch(args=["--no-sandbox"])
+
+        # ---------- DESKTOP ----------
         pg = b.new_page(viewport={"width": 1180, "height": 1000})
-
-        # login
-        pg.goto(f"{BASE}/login", wait_until="domcontentloaded")
-        pg.fill("input[name=email]", EMAIL)
-        pg.fill("input[name=password]", PASSWORD)
-        pg.click("button[type=submit]")
-        pg.wait_for_url(f"{BASE}/", wait_until="domcontentloaded")
-
-        # --- HOME ---
+        login(pg)
         pg.wait_for_selector("#pl-mode-mtd", state="visible", timeout=15000)
         pg.wait_for_timeout(1200)
+        # top control row — both pills side by side
+        pg.locator(".top-controls").screenshot(path=f"{OUT}/mtd_toprow_full.png")
         pg.locator("#kpi-section").screenshot(path=f"{OUT}/mtd_home_full.png")
-
         pg.click("#pl-mode-mtd")
         pg.wait_for_timeout(600)
+        pg.locator(".top-controls").screenshot(path=f"{OUT}/mtd_toprow_mtd.png")
         pg.locator("#kpi-section").screenshot(path=f"{OUT}/mtd_home_mtd.png")
-        # close-up of the profit tile so the in-tile segmented control is legible
-        pg.click("#pl-mode-full")
-        pg.wait_for_timeout(400)
-        pg.locator("#profit-tile").screenshot(path=f"{OUT}/mtd_profit_tile_full.png")
-        pg.click("#pl-mode-mtd")
-        pg.wait_for_timeout(400)
-        pg.locator("#profit-tile").screenshot(path=f"{OUT}/mtd_profit_tile_mtd.png")
 
-        # --- FIXED EXPENSES PAGE ---
+        # fixed-expenses page (own toggle)
         pg.goto(f"{BASE}/fixed-expenses", wait_until="domcontentloaded")
         pg.wait_for_selector("#pl-mode-mtd", state="visible", timeout=15000)
         pg.wait_for_timeout(1000)
@@ -77,6 +76,17 @@ def shoot():
         pg.click("#pl-mode-mtd")
         pg.wait_for_timeout(600)
         pg.screenshot(path=f"{OUT}/mtd_fixed_mtd.png", clip={"x": 0, "y": 0, "width": 1180, "height": 360})
+
+        # ---------- MOBILE 390px ----------
+        mctx = b.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2)
+        mp = mctx.new_page()
+        login(mp)
+        mp.wait_for_selector("#pl-mode-mtd", state="visible", timeout=15000)
+        mp.wait_for_timeout(1200)
+        mp.screenshot(path=f"{OUT}/mtd_mobile_full.png", clip={"x": 0, "y": 0, "width": 390, "height": 520})
+        mp.click("#pl-mode-mtd")
+        mp.wait_for_timeout(600)
+        mp.screenshot(path=f"{OUT}/mtd_mobile_mtd.png", clip={"x": 0, "y": 0, "width": 390, "height": 520})
 
         b.close()
 

@@ -7,20 +7,21 @@
     html { overflow-x: clip; max-width: 100vw; }
     body { overflow-x: clip; max-width: 100vw; }
 
-    /* P/L compute-mode segmented toggle (מלא / עד היום) — compact, lives in the
-       profit tile header. Mirrors the app's purple "תצוגה על סניף" pill control. */
-    .pl-seg {
+    /* Shared segmented-control style for the top control row: the existing
+       "תצוגה על סניף / כל הרשת" pill and the "חודש מלא / עד היום" pill use the
+       SAME classes so they always match. Values mirror the original inline pill. */
+    .seg-control {
         display: inline-flex; background: rgba(255,255,255,0.05);
         border: 1px solid rgba(255,255,255,0.1); border-radius: 999px;
-        padding: 2px; gap: 2px;
+        padding: 4px; gap: 4px;
     }
-    .pl-seg-btn {
-        font-family: inherit; font-size: 0.68rem; font-weight: 600; cursor: pointer;
-        padding: 3px 9px; border: none; border-radius: 999px; background: transparent;
-        color: #cbd5e1; line-height: 1.2; white-space: nowrap;
+    .seg-btn {
+        background: transparent; color: #cbd5e1; border: none; border-radius: 999px;
+        padding: 6px 18px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+        font-family: inherit; white-space: nowrap;
         transition: background 0.15s, color 0.15s;
     }
-    .pl-seg-btn.active { background: #6366f1; color: #fff; }
+    .seg-btn.active { background: #6366f1; color: #fff; }
 
     /* Electricity strip state styling */
     .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
@@ -64,6 +65,10 @@
     @media (max-width: 768px) {
         .mobile-view-toggle { display: flex !important; }
 
+        /* Top control row: two segmented pills wrap cleanly, compact buttons */
+        .top-controls { gap: 0.5rem !important; }
+        .seg-btn { padding: 6px 14px !important; font-size: 0.8rem !important; }
+
         /* KPI grid — 2 columns on mobile */
         .cards-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 0.5rem; }
         .kpi-card { padding: 0.75rem !important; }
@@ -103,17 +108,18 @@
 
 {% block content %}
 
-{% if session.get('user_role') in ('admin', 'ceo') %}
-<section class="view-toggle" style="display:flex;justify-content:center;margin-bottom:1rem;">
-    <div style="display:inline-flex;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:999px;padding:4px;gap:4px;">
-        <button type="button" onclick="setViewMode('branch')"
-            style="background:#6366f1;color:#fff;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
-            תצוגה על סניף
-        </button>
-        <button type="button" onclick="setViewMode('network')"
-            style="background:transparent;color:#cbd5e1;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
-            תצוגה על כל הרשת
-        </button>
+<!-- Top control row: view-toggle (admin/ceo only) + P/L compute-mode toggle, side
+     by side as matching segmented siblings. -->
+<section class="top-controls" style="display:flex;justify-content:center;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+    {% if session.get('user_role') in ('admin', 'ceo') %}
+    <div class="seg-control view-toggle">
+        <button type="button" class="seg-btn active" onclick="setViewMode('branch')">תצוגה על סניף</button>
+        <button type="button" class="seg-btn" onclick="setViewMode('network')">תצוגה על כל הרשת</button>
+    </div>
+    {% endif %}
+    <div id="pl-mode-toggle" class="seg-control" style="display:none;">
+        <button type="button" id="pl-mode-full" class="seg-btn active" onclick="setPLMode('full')">חודש מלא</button>
+        <button type="button" id="pl-mode-mtd" class="seg-btn" onclick="setPLMode('mtd')">עד היום</button>
     </div>
 </section>
 <script>
@@ -157,10 +163,6 @@ async function setViewMode(mode) {
         <div class="kpi-header">
             <span class="kpi-icon">💰</span>
             <span class="kpi-label" id="profit-label">רווח</span>
-            <div id="pl-mode-toggle" class="pl-seg" style="display:none; margin-inline-start:auto;">
-                <button type="button" id="pl-mode-full" class="pl-seg-btn active" onclick="setPLMode('full')">מלא</button>
-                <button type="button" id="pl-mode-mtd" class="pl-seg-btn" onclick="setPLMode('mtd')">עד היום</button>
-            </div>
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
         <div id="profit-bar-wrap" style="display:none; width:100%; margin-top:6px;">
