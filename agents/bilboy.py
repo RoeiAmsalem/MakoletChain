@@ -89,13 +89,46 @@ def _setup_logger(branch_id: int) -> logging.Logger:
     return logger
 
 
-def _api_get(session: requests.Session, path: str, params=None):
+def _api_get(session: requests.Session, path: str, params=None, timeout=30):
     url = f"{API_BASE}{path}"
-    resp = session.get(url, params=params, timeout=30)
+    resp = session.get(url, params=params, timeout=timeout)
     if resp.status_code == 401:
         raise PermissionError("BilBoy token expired")
     resp.raise_for_status()
     return resp.json()
+
+
+def _branch_session(branch: dict, branch_id: int) -> requests.Session:
+    """Build an authenticated BilBoy session for a branch using the same
+    chain-token / per-store-token resolution as run_bilboy."""
+    chain_token = os.environ.get(CHAIN_TOKEN_ENV) or ''
+    mapped_bb_id = branch.get('bilboy_branch_id')
+    if USE_CHAIN_AUTH and chain_token and mapped_bb_id:
+        token = chain_token
+    else:
+        token = branch.get('bilboy_pass') or ''
+    if not token:
+        raise ValueError(f"No BilBoy token for branch {branch_id}")
+    session = requests.Session()
+    session.headers.update({'Authorization': f'Bearer {token}'})
+    return session
+
+
+def fetch_doc_detail(branch_id: int, bilboy_doc_id: str) -> dict:
+    """ON-DEMAND fetch of a single document's line items from BilBoy.
+
+    Calls GET /customer/doc?docId=<uuid>. Result is NOT stored — this exists so
+    the /goods click-into-invoice view can show what was bought without the
+    ~2,560 calls/month a nightly pre-fetch would cost. Returns the raw
+    {header, body} dict from BilBoy; the caller normalizes it for the UI.
+    """
+    branch = _get_branch_config(branch_id)
+    session = _branch_session(branch, branch_id)
+    # Shorter timeout than the nightly sync — this serves a live user click, so
+    # a hung BilBoy connection must surface as an error fast, not hold the
+    # request open. The frontend's abort timeout sits just above this (12s).
+    return _api_get(session, '/customer/doc', params={'docId': bilboy_doc_id},
+                    timeout=10)
 
 
 def run_bilboy(branch_id: int) -> dict:
@@ -269,6 +302,12 @@ def run_bilboy(branch_id: int) -> dict:
                 'ref_number': ref_number,
                 'amount': amount,
                 'doc_type': doc_type,
+                # FREE enrichment fields (already in this response) — display only,
+                # not part of dedup. See migration 024.
+                'total_without_vat': float(doc.get('totalWithoutVat') or 0) or None,
+                'paid': 1 if doc.get('paid') else 0,
+                'bilboy_status': doc.get('status'),
+                'bilboy_doc_id': doc.get('id'),
             })
 
         # Dedup by ref_number
@@ -295,9 +334,12 @@ def run_bilboy(branch_id: int) -> dict:
 
         for r in records:
             conn.execute(
-                "INSERT OR REPLACE INTO goods_documents (branch_id, doc_date, supplier, ref_number, amount, doc_type) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (branch_id, r['doc_date'], r['supplier'], r['ref_number'], r['amount'], r['doc_type'])
+                "INSERT OR REPLACE INTO goods_documents "
+                "(branch_id, doc_date, supplier, ref_number, amount, doc_type, "
+                " total_without_vat, paid, bilboy_status, bilboy_doc_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (branch_id, r['doc_date'], r['supplier'], r['ref_number'], r['amount'], r['doc_type'],
+                 r['total_without_vat'], r['paid'], r['bilboy_status'], r['bilboy_doc_id'])
             )
         conn.commit()
 

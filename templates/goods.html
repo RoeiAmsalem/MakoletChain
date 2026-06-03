@@ -20,6 +20,72 @@
     .doc-badge.delivery { background: rgba(34,197,94,0.2); color: #86efac; }
     .doc-badge.credit { background: rgba(239,68,68,0.2); color: #fca5a5; }
     .doc-badge.return { background: rgba(250,204,21,0.2); color: #fde68a; }
+    /* clickable invoice rows */
+    tr.doc-row { cursor: pointer; transition: background 0.12s; }
+    tr.doc-row:hover, tr.doc-row:focus { background: rgba(59,130,246,0.08); outline: none; }
+    .row-chevron { color: #64748b; font-weight: 700; margin-inline-start: 0.35rem; }
+    tr.doc-row:hover .row-chevron { color: #93c5fd; }
+    /* detail modal */
+    .doc-modal-overlay {
+        position: fixed; inset: 0; background: rgba(2,6,23,0.72);
+        display: flex; align-items: flex-start; justify-content: center;
+        padding: 4vh 1rem; z-index: 1000; overflow-y: auto;
+    }
+    /* The `hidden` attribute is the ONLY thing that closes this modal. A bare
+       `.doc-modal-overlay { display:flex }` overrides the UA `[hidden]{display:none}`
+       rule, leaving a full-viewport overlay that silently swallows every row
+       click (-> closeDocDetail -> stuck spinner). This attribute selector
+       outranks the class, so `hidden` actually hides. */
+    .doc-modal-overlay[hidden] { display: none; }
+    .doc-modal {
+        position: relative; width: 100%; max-width: 640px;
+        background: #0d1526; border: 1px solid #334155; border-radius: 14px;
+        padding: 1.25rem 1.25rem 1rem; box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+    }
+    .doc-modal-close {
+        position: absolute; top: 0.6rem; left: 0.6rem; width: 32px; height: 32px;
+        background: rgba(255,255,255,0.06); border: 1px solid #334155; border-radius: 8px;
+        color: #94a3b8; cursor: pointer; font-size: 0.9rem; line-height: 1;
+    }
+    .doc-modal-close:hover { background: rgba(255,255,255,0.12); color: white; }
+    .doc-modal-loading, .doc-modal-error { padding: 2.5rem 1rem; text-align: center; color: #94a3b8; }
+    .doc-modal-loading::before {
+        content: ''; display: block; width: 26px; height: 26px; margin: 0 auto 0.85rem;
+        border: 3px solid rgba(148,163,184,0.25); border-top-color: #93c5fd;
+        border-radius: 50%; animation: doc-spin 0.8s linear infinite;
+    }
+    @keyframes doc-spin { to { transform: rotate(360deg); } }
+    .doc-modal-error { color: #fca5a5; display: flex; flex-direction: column; align-items: center; gap: 0.85rem; }
+    .doc-modal-error .dm-err-msg { font-size: 0.9rem; }
+    .dm-retry {
+        background: rgba(59,130,246,0.2); border: 1px solid rgba(59,130,246,0.5);
+        color: #93c5fd; font-family: inherit; font-size: 0.85rem; font-weight: 700;
+        padding: 0.45rem 1.1rem; border-radius: 8px; cursor: pointer; min-height: 40px;
+    }
+    .dm-retry:hover { background: rgba(59,130,246,0.32); color: #fff; }
+    .dm-head { margin-bottom: 0.85rem; padding-inline-end: 2rem; }
+    .dm-head h3 { margin: 0 0 0.5rem; color: white; font-size: 1.1rem; }
+    .dm-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.55rem; align-items: center; }
+    .dm-ref { font-size: 0.8rem; color: #94a3b8; direction: ltr; }
+    .dm-date { font-size: 0.8rem; color: #64748b; direction: ltr; }
+    .dm-vat {
+        display: flex; gap: 0.5rem; margin-bottom: 1rem;
+        background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 0.6rem 0.5rem;
+    }
+    .dm-vat > div { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0.2rem; }
+    .dm-vat span { font-size: 0.72rem; color: #94a3b8; }
+    .dm-vat strong { font-size: 0.95rem; color: #e2e8f0; direction: ltr; }
+    .dm-vat-total strong { color: #93c5fd; }
+    .dm-table-wrap { overflow-x: auto; }
+    .dm-table { margin: 0; }
+    .dm-table .line-name { color: #e2e8f0; }
+    .dm-table .line-bc { font-size: 0.72rem; color: #64748b; direction: ltr; text-align: right; margin-top: 0.15rem; }
+    .dm-table .line-disc { color: #fde68a; font-size: 0.72rem; font-weight: 700; }
+    @media (max-width: 768px) {
+        .doc-modal { padding: 1rem 0.85rem 0.85rem; }
+        .dm-vat strong { font-size: 0.85rem; }
+        .dm-table thead th, .dm-table tbody td { padding: 8px 6px; font-size: 0.78rem; }
+    }
     .tfoot-total td { font-weight: 700; border-top: 2px solid #334155; background: #0f172a !important; }
     .view-toggle { display: flex; gap: 0.5rem; align-items: center; }
     .view-toggle-label { font-size: 0.82rem; color: #94a3b8; font-weight: 600; }
@@ -122,8 +188,8 @@
                     </thead>
                     <tbody>
                         {% for d in g.docs %}
-                        <tr>
-                            <td>{{ d.doc_date }}</td>
+                        <tr {% if d.has_detail %}class="doc-row" data-row-id="{{ d.id }}" tabindex="0" role="button"{% endif %}>
+                            <td>{{ d.doc_date }}{% if d.has_detail %}<span class="row-chevron">›</span>{% endif %}</td>
                             <td>
                                 {% if d.doc_type == 3 %}
                                 <span class="doc-badge invoice">חשבונית</span>
@@ -165,9 +231,10 @@
             </thead>
             <tbody>
                 {% for d in docs %}
-                <tr data-type="{{ 'invoice' if d.doc_type == 3 else ('delivery' if d.doc_type == 2 else 'return') }}">
+                <tr data-type="{{ 'invoice' if d.doc_type == 3 else ('delivery' if d.doc_type == 2 else 'return') }}"
+                    {% if d.has_detail %}class="doc-row" data-row-id="{{ d.id }}" tabindex="0" role="button"{% endif %}>
                     <td>{{ d.doc_date }}</td>
-                    <td>{{ d.supplier }}</td>
+                    <td>{{ d.supplier }}{% if d.has_detail %}<span class="row-chevron">›</span>{% endif %}</td>
                     <td>
                         {% if d.doc_type == 3 %}
                         <span class="doc-badge invoice">חשבונית</span>
@@ -204,6 +271,21 @@
     {% endif %}
 </section>
 
+<!-- Invoice line-item detail modal (loaded on demand) -->
+<!-- The overlay + close button carry an INLINE direct-hide fallback so the
+     modal is always dismissable even if the script block fails to run on some
+     device — never trap the user behind an un-closable overlay. -->
+<div id="doc-detail-overlay" class="doc-modal-overlay" hidden
+     onclick="if(event.target===this){this.hidden=true;document.body.style.overflow='';try{closeDocDetail()}catch(e){}}">
+    <div class="doc-modal" role="dialog" aria-modal="true" aria-labelledby="dm-title">
+        <button class="doc-modal-close" aria-label="סגור"
+                onclick="var o=document.getElementById('doc-detail-overlay');o.hidden=true;document.body.style.overflow='';try{closeDocDetail()}catch(e){}">✕</button>
+        <div id="doc-modal-body">
+            <div class="doc-modal-loading">טוען פירוט מסמך…</div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -217,5 +299,181 @@ function filterDocs(type, btn) {
         else { row.style.display = row.dataset.type === type ? '' : 'none'; }
     });
 }
+
+// ── Invoice line-item detail (on-demand BilBoy /customer/doc) ──
+const DOC_TYPE_LABELS = { 2: 'תעודת משלוח', 3: 'חשבונית', 4: 'חשבונית זיכוי', 5: 'תעודת החזרה' };
+
+function nis(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    var n = Number(v);
+    try {
+        return '₪ ' + n.toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } catch (e) {
+        // Older WebKit with incomplete Intl — fall back to a plain fixed format.
+        return '₪ ' + n.toFixed(2);
+    }
+}
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function openDocDetail(rowId) {
+    const overlay = document.getElementById('doc-detail-overlay');
+    const body = document.getElementById('doc-modal-body');
+    overlay.hidden = false;
+    document.body.style.overflow = 'hidden';
+    fetchDocDetail(rowId, body);
+}
+
+// Client-side timeout for the on-demand BilBoy detail fetch. Slightly longer
+// than the backend's 10s outbound timeout so the server's clean error usually
+// wins the race; this is also the WATCHDOG that guarantees the spinner clears
+// even when AbortController/fetch/.finally are unavailable or misbehave
+// (e.g. older iPadOS Safari, where `new AbortController()` throws).
+const DOC_FETCH_TIMEOUT_MS = 12000;
+let _docFetchController = null;
+let _docFetchToken = null;
+
+function _clearDocFetch() {
+    _docFetchToken = null;          // invalidate any pending settle()
+    if (_docFetchController) {
+        try { _docFetchController.abort(); } catch (e) {}
+        _docFetchController = null;
+    }
+}
+
+function docErrorHtml(rowId, msg) {
+    return '<div class="doc-modal-error">' +
+        '<div class="dm-err-msg">' + esc(msg) + '</div>' +
+        '<button class="dm-retry" onclick="fetchDocDetail(' + Number(rowId) +
+        ', document.getElementById(\'doc-modal-body\'))">נסה שוב</button>' +
+        '</div>';
+}
+
+function fetchDocDetail(rowId, body) {
+    // Hardened against WebKit/older-iOS quirks: ANY failure — a synchronous
+    // throw (unsupported API), a non-200, a network error, or a fetch that
+    // never settles — must clear the spinner and show error + retry. It must
+    // NEVER leave an infinite "טוען פירוט מסמך…".
+    try {
+        _clearDocFetch();
+        body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
+
+        // Feature-detect AbortController — older iPadOS Safari throws on `new`.
+        var controller = null, signal;
+        try {
+            if (typeof AbortController !== 'undefined') {
+                controller = new AbortController();
+                signal = controller.signal;
+            }
+        } catch (e) { controller = null; signal = undefined; }
+        _docFetchController = controller;
+
+        var token = {};
+        _docFetchToken = token;
+        var done = false;
+
+        var settle = function (html) {
+            if (done || _docFetchToken !== token) return;   // superseded/closed
+            done = true;
+            clearTimeout(watchdog);
+            if (controller && _docFetchController === controller) _docFetchController = null;
+            body.innerHTML = html;
+        };
+
+        // Watchdog — fires regardless of AbortController/fetch behaviour.
+        var watchdog = setTimeout(function () {
+            if (controller) { try { controller.abort(); } catch (e) {} }
+            settle(docErrorHtml(rowId, 'הטעינה ארכה זמן רב מדי, נסה שוב'));
+        }, DOC_FETCH_TIMEOUT_MS);
+
+        var opts = signal ? { signal: signal } : {};
+        fetch('/api/goods/doc/' + encodeURIComponent(rowId), opts)
+            .then(function (r) {
+                return r.json().catch(function () { return {}; })
+                    .then(function (j) { return { ok: r.ok, j: j }; });
+            })
+            .then(function (res) {
+                if (res.ok) settle(renderDocDetail(res.j));
+                else settle(docErrorHtml(rowId, (res.j && res.j.message) ||
+                    'לא ניתן לטעון את פירוט המסמך, נסה שוב'));
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return;  // watchdog handled it
+                settle(docErrorHtml(rowId, 'לא ניתן לטעון את פירוט המסמך, נסה שוב'));
+            });
+    } catch (e) {
+        // Last-resort: a synchronous throw before/around the fetch must still
+        // surface an error + retry, never a frozen spinner.
+        try { body.innerHTML = docErrorHtml(rowId, 'לא ניתן לטעון את פירוט המסמך, נסה שוב'); }
+        catch (e2) {}
+    }
+}
+
+function renderDocDetail(d) {
+    const h = d.header || {};
+    const items = d.items || [];
+    const typeLabel = DOC_TYPE_LABELS[h.doc_type] || 'מסמך';
+
+    let rows = '';
+    if (!items.length) {
+        rows = '<tr><td colspan="4" style="text-align:center;color:#94a3b8">אין פריטים במסמך</td></tr>';
+    } else {
+        rows = items.map(it => {
+            const disc = it.discount_pct ? ' <span class="line-disc">−' + esc(it.discount_pct) + '%</span>' : '';
+            const bc = it.barcode ? '<div class="line-bc">' + esc(it.barcode) + '</div>' : '';
+            return '<tr>' +
+                '<td><div class="line-name">' + esc(it.name) + disc + '</div>' + bc + '</td>' +
+                '<td style="direction:ltr;text-align:left">' + (it.qty == null ? '—' : esc(it.qty)) + '</td>' +
+                '<td class="money" style="direction:ltr;text-align:left">' + nis(it.unit_price) + '</td>' +
+                '<td class="money" style="direction:ltr;text-align:left;font-weight:600">' + nis(it.line_total) + '</td>' +
+                '</tr>';
+        }).join('');
+    }
+
+    return '' +
+        '<div class="dm-head">' +
+            '<h3 id="dm-title">' + esc(h.supplier) + '</h3>' +
+            '<div class="dm-meta">' +
+                '<span class="doc-badge invoice">' + esc(typeLabel) + '</span>' +
+                '<span class="dm-ref">אסמכתא ' + esc(h.ref_number) + '</span>' +
+                '<span class="dm-date">' + esc((h.date || '').slice(0, 10)) + '</span>' +
+            '</div>' +
+        '</div>' +
+        '<div class="dm-vat">' +
+            '<div><span>לפני מע"מ</span><strong>' + nis(h.total_without_vat) + '</strong></div>' +
+            '<div><span>מע"מ</span><strong>' + nis(h.total_vat) + '</strong></div>' +
+            '<div class="dm-vat-total"><span>סה"כ</span><strong>' + nis(h.total_with_vat) + '</strong></div>' +
+        '</div>' +
+        '<div class="dm-table-wrap"><table class="data-table dm-table">' +
+            '<thead><tr><th>מוצר</th><th>כמות</th><th>מחיר יח׳</th><th>סה"כ שורה</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+        '</table></div>';
+}
+
+function closeDocDetail() {
+    _clearDocFetch();
+    const overlay = document.getElementById('doc-detail-overlay');
+    overlay.hidden = true;
+    document.body.style.overflow = '';
+    // Reset so a stale spinner/error never flashes on the next open.
+    const body = document.getElementById('doc-modal-body');
+    if (body) body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
+}
+
+document.addEventListener('click', e => {
+    const row = e.target.closest('.doc-row');
+    if (row) { openDocDetail(row.dataset.rowId); return; }
+    if (e.target.id === 'doc-detail-overlay') closeDocDetail();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeDocDetail();
+    if ((e.key === 'Enter' || e.key === ' ') && document.activeElement &&
+        document.activeElement.classList.contains('doc-row')) {
+        e.preventDefault();
+        openDocDetail(document.activeElement.dataset.rowId);
+    }
+});
 </script>
 {% endblock %}
