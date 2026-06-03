@@ -7,13 +7,19 @@
     html { overflow-x: clip; max-width: 100vw; }
     body { overflow-x: clip; max-width: 100vw; }
 
-    /* P/L compute-mode toggle (חודש מלא / עד היום) */
-    .pl-mode-btn {
-        font-family: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
-        padding: 0.4rem 0.95rem; border: none; background: transparent;
-        color: rgba(241,245,249,0.6); transition: background 0.15s, color 0.15s;
+    /* P/L compute-mode segmented toggle (מלא / עד היום) — compact, lives in the
+       profit tile header. Mirrors the app's purple "תצוגה על סניף" pill control. */
+    .pl-seg {
+        display: inline-flex; background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 999px;
+        padding: 2px; gap: 2px;
     }
-    .pl-mode-btn.pl-mode-active { background: #6366f1; color: #fff; }
+    .pl-seg-btn {
+        font-family: inherit; font-size: 0.68rem; font-weight: 600; cursor: pointer;
+        padding: 3px 9px; border: none; border-radius: 999px; background: transparent;
+        color: #cbd5e1; line-height: 1.2; transition: background 0.15s, color 0.15s;
+    }
+    .pl-seg-btn.active { background: #6366f1; color: #fff; }
 
     /* Electricity strip state styling */
     .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
@@ -123,12 +129,6 @@ async function setViewMode(mode) {
 </script>
 {% endif %}
 
-<!-- P/L compute-mode toggle (חודש מלא / עד היום) — current month only -->
-<div id="pl-mode-toggle" style="display:none; align-items:center; gap:0; margin:0 0 0.75rem; border:1px solid rgba(148,163,184,0.25); border-radius:10px; overflow:hidden; background:rgba(15,21,38,0.6);">
-    <button type="button" id="pl-mode-full" class="pl-mode-btn pl-mode-active" onclick="setPLMode('full')">חודש מלא</button>
-    <button type="button" id="pl-mode-mtd" class="pl-mode-btn" onclick="setPLMode('mtd')">עד היום</button>
-</div>
-
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
     <div class="kpi-card kpi-card--live" id="live-tile"
@@ -156,6 +156,10 @@ async function setViewMode(mode) {
         <div class="kpi-header">
             <span class="kpi-icon">💰</span>
             <span class="kpi-label" id="profit-label">רווח</span>
+            <div id="pl-mode-toggle" class="pl-seg" style="display:none; margin-inline-start:auto;">
+                <button type="button" id="pl-mode-full" class="pl-seg-btn active" onclick="setPLMode('full')">מלא</button>
+                <button type="button" id="pl-mode-mtd" class="pl-seg-btn" onclick="setPLMode('mtd')">עד היום</button>
+            </div>
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
         <div id="profit-bar-wrap" style="display:none; width:100%; margin-top:6px;">
@@ -189,6 +193,7 @@ async function setViewMode(mode) {
         <div class="kpi-header">
             <span class="kpi-icon">🏠</span>
             <span class="kpi-label">הוצאות קבועות</span>
+            <span id="fixed-mtd-marker" style="display:none; margin-inline-start:auto; font-size:0.62rem; font-weight:700; color:#c7d2fe; background:rgba(99,102,241,0.18); border:1px solid rgba(99,102,241,0.4); border-radius:999px; padding:2px 8px; letter-spacing:0;">עד היום</span>
         </div>
         <span class="kpi-value fixed" id="fixed-value">₪ 0.00</span>
         <div id="fixed-elec-sub" style="font-size:0.78rem; color:rgba(241,245,249,0.55); margin-top:3px;"></div>
@@ -523,21 +528,20 @@ function renderPLMode() {
     const today = new Date();
     const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
     const dayOfMonth = today.getDate();
-    document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
+    document.getElementById('profit-month-sub').textContent =
+        (isMtd ? 'עד היום · ' : '') + 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
     document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
 
-    // Toggle control: only meaningful for the current month.
+    // Subtle "עד היום" marker on the fixed-expenses tile.
+    const fixedMarker = document.getElementById('fixed-mtd-marker');
+    if (fixedMarker) fixedMarker.style.display = isMtd ? 'inline-block' : 'none';
+
+    // Segmented toggle in the profit tile header: current month only.
     const toggleWrap = document.getElementById('pl-mode-toggle');
     if (toggleWrap) {
         toggleWrap.style.display = d.mtd_applicable ? 'inline-flex' : 'none';
-        const fullBtn = document.getElementById('pl-mode-full');
-        const mtdBtn = document.getElementById('pl-mode-mtd');
-        const active = isMtd ? mtdBtn : fullBtn;
-        const inactive = isMtd ? fullBtn : mtdBtn;
-        if (active && inactive) {
-            active.classList.add('pl-mode-active');
-            inactive.classList.remove('pl-mode-active');
-        }
+        document.getElementById('pl-mode-full').classList.toggle('active', !isMtd);
+        document.getElementById('pl-mode-mtd').classList.toggle('active', isMtd);
     }
 }
 
