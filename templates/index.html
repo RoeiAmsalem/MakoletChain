@@ -7,6 +7,22 @@
     html { overflow-x: clip; max-width: 100vw; }
     body { overflow-x: clip; max-width: 100vw; }
 
+    /* Shared segmented-control style for the top control row: the existing
+       "תצוגה על סניף / כל הרשת" pill and the "חודש מלא / עד היום" pill use the
+       SAME classes so they always match. Values mirror the original inline pill. */
+    .seg-control {
+        display: inline-flex; background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 999px;
+        padding: 4px; gap: 4px;
+    }
+    .seg-btn {
+        background: transparent; color: #cbd5e1; border: none; border-radius: 999px;
+        padding: 6px 18px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+        font-family: inherit; white-space: nowrap;
+        transition: background 0.15s, color 0.15s;
+    }
+    .seg-btn.active { background: #6366f1; color: #fff; }
+
     /* Electricity strip state styling */
     .electricity-strip[data-source="real"]     { border-inline-start: 3px solid transparent; }
     .electricity-strip[data-source="estimate"] { border-inline-start: 3px solid #D97706; }
@@ -49,6 +65,10 @@
     @media (max-width: 768px) {
         .mobile-view-toggle { display: flex !important; }
 
+        /* Top control row: two segmented pills wrap cleanly, compact buttons */
+        .top-controls { gap: 0.5rem !important; }
+        .seg-btn { padding: 6px 14px !important; font-size: 0.8rem !important; }
+
         /* KPI grid — 2 columns on mobile */
         .cards-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 0.5rem; }
         .kpi-card { padding: 0.75rem !important; }
@@ -88,17 +108,18 @@
 
 {% block content %}
 
-{% if session.get('user_role') in ('admin', 'ceo') %}
-<section class="view-toggle" style="display:flex;justify-content:center;margin-bottom:1rem;">
-    <div style="display:inline-flex;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:999px;padding:4px;gap:4px;">
-        <button type="button" onclick="setViewMode('branch')"
-            style="background:#6366f1;color:#fff;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
-            תצוגה על סניף
-        </button>
-        <button type="button" onclick="setViewMode('network')"
-            style="background:transparent;color:#cbd5e1;border:none;border-radius:999px;padding:6px 18px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:inherit;">
-            תצוגה על כל הרשת
-        </button>
+<!-- Top control row: view-toggle (admin/ceo only) + P/L compute-mode toggle, side
+     by side as matching segmented siblings. -->
+<section class="top-controls" style="display:flex;justify-content:center;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+    {% if session.get('user_role') in ('admin', 'ceo') %}
+    <div class="seg-control view-toggle">
+        <button type="button" class="seg-btn active" onclick="setViewMode('branch')">תצוגה על סניף</button>
+        <button type="button" class="seg-btn" onclick="setViewMode('network')">תצוגה על כל הרשת</button>
+    </div>
+    {% endif %}
+    <div id="pl-mode-toggle" class="seg-control" style="display:none;">
+        <button type="button" id="pl-mode-full" class="seg-btn active" onclick="setPLMode('full')">חודש מלא</button>
+        <button type="button" id="pl-mode-mtd" class="seg-btn" onclick="setPLMode('mtd')">עד היום</button>
     </div>
 </section>
 <script>
@@ -113,7 +134,6 @@ async function setViewMode(mode) {
     } catch (e) { /* no-op */ }
 }
 </script>
-{% endif %}
 
 <!-- KPI Cards -->
 <section class="cards-grid" id="kpi-section">
@@ -175,6 +195,7 @@ async function setViewMode(mode) {
         <div class="kpi-header">
             <span class="kpi-icon">🏠</span>
             <span class="kpi-label">הוצאות קבועות</span>
+            <span id="fixed-mtd-marker" style="display:none; margin-inline-start:auto; font-size:0.62rem; font-weight:700; color:#c7d2fe; background:rgba(99,102,241,0.18); border:1px solid rgba(99,102,241,0.4); border-radius:999px; padding:2px 8px; letter-spacing:0;">עד היום</span>
         </div>
         <span class="kpi-value fixed" id="fixed-value">₪ 0.00</span>
         <div id="fixed-elec-sub" style="font-size:0.78rem; color:rgba(241,245,249,0.55); margin-top:3px;"></div>
@@ -377,27 +398,19 @@ async function loadSummary() {
         const res = await fetch(`/api/summary?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
+        lastSummary = d;
         const income = d.income || 0;
         const goods = d.goods || 0;
-        const fixed = d.fixed || 0;
         const salary = d.salary || 0;
-        const profit = d.profit || 0;
 
         document.getElementById('income-value').textContent = formatMoney(income);
         document.getElementById('goods-value').textContent = formatMoney(goods);
-        document.getElementById('fixed-value').textContent = formatMoney(fixed);
         document.getElementById('salary-value').textContent = formatMoney(salary);
 
-        // Electricity subtitle on orange tile
-        const elecSub = document.getElementById('fixed-elec-sub');
+        // Fixed-expenses tile + profit tile depend on the חודש מלא / עד היום mode.
+        renderPLMode();
+
         const elec = d.electricity;
-        if (elec && elec.source !== 'none' && elec.source !== 'manual_missing' && elec.amount > 0) {
-            const prefix = elec.source === 'estimate' ? 'כולל ~' : 'כולל ';
-            const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : (elec.source === 'manual' ? ' חשמל (ידני)' : ' חשמל');
-            elecSub.textContent = prefix + formatMoney(elec.amount) + suffix;
-        } else {
-            elecSub.textContent = '';
-        }
 
         // Electricity strip — state-driven rendering
         const strip = document.getElementById('elec-strip');
@@ -459,32 +472,78 @@ async function loadSummary() {
             liveSub.textContent = '';
         }
 
-        // Color the profit tile green/red
-        document.getElementById('profit-value').textContent = formatMoney(profit);
-        const profitTile = document.getElementById('profit-tile');
-        const profitValue = document.getElementById('profit-value');
-        if (profit >= 0) {
-            profitTile.className = 'kpi-card kpi-card--profit';
-            profitValue.className = 'kpi-value profit';
-        } else {
-            profitTile.className = 'kpi-card kpi-card--loss';
-            profitValue.className = 'kpi-value loss';
-        }
-
-        // Profitability pill
-        const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
-        document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
-        const badge = document.getElementById('profit-pct-badge');
-        badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
-        badge.style.color = pct >= 0 ? '#052e16' : '#fff';
-        const today = new Date();
-        const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
-        const dayOfMonth = today.getDate();
-        document.getElementById('profit-month-sub').textContent = 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
-        document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
-
     } catch (err) {
         console.error('summary:', err);
+    }
+}
+
+// P/L compute-mode toggle: 'full' (חודש מלא, default — unchanged behavior) or
+// 'mtd' (עד היום — pro-rated fixed + recomputed profit). Only the הוצאות קבועות
+// and רווח tiles change; income/goods/salary are identical in both modes.
+let plMode = 'full';
+let lastSummary = null;
+
+function setPLMode(mode) {
+    plMode = mode;
+    renderPLMode();
+}
+
+function renderPLMode() {
+    const d = lastSummary;
+    if (!d) return;
+    const income = d.income || 0;
+    const isMtd = plMode === 'mtd' && d.mtd_applicable;
+    const fixed = isMtd ? (d.fixed_mtd || 0) : (d.fixed || 0);
+    const profit = isMtd ? (d.profit_mtd || 0) : (d.profit || 0);
+    const elec = d.electricity;
+    const elecAmount = isMtd ? (d.electricity_mtd || 0) : (elec ? elec.amount : 0);
+
+    // Fixed-expenses tile
+    document.getElementById('fixed-value').textContent = formatMoney(fixed);
+    const elecSub = document.getElementById('fixed-elec-sub');
+    if (elec && elec.source !== 'none' && elec.source !== 'manual_missing' && elecAmount > 0) {
+        const prefix = elec.source === 'estimate' ? 'כולל ~' : 'כולל ';
+        const suffix = elec.source === 'estimate' ? ' חשמל (משוער)' : (elec.source === 'manual' ? ' חשמל (ידני)' : ' חשמל');
+        elecSub.textContent = prefix + formatMoney(elecAmount) + suffix;
+    } else {
+        elecSub.textContent = '';
+    }
+
+    // Profit tile color
+    document.getElementById('profit-value').textContent = formatMoney(profit);
+    const profitTile = document.getElementById('profit-tile');
+    const profitValue = document.getElementById('profit-value');
+    if (profit >= 0) {
+        profitTile.className = 'kpi-card kpi-card--profit';
+        profitValue.className = 'kpi-value profit';
+    } else {
+        profitTile.className = 'kpi-card kpi-card--loss';
+        profitValue.className = 'kpi-value loss';
+    }
+
+    // Profitability pill
+    const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
+    document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
+    const badge = document.getElementById('profit-pct-badge');
+    badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
+    badge.style.color = pct >= 0 ? '#052e16' : '#fff';
+    const today = new Date();
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
+    const dayOfMonth = today.getDate();
+    document.getElementById('profit-month-sub').textContent =
+        (isMtd ? 'עד היום · ' : '') + 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
+    document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
+
+    // Subtle "עד היום" marker on the fixed-expenses tile.
+    const fixedMarker = document.getElementById('fixed-mtd-marker');
+    if (fixedMarker) fixedMarker.style.display = isMtd ? 'inline-block' : 'none';
+
+    // Segmented toggle in the profit tile header: current month only.
+    const toggleWrap = document.getElementById('pl-mode-toggle');
+    if (toggleWrap) {
+        toggleWrap.style.display = d.mtd_applicable ? 'inline-flex' : 'none';
+        document.getElementById('pl-mode-full').classList.toggle('active', !isMtd);
+        document.getElementById('pl-mode-mtd').classList.toggle('active', isMtd);
     }
 }
 

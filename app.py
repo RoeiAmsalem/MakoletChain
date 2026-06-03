@@ -1279,7 +1279,11 @@ def api_summary():
             'income': 0, 'goods': 0, 'fixed': 0, 'fixed_only': 0,
             'electricity': {'amount': 0, 'source': 'none', 'estimate_basis': None},
             'salary': 0, 'salary_source': 'none', 'salary_label': '',
-            'profit': 0, 'live': None, 'has_z': False, 'live_amount_today': 0,
+            'profit': 0,
+            'fixed_mtd': 0, 'fixed_only_mtd': 0, 'electricity_mtd': 0,
+            'profit_mtd': 0, 'mtd_applicable': False,
+            'days_elapsed': None, 'days_in_month': None,
+            'live': None, 'has_z': False, 'live_amount_today': 0,
             'branch_id': branch_id, 'month': month,
             'cancellation_total': 0, 'discount_total': 0,
             'running_total': 0, 'running_count': 0,
@@ -1354,11 +1358,28 @@ def api_summary():
     else:
         live_row = None
 
+    # "עד היום" (month-to-date) proration factor — current month only. For a past
+    # month the toggle is irrelevant, so mtd values mirror the full-month values.
+    now_il = _now_il()
+    mtd_applicable = (month == current_month)
+    if mtd_applicable:
+        days_elapsed = now_il.day
+        days_in_month = calendar.monthrange(now_il.year, now_il.month)[1]
+        mtd_factor = days_elapsed / days_in_month
+    else:
+        days_elapsed = None
+        days_in_month = None
+        mtd_factor = None
+
     # Fixed expenses (% rows computed live from final income) + electricity
-    fixed_data = _get_fixed_total(branch_id, month, income, db)
+    fixed_data = _get_fixed_total(branch_id, month, income, db, mtd_factor=mtd_factor)
     fixed = fixed_data['total']
+    fixed_mtd = fixed_data.get('total_mtd', fixed)
+    fixed_only_mtd = fixed_data.get('fixed_only_mtd', fixed_data['fixed_only'])
+    electricity_mtd = fixed_data.get('electricity_mtd', fixed_data['electricity']['amount'])
 
     profit = income - goods - fixed - salary
+    profit_mtd = income - goods - fixed_mtd - salary
 
     live = None
     cancellation_total = 0
@@ -1427,6 +1448,14 @@ def api_summary():
         'salary_source': salary_data['source'],
         'salary_label': salary_data['label'],
         'profit': profit,
+        # "עד היום" (month-to-date) mode — pro-rated fixed + recomputed profit.
+        'fixed_mtd': fixed_mtd,
+        'fixed_only_mtd': fixed_only_mtd,
+        'electricity_mtd': electricity_mtd,
+        'profit_mtd': profit_mtd,
+        'mtd_applicable': mtd_applicable,
+        'days_elapsed': days_elapsed,
+        'days_in_month': days_in_month,
         'live': live,
         'has_z': has_z,
         'live_amount_today': live_amount_today,
@@ -3160,27 +3189,44 @@ def get_branch_start_month(branch_id: int, db=None) -> tuple:
     return (y, m)
 
 
-def _get_fixed_total(branch_id: int, month: str, income: float, db) -> dict:
+def _get_fixed_total(branch_id: int, month: str, income: float, db, mtd_factor: float = None) -> dict:
     """Sum fixed expenses for a branch+month. % rows calculated live from income.
-    Returns dict: {fixed_only, electricity: {amount, source, estimate_basis}, total}"""
+    Returns dict: {fixed_only, electricity: {amount, source, estimate_basis}, total}.
+
+    When `mtd_factor` is given (days_elapsed / days_in_month, current month only),
+    also returns the "עד היום" (month-to-date) variant keys
+    {fixed_only_mtd, electricity_mtd, total_mtd}: truly-monthly fixed rows and the
+    monthly electricity estimate are pro-rated by the factor; one-time (חד פעמי)
+    rows and % מהכנסות rows (e.g. franchise זיכיונות, already actual MTD) are NOT
+    pro-rated. The default keys are unchanged regardless of mtd_factor."""
     rows = db.execute(
-        'SELECT amount, pct_value FROM fixed_expenses WHERE branch_id=? AND month=?',
+        'SELECT amount, pct_value, expense_type FROM fixed_expenses WHERE branch_id=? AND month=?',
         (branch_id, month)
     ).fetchall()
-    fixed_sum = 0
+    monthly_fixed = 0.0   # חודשי fixed-amount rows → pro-ratable in MTD mode
+    other_fixed = 0.0     # חד פעמי + % מהכנסות rows → never pro-rated (already actual)
     for r in rows:
         if r['pct_value'] and r['pct_value'] > 0:
-            fixed_sum += income * r['pct_value'] / 100
+            other_fixed += income * r['pct_value'] / 100
+        elif r['expense_type'] == 'monthly':
+            monthly_fixed += r['amount']
         else:
-            fixed_sum += r['amount']
-    fixed_sum = round(fixed_sum, 2)
+            other_fixed += r['amount']
+    fixed_sum = round(monthly_fixed + other_fixed, 2)
     y, m = map(int, month.split('-'))
     elec = get_electricity_for_month(branch_id, y, m, db)
-    return {
+    result = {
         'fixed_only': fixed_sum,
         'electricity': elec,
         'total': round(fixed_sum + elec['amount'], 2),
     }
+    if mtd_factor is not None:
+        elec_mtd = round(elec['amount'] * mtd_factor, 2)
+        fixed_only_mtd = round(monthly_fixed * mtd_factor + other_fixed, 2)
+        result['fixed_only_mtd'] = fixed_only_mtd
+        result['electricity_mtd'] = elec_mtd
+        result['total_mtd'] = round(fixed_only_mtd + elec_mtd, 2)
+    return result
 
 
 def _ensure_monthly_expenses(branch_id: int, month: str, db):
