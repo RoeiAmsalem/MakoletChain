@@ -3522,7 +3522,7 @@ def api_pending_add_new(pending_id):
     csv_name = (row['csv_name'] or '').strip()
 
     sibling_rows = db.execute(
-        "SELECT id, month, hours FROM employee_match_pending "
+        "SELECT id, month, hours, shifts_json FROM employee_match_pending "
         "WHERE branch_id=? AND csv_name=? AND COALESCE(source,'csv')=? AND resolved=0",
         (branch_id, csv_name, source)).fetchall()
     if not sibling_rows:
@@ -3556,6 +3556,45 @@ def api_pending_add_new(pending_id):
             db.execute(
                 'INSERT OR IGNORE INTO employee_aliases (employee_id, alias_name, branch_id) VALUES (?, ?, ?)',
                 (new_emp_id, name, branch_id))
+
+    # Write per-shift drill-down INSTANTLY from the shifts cached on the pending
+    # rows (migration 026) so פירוט משמרות shows on the spot — no nightly wait, no
+    # network call. source='aviv_report' is the exact key the nightly full-overwrite
+    # deletes, so a later re-pull reconciles to identical rows (no orphans/dupes).
+    # Isolated: a failure here must not fail the add (hours are already promoted).
+    try:
+        from agents.aviv_employees_report import write_employee_shifts
+        try:
+            from agents.shift_classify import load_shabbat_windows
+            shabbat_windows = load_shabbat_windows(db)
+        except Exception:
+            shabbat_windows = []
+        is_global = (salary_type == 'global')
+        for sib in sibling_rows:
+            try:
+                sj = sib['shifts_json']
+            except (IndexError, KeyError):
+                sj = None
+            if not sj:
+                continue
+            try:
+                shifts = json.loads(sj)
+            except (TypeError, ValueError):
+                continue
+            if not shifts:
+                continue
+            sib_month = sib['month']
+            # Idempotent: clear any prior aviv_report shifts for this name+month first.
+            db.execute(
+                "DELETE FROM employee_shifts WHERE branch_id=? AND month=? "
+                "AND employee_name=? AND source='aviv_report'",
+                (branch_id, sib_month, name))
+            write_employee_shifts(db, branch_id, sib_month, name, shifts,
+                                  classify=True, is_global=is_global,
+                                  shabbat_windows=shabbat_windows, source='aviv_report')
+    except Exception as e:
+        app.logger.warning("instant shift write failed for %s (branch %s): %s",
+                           name, branch_id, e)
 
     _recalculate_avg_rate(branch_id, db)
     db.commit()

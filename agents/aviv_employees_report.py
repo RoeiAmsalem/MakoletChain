@@ -15,6 +15,7 @@ Schedule (wired in scheduler.py):
 Each scheduled run does a full overwrite for source='aviv_report' rows.
 """
 
+import json
 import logging
 import os
 import re
@@ -351,6 +352,55 @@ def parse_employer_report(xls_bytes: bytes) -> list[dict]:
     return results
 
 
+def write_employee_shifts(conn, branch_id: int, month: str, employee_name: str,
+                          shifts: list, *, classify: bool = True,
+                          is_global: bool = False, shabbat_windows=None,
+                          has_buckets=None, source: str = 'aviv_report') -> int:
+    """Insert per-shift drill-down rows for ONE employee under `employee_name`.
+
+    Shared by the report agent (matched path) and api_pending_add_new (instant
+    write on add). Does NOT delete first — the caller controls overwrite scope.
+    Classifies in place (regular/overtime/Shabbat) when the buckets columns exist
+    and classify=True. `source` MUST stay 'aviv_report' so the nightly
+    full-overwrite (DELETE per branch+month+source) reconciles to identical rows.
+    Returns the number of shift rows written.
+    """
+    if not shifts:
+        return 0
+    if has_buckets is None:
+        has_buckets = _table_has_column(conn, 'employee_shifts', 'regular_hours')
+    if classify and has_buckets:
+        from agents.shift_classify import classify_shifts
+        classify_shifts(shifts, shabbat_windows or [], is_global=is_global)
+    n = 0
+    for sh in shifts:
+        if has_buckets:
+            conn.execute('''
+                INSERT INTO employee_shifts
+                (branch_id, month, employee_name, shift_date, start_ts, end_ts,
+                 hours, day_of_week, is_open, source,
+                 regular_hours, overtime_hours, shabbat_hours)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (branch_id, month, employee_name, sh.get('shift_date'),
+                  sh.get('start_ts'), sh.get('end_ts'),
+                  round(float(sh.get('hours') or 0), 4), sh.get('day_of_week'),
+                  1 if sh.get('is_open') else 0, source,
+                  sh.get('regular_hours'), sh.get('overtime_hours'),
+                  sh.get('shabbat_hours')))
+        else:
+            conn.execute('''
+                INSERT INTO employee_shifts
+                (branch_id, month, employee_name, shift_date, start_ts, end_ts,
+                 hours, day_of_week, is_open, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (branch_id, month, employee_name, sh.get('shift_date'),
+                  sh.get('start_ts'), sh.get('end_ts'),
+                  round(float(sh.get('hours') or 0), 4), sh.get('day_of_week'),
+                  1 if sh.get('is_open') else 0, source))
+        n += 1
+    return n
+
+
 def _table_has_column(conn, table: str, column: str) -> bool:
     """True if `table` has `column` (used to gate migration-023 bucket writes)."""
     try:
@@ -454,38 +504,13 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
 
             # Write this employee's shift rows under the same canonical db_name
             # so /api/employee-shifts can join on employee_hours.employee_name.
+            # Shared helper — same code path the instant add-from-pending write uses.
             if shifts_table_exists:
-                emp_shifts = row.get('shifts', [])
-                if shifts_have_buckets:
-                    from agents.shift_classify import classify_shifts
-                    classify_shifts(emp_shifts, shabbat_windows,
-                                    is_global=global_by_id.get(emp_id, False))
-                for sh in emp_shifts:
-                    if shifts_have_buckets:
-                        conn.execute('''
-                            INSERT INTO employee_shifts
-                            (branch_id, month, employee_name, shift_date, start_ts,
-                             end_ts, hours, day_of_week, is_open, source,
-                             regular_hours, overtime_hours, shabbat_hours)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report', ?, ?, ?)
-                        ''', (branch_id, month, db_name, sh.get('shift_date'),
-                              sh.get('start_ts'), sh.get('end_ts'),
-                              round(float(sh.get('hours') or 0), 4),
-                              sh.get('day_of_week'),
-                              1 if sh.get('is_open') else 0,
-                              sh.get('regular_hours'), sh.get('overtime_hours'),
-                              sh.get('shabbat_hours')))
-                    else:
-                        conn.execute('''
-                            INSERT INTO employee_shifts
-                            (branch_id, month, employee_name, shift_date, start_ts,
-                             end_ts, hours, day_of_week, is_open, source)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'aviv_report')
-                        ''', (branch_id, month, db_name, sh.get('shift_date'),
-                              sh.get('start_ts'), sh.get('end_ts'),
-                              round(float(sh.get('hours') or 0), 4),
-                              sh.get('day_of_week'),
-                              1 if sh.get('is_open') else 0))
+                write_employee_shifts(
+                    conn, branch_id, month, db_name, row.get('shifts', []),
+                    classify=True, is_global=global_by_id.get(emp_id, False),
+                    shabbat_windows=shabbat_windows, has_buckets=shifts_have_buckets,
+                    source='aviv_report')
         else:
             unmatched += 1
             # Store the suffix-stripped name so pending rows match what the
@@ -496,18 +521,21 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
                 '''SELECT id FROM employee_match_pending
                    WHERE branch_id=? AND month=? AND csv_name=? AND resolved=0''',
                 (branch_id, month, stored_name)).fetchone()
+            # RAW shift list (pre-classification) carried on the pending row so the
+            # add-from-pending path can write employee_shifts INSTANTLY (migration 026).
+            shifts_payload = json.dumps(row.get('shifts') or [], ensure_ascii=False)
             if not existing:
                 is_new = 1 if emp_id is None else 0
                 try:
                     conn.execute('''
                         INSERT INTO employee_match_pending
                         (branch_id, month, csv_name, aviv_employee_id, suggested_employee_id,
-                         confidence, hours, salary, source, is_new_employee)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'aviv_report', ?)
+                         confidence, hours, salary, source, is_new_employee, shifts_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'aviv_report', ?, ?)
                     ''', (branch_id, month, stored_name, aviv_emp_id, emp_id, confidence,
-                          round(hours, 2), is_new))
+                          round(hours, 2), is_new, shifts_payload))
                 except sqlite3.OperationalError:
-                    # Schema variant — fall back to minimal insert
+                    # Schema variant (pre-026) — fall back to minimal insert
                     conn.execute('''
                         INSERT INTO employee_match_pending
                         (branch_id, month, csv_name, suggested_employee_id,
@@ -516,9 +544,16 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
                     ''', (branch_id, month, stored_name, emp_id, confidence,
                           round(hours, 2)))
             else:
-                conn.execute(
-                    'UPDATE employee_match_pending SET hours=?, aviv_employee_id=COALESCE(?, aviv_employee_id) WHERE id=?',
-                    (round(hours, 2), aviv_emp_id, existing[0]))
+                try:
+                    conn.execute(
+                        'UPDATE employee_match_pending SET hours=?, '
+                        'aviv_employee_id=COALESCE(?, aviv_employee_id), shifts_json=? WHERE id=?',
+                        (round(hours, 2), aviv_emp_id, shifts_payload, existing[0]))
+                except sqlite3.OperationalError:
+                    conn.execute(
+                        'UPDATE employee_match_pending SET hours=?, '
+                        'aviv_employee_id=COALESCE(?, aviv_employee_id) WHERE id=?',
+                        (round(hours, 2), aviv_emp_id, existing[0]))
 
     conn.commit()
 
