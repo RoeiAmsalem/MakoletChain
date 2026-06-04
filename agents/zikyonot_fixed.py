@@ -161,10 +161,11 @@ def run_zikyonot_fixed(branch_id: int, year: int = None, month: int = None) -> d
 
     try:
         conn = _get_db()
-        branch = conn.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
+        row = conn.execute('SELECT * FROM branches WHERE id=?', (branch_id,)).fetchone()
         conn.close()
-        if not branch:
+        if not row:
             raise ValueError(f"branch {branch_id} not found")
+        branch = dict(row)
         bb_id = branch['bilboy_branch_id']
         if not bb_id:
             raise ValueError(f"branch {branch_id} has no bilboy_branch_id")
