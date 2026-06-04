@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}פריטי זיכיונות לא מזוהים — קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    .fc-wrap { max-width: 1100px; margin: 0 auto; padding: 1.25rem 1rem; }
+    .fc-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin: 0; }
+    .fc-subtitle { font-size: 0.82rem; color: var(--text-secondary); margin: 0.2rem 0 1rem; }
+
+    .fc-summary {
+        display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.6rem; margin-bottom: 1rem;
+    }
+    .fc-card {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); padding: 0.7rem 0.85rem;
+    }
+    .fc-card-label {
+        font-size: 0.72rem; color: var(--text-secondary); font-weight: 600;
+        margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.4px;
+    }
+    .fc-card-value { font-size: 1.4rem; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+    .fc-card.pending .fc-card-value { color: #fcd34d; }
+    .fc-card.ignored .fc-card-value { color: var(--text-secondary); }
+
+    .fc-table-card {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+    }
+    .fc-scroll { overflow-x: auto; }
+    .fc-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    .fc-table thead th {
+        text-align: right; padding: 0.7rem 0.85rem; background: rgba(255,255,255,0.03);
+        color: var(--text-secondary); font-weight: 700; font-size: 0.72rem;
+        text-transform: uppercase; letter-spacing: 0.4px;
+        border-bottom: 1px solid var(--card-border); white-space: nowrap;
+    }
+    .fc-table tbody td { padding: 0.65rem 0.85rem; border-bottom: 1px solid rgba(148,163,184,0.08); color: var(--text-primary); }
+    .fc-table tbody tr:last-child td { border-bottom: none; }
+    .fc-table .num { font-variant-numeric: tabular-nums; direction: ltr; text-align: right; }
+    .fc-table tr.done td { opacity: 0.5; }
+
+    .fc-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; white-space: nowrap; }
+    .fc-pill.pending { background: rgba(217,119,6,0.2); color: #fcd34d; }
+    .fc-pill.classified { background: rgba(34,197,94,0.18); color: #86efac; }
+    .fc-pill.ignored { background: rgba(148,163,184,0.18); color: #cbd5e1; }
+
+    .fc-btn {
+        background: rgba(255,255,255,0.06); border: 1px solid var(--card-border);
+        border-radius: 6px; padding: 0.3rem 0.6rem; color: var(--text-primary);
+        font-size: 0.76rem; cursor: pointer; font-family: inherit; margin-inline-start: 0.3rem;
+    }
+    .fc-btn:hover { background: rgba(255,255,255,0.12); }
+    .fc-empty { text-align: center; padding: 2.5rem; color: var(--text-muted); font-style: italic; }
+    .fc-note { font-size: 0.76rem; color: var(--text-muted); margin-top: 0.7rem; font-style: italic; }
+    @media (max-width: 768px) {
+        .fc-wrap { padding: 0.75rem; } .fc-summary { grid-template-columns: repeat(2, 1fr); }
+        .fc-table { font-size: 0.8rem; } .fc-table thead th, .fc-table tbody td { padding: 0.5rem 0.55rem; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fc-wrap">
+    <h1 class="fc-title">פריטי זיכיונות לא מזוהים</h1>
+    <div class="fc-subtitle">
+        חיובים מספק הזיכיון שהסוכן לא זיהה — מוצגים כאן כדי שלא ייעלמו בשקט.
+        לא נוספים אוטומטית להוצאות או לסחורה. סמן "טופל"/"התעלם" אחרי בדיקה.
+    </div>
+
+    <div class="fc-summary">
+        <div class="fc-card pending"><div class="fc-card-label">ממתינים</div><div class="fc-card-value">{{ summary.pending }}</div></div>
+        <div class="fc-card"><div class="fc-card-label">טופלו</div><div class="fc-card-value">{{ summary.classified }}</div></div>
+        <div class="fc-card ignored"><div class="fc-card-label">התעלמו</div><div class="fc-card-value">{{ summary.ignored }}</div></div>
+        <div class="fc-card"><div class="fc-card-label">סה"כ</div><div class="fc-card-value">{{ summary.total }}</div></div>
+    </div>
+
+    <div class="fc-table-card">
+        <div class="fc-scroll">
+            <table class="fc-table">
+                <thead>
+                    <tr>
+                        <th>סניף</th><th>חודש</th><th>פריט</th><th>סכום</th>
+                        <th>מסמך</th><th>נראה לראשונה</th><th>סטטוס</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for it in items %}
+                    <tr id="fc-row-{{ it.id }}" class="{% if it.status != 'pending' %}done{% endif %}">
+                        <td>{{ it.branch_name or it.branch_id }}</td>
+                        <td class="num">{{ it.month }}</td>
+                        <td>{{ it.item_name }}</td>
+                        <td class="num">{% if it.amount is not none %}₪{{ '%.2f'|format(it.amount) }}{% else %}—{% endif %}</td>
+                        <td class="num">{{ it.doc_ref or '—' }}</td>
+                        <td class="num">{{ it.first_seen_il or it.first_seen }}</td>
+                        <td><span class="fc-pill {{ it.status }}" id="fc-pill-{{ it.id }}">{{ it.status }}</span></td>
+                        <td>
+                            <button class="fc-btn" onclick="fcSet({{ it.id }}, 'classified')">טופל</button>
+                            <button class="fc-btn" onclick="fcSet({{ it.id }}, 'ignored')">התעלם</button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="8" class="fc-empty">אין פריטים לא מזוהים — הכל זוהה ונקלט.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="fc-note">
+        מקור: הסוכן <code>zikyonot_fixed</code> רושם כאן כל שורת חיוב מספק הזיכיון שאינה תואמת פריט מוכר.
+        כל פריט חדש מפעיל התראה. סימון כאן הוא לתיעוד בלבד בשלב זה.
+    </div>
+</div>
+
+<script>
+function fcSet(id, status) {
+    fetch('/api/admin/franchise-classifier/' + id, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status: status})
+    }).then(r => r.json()).then(d => {
+        if (d.ok) {
+            const pill = document.getElementById('fc-pill-' + id);
+            pill.textContent = status;
+            pill.className = 'fc-pill ' + status;
+            document.getElementById('fc-row-' + id).classList.add('done');
+        } else {
+            alert('שגיאה: ' + (d.error || 'unknown'));
+        }
+    }).catch(e => alert('שגיאה: ' + e));
+}
+</script>
+{% endblock %}

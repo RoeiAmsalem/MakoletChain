@@ -58,6 +58,7 @@
             {% if session.get('user_role') == 'admin' %}
             <li><a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a></li>
             <li><a href="/z-status" class="{% if active_page == 'z_status' %}active{% endif %}">סטטוס Z</a></li>
+            <li><a href="/admin/franchise-classifier" class="{% if active_page == 'franchise_classifier' %}active{% endif %}">זיכיונות</a></li>
             <li><a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">ניהול</a></li>
             {% endif %}
         </ul>
@@ -109,6 +110,7 @@
         {% if session.get('user_role') == 'admin' %}
         <a href="/ops" class="{% if active_page == 'ops' %}active{% endif %}">בקרה</a>
         <a href="/z-status" class="{% if active_page == 'z_status' %}active{% endif %}">סטטוס Z</a>
+        <a href="/admin/franchise-classifier" class="{% if active_page == 'franchise_classifier' %}active{% endif %}">זיכיונות</a>
         <a href="/admin/branches" class="{% if active_page == 'admin' %}active{% endif %}">ניהול</a>
         {% endif %}
         <a href="#" id="pwa-install-menu-item" role="button" style="min-height:40px;align-items:center;gap:8px;">
