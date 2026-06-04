@@ -210,6 +210,16 @@ def run_zikyonot_fixed(branch_id: int, year: int = None, month: int = None) -> d
         for d in docs:
             did = d.get('id')
             ref = d.get('refNumber') or d.get('number')
+            # Fees/rent/royalty are invoices (type=3) or credits (type=4). Goods
+            # from the franchise arrive as delivery notes (type=2) whose line
+            # items carry no barcode — scanning them would mis-flag every product
+            # as "ambiguous". Restrict the fixed-expense scan to invoices/credits.
+            try:
+                dtype = int(d.get('type'))
+            except (TypeError, ValueError):
+                dtype = None
+            if dtype not in (3, 4):
+                continue
             # per-doc VAT rate from header totals (lines here are net `total`)
             twv = float(d.get('totalWithVat') or 0)
             two = float(d.get('totalWithoutVat') or 0)
