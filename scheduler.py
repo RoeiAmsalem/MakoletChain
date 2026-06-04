@@ -111,6 +111,7 @@ def nightly_sync():
     """Nightly 02:00 IL — run bilboy + gmail_sync for all active branches."""
     from agents.bilboy import run_bilboy
     from agents.gmail_agent import run_gmail_sync
+    from agents.zikyonot_fixed import run_zikyonot_fixed, SCOPE_BRANCHES
     from utils.notify import batch_start, batch_flush
 
     branches = get_active_branches()
@@ -128,6 +129,15 @@ def nightly_sync():
         except Exception as e:
             log.error("BilBoy branch %d failed: %s", bid, e)
             failed.add(bid)
+
+        # זiכ fixed-expense capture — ISOLATED from goods. Scope-guarded inside;
+        # any failure is swallowed so it can never affect the goods/gmail sync.
+        if bid in SCOPE_BRANCHES:
+            try:
+                zf = run_zikyonot_fixed(bid)
+                log.info("zik-fixed branch %d: %s", bid, zf)
+            except Exception as e:
+                log.error("zik-fixed branch %d failed (non-fatal): %s", bid, e)
 
         try:
             gm = run_gmail_sync(bid)
