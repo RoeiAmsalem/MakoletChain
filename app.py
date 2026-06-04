@@ -4206,6 +4206,55 @@ def admin_users():
                            **_page_context('admin'))
 
 
+@app.route('/admin/franchise-classifier')
+@_admin_required
+def admin_franchise_classifier():
+    """Read-only visibility of unrecognized franchise (זiכ) line items captured by
+    agents/zikyonot_fixed.py — so a new/unknown franchise charge is surfaced, never
+    silently dropped. Roei can mark items seen/ignored; routing into an expense/goods
+    type can come later. Reads only zik_unclassified + branches."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT z.id, z.branch_id, b.name AS branch_name, z.month, z.item_name, "
+        "       z.amount, z.doc_ref, z.first_seen, z.last_seen, z.status "
+        "FROM zik_unclassified z LEFT JOIN branches b ON b.id = z.branch_id "
+        "ORDER BY CASE z.status WHEN 'pending' THEN 0 WHEN 'classified' THEN 1 "
+        "         ELSE 2 END, z.last_seen DESC"
+    ).fetchall()
+    items = []
+    for r in rows:
+        d = dict(r)
+        d['first_seen_il'] = _utc_str_to_il_iso(r['first_seen'])
+        d['last_seen_il'] = _utc_str_to_il_iso(r['last_seen'])
+        items.append(d)
+    summary = {
+        'pending': sum(1 for r in items if r['status'] == 'pending'),
+        'classified': sum(1 for r in items if r['status'] == 'classified'),
+        'ignored': sum(1 for r in items if r['status'] == 'ignored'),
+        'total': len(items),
+    }
+    return render_template('franchise_classifier.html', items=items, summary=summary,
+                           **_page_context('franchise_classifier'))
+
+
+@app.route('/api/admin/franchise-classifier/<int:item_id>', methods=['POST'])
+@_admin_required
+def api_franchise_classifier_update(item_id):
+    """Mark an unrecognized franchise item seen (classified) / ignored / pending.
+    Visibility-only for now — does NOT route the item into fixed_expenses/goods."""
+    data = request.get_json(silent=True) or {}
+    status = (data.get('status') or '').strip()
+    if status not in ('pending', 'classified', 'ignored'):
+        return jsonify({'error': 'invalid status'}), 400
+    db = get_db()
+    row = db.execute('SELECT id FROM zik_unclassified WHERE id=?', (item_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    db.execute('UPDATE zik_unclassified SET status=? WHERE id=?', (status, item_id))
+    db.commit()
+    return jsonify({'ok': True})
+
+
 def _z_status_rows(db, target_date):
     """Build /z-status rows: one per active branch with aviv_branch_id,
     joined LEFT to z_report_902 for target_date. Sorted by local branch id.
