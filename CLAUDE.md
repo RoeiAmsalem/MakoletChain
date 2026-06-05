@@ -670,6 +670,21 @@ AVIV_Z_TO_DAILY_SALES=1   # mirror 902 Z totals into daily_sales (INSERT OR IGNO
   startup" nightly for the ~16 chain stores. Cosmetic; deferred.
 - Branch 9011 (ויצמן): zero `goods_documents` while all other stores have data
   — BilBoy goods sync broken for this branch; needs investigation.
+- **Per-branch Z/301 give-up has no alert** (FOLLOW-UP 2026-06-06): when a single
+  branch's report-902 Z or report-301 employer pull fails repeatedly for a full
+  day, nothing fires brrr (brrr only alerts on auth/global failures, not a
+  per-branch transient give-up). A multi-day single-store gap goes unnoticed —
+  e.g. 9011 ויצמן June 3–5 2026, where Aviv's `reports/filters/902?branch=11`
+  (and 301) returned a persistent 404 for that one branch while live revenue kept
+  flowing. Build: alert when a branch's Z (or 301) fails repeatedly across a
+  whole day so single-store multi-day gaps surface.
+- Branch 9011 (ויצמן): Aviv BI **reporting** endpoints (`:8443 reports/*`, both
+  902 Z and 301 employer) returning persistent 404 for `aviv_branch_id=11` since
+  2026-06-03 → no daily Z / P&L revenue / employee hours for June 3+. Live POS
+  (`:65010 raw/status`) still works (store trading normally), so it's an
+  Aviv-side reporting-backend fault, not our config and not a closed store.
+  Nothing fixable our side; needs Aviv. Once their endpoint recovers, the
+  `--missing-only` backfill (02:00–09:00) pulls the missing days automatically.
 - Historical backfill Oct 2025 – Feb 2026 shows ₪0 (never imported).
 - `ADMIN_PASSWORD` still `12345` on prod — rotate this.
 - brrr free tier expires 2026-04-09; verify or replace before then.
