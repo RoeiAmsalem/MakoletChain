@@ -231,9 +231,15 @@ async function setViewMode(mode) {
     </div>
     <!-- Sales by Hour -->
     <div class="card chart-card" id="hourly-section" style="display:none; padding:1.25rem 1.25rem 1rem 1.25rem;">
-  <div style="margin-bottom:1.25rem;">
-    <h2 class="section-title" style="margin:0 0 0.25rem 0;">מכירות לפי שעות היום</h2>
-    <div style="font-size:0.85rem; color:#94a3b8;">מבוסס על נתוני החודש הנוכחי</div>
+  <div style="margin-bottom:1.25rem; display:flex; align-items:flex-start; justify-content:space-between; gap:0.75rem; flex-wrap:wrap;">
+    <div>
+      <h2 class="section-title" style="margin:0 0 0.25rem 0;">עומס לפי שעות היום</h2>
+      <div style="font-size:0.85rem; color:#94a3b8;">מבוסס על נתוני החודש הנוכחי</div>
+    </div>
+    <div class="seg-control" id="hourly-metric-toggle">
+      <button type="button" id="hourly-metric-sales" class="seg-btn active" onclick="setHourlyMetric('sales')">מכירות</button>
+      <button type="button" id="hourly-metric-tx" class="seg-btn" onclick="setHourlyMetric('transactions')">עסקאות</button>
+    </div>
   </div>
 
   <!-- 3 stat cards -->
@@ -581,12 +587,38 @@ async function loadHistory() {
 }
 
 let hourlyChartInstance = null;
+let lastHourlyData = null;       // cached API payload so the toggle re-renders with no refetch
+let hourlyMetric = 'sales';      // 'sales' (₪, default — identical to today) | 'transactions' (count)
+
 async function loadHourlyChart() {
   try {
     const resp = await fetch(`/api/sales-by-hour?month=${SELECTED_MONTH}&branch_id=${BRANCH_ID}`);
-    const data = await resp.json();
+    lastHourlyData = await resp.json();
+    renderHourlyChart();
+  } catch(e) {
+    console.error('hourly chart failed:', e);
+  }
+}
+
+// Flip chart + ranked table between ₪ sales and transaction count. Pure
+// client-side — both metrics are already in every bucket, so no server round-trip.
+function setHourlyMetric(mode) {
+  if (mode === hourlyMetric) return;
+  hourlyMetric = mode;
+  document.getElementById('hourly-metric-sales').classList.toggle('active', mode === 'sales');
+  document.getElementById('hourly-metric-tx').classList.toggle('active', mode === 'transactions');
+  if (lastHourlyData) renderHourlyChart();
+}
+
+function renderHourlyChart() {
+  try {
+    const data = lastHourlyData;
+    if (!data) return;
     const buckets = data.buckets || [];
     const stats = data.stats || {};
+    const hourly = data.hourly || [];
+    const isTx = hourlyMetric === 'transactions';
+    const valOf = b => isTx ? b.count : b.total;   // active metric per bucket
 
     if (!buckets.length || !buckets.some(b => b.total > 0)) return;
 
@@ -598,18 +630,33 @@ async function loadHourlyChart() {
 
     document.getElementById('hourly-section').style.display = 'block';
 
-    // Populate stat cards
-    document.getElementById('stat-peak-hours').textContent = stats.peak_bucket || '—';
-    document.getElementById('stat-peak-amount').textContent = stats.peak_total
-      ? '₪' + Math.round(stats.peak_total).toLocaleString() : '—';
-    document.getElementById('stat-quiet-hours').textContent = stats.quiet_bucket || '—';
-    document.getElementById('stat-quiet-amount').textContent = stats.quiet_total
-      ? '₪' + Math.round(stats.quiet_total).toLocaleString() : '—';
-    document.getElementById('stat-avg').textContent = stats.hourly_avg
-      ? '₪' + Math.round(stats.hourly_avg).toLocaleString() : '—';
+    // Stat cards — sales uses the server stats verbatim (unchanged default); the
+    // transactions view computes peak/quiet/avg by transaction count client-side.
+    if (isTx) {
+      const active = buckets.filter(b => b.count > 0);
+      const peak = active.length ? active.reduce((a, b) => b.count > a.count ? b : a) : null;
+      const quiet = active.length ? active.reduce((a, b) => b.count < a.count ? b : a) : null;
+      const activeHours = hourly.filter(h => h.count > 0).length;
+      const totalTx = buckets.reduce((s, b) => s + b.count, 0);
+      const avgTx = activeHours ? Math.round(totalTx / activeHours) : 0;
+      document.getElementById('stat-peak-hours').textContent = peak ? peak.label : '—';
+      document.getElementById('stat-peak-amount').textContent = peak ? peak.count.toLocaleString() + ' עסקאות' : '—';
+      document.getElementById('stat-quiet-hours').textContent = quiet ? quiet.label : '—';
+      document.getElementById('stat-quiet-amount').textContent = quiet ? quiet.count.toLocaleString() + ' עסקאות' : '—';
+      document.getElementById('stat-avg').textContent = avgTx ? avgTx.toLocaleString() + ' עסקאות' : '—';
+    } else {
+      document.getElementById('stat-peak-hours').textContent = stats.peak_bucket || '—';
+      document.getElementById('stat-peak-amount').textContent = stats.peak_total
+        ? '₪' + Math.round(stats.peak_total).toLocaleString() : '—';
+      document.getElementById('stat-quiet-hours').textContent = stats.quiet_bucket || '—';
+      document.getElementById('stat-quiet-amount').textContent = stats.quiet_total
+        ? '₪' + Math.round(stats.quiet_total).toLocaleString() : '—';
+      document.getElementById('stat-avg').textContent = stats.hourly_avg
+        ? '₪' + Math.round(stats.hourly_avg).toLocaleString() : '—';
+    }
 
     // 2-hour bucket chart — labels come pre-formatted with LTR mark from API
-    const maxVal = Math.max(...trimmed.map(b => b.total));
+    const maxVal = Math.max(...trimmed.map(b => valOf(b)));
     const labels = trimmed.map(b => {
       const parts = b.label.replace(/\u200e/g, '').split('-');
       return parts.length === 2 ? [parts[0].trim(), parts[1].trim()] : b.label;
@@ -622,15 +669,15 @@ async function loadHourlyChart() {
       data: {
         labels: labels,
         datasets: [{
-          label: 'הכנסות',
-          data: trimmed.map(b => b.total > 0 ? b.total : 1),
+          label: isTx ? 'עסקאות' : 'הכנסות',
+          data: trimmed.map(b => valOf(b) > 0 ? valOf(b) : 1),
           backgroundColor: trimmed.map(b => {
-            if (b.total === 0) return 'rgba(148,163,184,0.08)';
-            if (b.total === maxVal) return 'rgba(34,197,94,0.95)';
+            if (valOf(b) === 0) return 'rgba(148,163,184,0.08)';
+            if (valOf(b) === maxVal) return 'rgba(34,197,94,0.95)';
             return 'rgba(34,197,94,0.7)';
           }),
           borderColor: trimmed.map(b =>
-            b.total > 0 ? 'rgba(34,197,94,1)' : 'rgba(148,163,184,0.15)'
+            valOf(b) > 0 ? 'rgba(34,197,94,1)' : 'rgba(148,163,184,0.15)'
           ),
           borderWidth: isMobile() ? 0 : 1,
           borderRadius: 4,
@@ -643,14 +690,16 @@ async function loadHourlyChart() {
         afterDatasetsDraw(chart) {
           const {ctx: c} = chart;
           chart.data.datasets[0].data.forEach((v, i) => {
-            if (trimmed[i] && trimmed[i].total > 0) {
+            if (trimmed[i] && valOf(trimmed[i]) > 0) {
               const bar = chart.getDatasetMeta(0).data[i];
               c.save();
               c.fillStyle = '#f1f5f9';
               c.font = isMobile() ? 'bold 10px sans-serif' : 'bold 13px sans-serif';
               c.textAlign = 'center';
               c.textBaseline = 'bottom';
-              const label = v >= 1000 ? '₪' + (v/1000).toFixed(1) + 'K' : '₪' + Math.round(v);
+              const raw = valOf(trimmed[i]);
+              const label = isTx ? raw.toLocaleString()
+                : (raw >= 1000 ? '₪' + (raw/1000).toFixed(1) + 'K' : '₪' + Math.round(raw));
               c.fillText(label, bar.x, bar.y - 6);
               c.restore();
             }
@@ -710,7 +759,7 @@ async function loadHourlyChart() {
               display: !isMobile(),
               color: '#94a3b8',
               font: { size: 10 },
-              callback: v => '₪' + Math.round(v/1000) + 'K',
+              callback: v => isTx ? Math.round(v).toLocaleString() : '₪' + Math.round(v/1000) + 'K',
               padding: 4,
               maxTicksLimit: 5
             },
@@ -722,12 +771,14 @@ async function loadHourlyChart() {
     });
 
     // Populate sorted breakdown table
-    const sorted = [...buckets].sort((a, b) => b.total - a.total);
+    const sorted = [...buckets].sort((a, b) => valOf(b) - valOf(a));
+    const salesCellStyle = isTx ? 'color:#94a3b8;' : 'color:#f1f5f9; font-weight:600;';
+    const txCellStyle = isTx ? 'color:#f1f5f9; font-weight:600;' : 'color:#94a3b8;';
     const tbody = document.getElementById('hourly-breakdown-tbody');
     tbody.innerHTML = '';
     sorted.forEach((b, i) => {
       const rank = i + 1;
-      const isEmpty = b.total === 0;
+      const isEmpty = valOf(b) === 0;
       const isTop = rank === 1 && !isEmpty;
       const tr = document.createElement('tr');
       tr.style.cssText = 'border-bottom:1px solid rgba(148,163,184,0.08);' +
@@ -736,8 +787,8 @@ async function loadHourlyChart() {
       tr.innerHTML =
         `<td style="padding:0.4rem 0.75rem; color:${isTop ? '#f59e0b' : '#cbd5e1'}; font-weight:${isTop ? '700' : '400'};">${isTop ? '🏆 ' : ''}${rank}</td>` +
         `<td style="padding:0.4rem 0.75rem; color:#e2e8f0; direction:ltr; text-align:right;">${b.label.replace(/\u200e/g, '')}</td>` +
-        `<td style="padding:0.4rem 0.75rem; color:#f1f5f9; font-weight:600;">₪${Math.round(b.total).toLocaleString()}</td>` +
-        `<td style="padding:0.4rem 0.75rem; color:#94a3b8;">${b.count}</td>` +
+        `<td style="padding:0.4rem 0.75rem; ${salesCellStyle}">₪${Math.round(b.total).toLocaleString()}</td>` +
+        `<td style="padding:0.4rem 0.75rem; ${txCellStyle}">${b.count}</td>` +
         `<td style="padding:0.4rem 0.75rem; color:#94a3b8;">${b.count ? '₪' + b.average.toFixed(1) : '—'}</td>`;
       tbody.appendChild(tr);
     });
