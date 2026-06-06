@@ -210,9 +210,23 @@ function renderGoals(data) {
     const loading = document.getElementById('goal-loading');
     const wrap = document.getElementById('goal-table-wrap');
     const empty = document.getElementById('goal-empty');
+    const summary = document.getElementById('goal-summary');
     loading.hidden = true;
-    if (!data.suppliers.length) { wrap.hidden = true; empty.hidden = false; return; }
-    empty.hidden = true; wrap.hidden = false;
+    if (!data.suppliers.length) { wrap.hidden = true; summary.hidden = true; empty.hidden = false; return; }
+    empty.hidden = true; wrap.hidden = false; summary.hidden = false;
+
+    // Summary strip — same totals as the bottom totals row.
+    document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
+    document.getElementById('goal-tot-projected').textContent = ils0(data.totals.projected);
+    const tr = document.getElementById('goal-tot-remaining');
+    tr.textContent = ils0(data.totals.remaining);
+    tr.className = 'kpi-value ' + (data.totals.remaining >= 0 ? 'profit' : 'loss');
+    document.getElementById('goal-tot-remaining-card').className =
+        'kpi-card ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
+    const overCount = data.suppliers.filter(s => s.remaining !== null && s.remaining < 0).length;
+    const op = document.getElementById('goal-overpace');
+    op.textContent = overCount + ' ספקים חורגים מהקצב';
+    op.classList.toggle('ok', overCount === 0);
 
     document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
         const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');

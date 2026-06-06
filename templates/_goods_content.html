@@ -181,6 +181,25 @@
         <h3>אין ספקים לחודש זה</h3>
         <p>ספקים יופיעו אוטומטית מנתוני הסחורה (BilBoy)</p>
     </div>
+    <!-- Compact budget summary strip — totals come from /api/goal/data, same
+         numbers as the table's bottom totals row. Shown only with data. -->
+    <div id="goal-summary" hidden>
+        <div class="goal-kpis">
+            <div class="kpi-card kpi-card--fixed">
+                <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">סה"כ תקציב</span></div>
+                <span class="kpi-value" id="goal-tot-budget">—</span>
+            </div>
+            <div class="kpi-card kpi-card--goods">
+                <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">קצב חזוי</span></div>
+                <span class="kpi-value" id="goal-tot-projected" style="color:white">—</span>
+            </div>
+            <div class="kpi-card" id="goal-tot-remaining-card">
+                <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
+                <span class="kpi-value" id="goal-tot-remaining">—</span>
+            </div>
+        </div>
+        <div class="goal-overpace" id="goal-overpace"></div>
+    </div>
     <div id="goal-table-wrap" style="overflow-x:auto" hidden>
         <table class="data-table goal-table" id="goal-table">
             <thead>
