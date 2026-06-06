@@ -87,8 +87,12 @@ def main():
             ip.wait_for_selector('#goal-table', state='visible', timeout=15000)
             ip.wait_for_timeout(700)
             ip.screenshot(path='/tmp/goods_budget_iphone13.png', full_page=True)
+            # Check a real tbody cell — a th inside the display:none thead still
+            # reports its own computed display as table-cell in Chromium, so the
+            # header th is the wrong probe. The 3rd cell of a card row is what
+            # the mobile rule actually hides.
             results['iphone קצב col hidden'] = ip.eval_on_selector(
-                '#goal-table thead th:nth-child(3)',
+                '#goal-table tbody tr td:nth-child(3)',
                 'el => getComputedStyle(el).display === "none"')
             results['iphone toggle width'] = ip.eval_on_selector(
                 '#goods-view-toggle', 'el => Math.round(el.getBoundingClientRect().width)')
