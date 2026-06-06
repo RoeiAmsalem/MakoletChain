@@ -116,9 +116,10 @@
     /* Budget context line under a supplier in the מסמכים "לפי ספק" list. */
     .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
     .goal-budget-input {
-        width: 92px; background: #0f172a; color: #e2e8f0;
+        width: 104px; background: #0f172a; color: #e2e8f0;
         border: 1px solid #334155; border-radius: 6px; padding: 6px 8px;
         font-size: 0.9rem; text-align: left; direction: ltr; outline: none;
+        font-variant-numeric: tabular-nums;
     }
     .goal-budget-input:focus { border-color: #3b82f6; }
     .goal-budget-input.saving { opacity: 0.5; }
@@ -129,7 +130,7 @@
     .muted { color: #64748b; }
     .goal-table tfoot td { background: #0f172a !important; font-weight: 700; border-top: 2px solid #334155; }
     @media (max-width: 480px) {
-        .goal-budget-input { width: 78px; }
+        .goal-budget-input { width: 92px; }
         .goal-table td, .goal-table th { padding: 0.5rem 0.45rem !important; font-size: 0.82rem; }
     }
     .view-toggle { display: flex; gap: 0.5rem; align-items: center; }

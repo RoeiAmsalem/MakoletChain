@@ -234,11 +234,13 @@ function renderGoals(data) {
     document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
         const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');
         const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
-        const bv = s.budget === null ? '' : (Math.round(s.budget * 100) / 100);
+        // Idle: formatted like קצב/יתרה (₪ + commas via ils0). Text input so the
+        // ₪/commas can show; focus swaps to the raw number (see budget handlers).
+        const bv = s.budget === null ? '' : ils0(s.budget);
         return '<tr data-supplier="' + esc(s.supplier_name) + '">' +
             '<td>' + esc(s.supplier_name) + '</td>' +
-            '<td class="num"><input type="number" inputmode="decimal" min="0" step="50" ' +
-                'class="goal-budget-input" value="' + bv + '" placeholder="—" aria-label="תקציב חודשי"></td>' +
+            '<td class="num"><input type="text" inputmode="decimal" ' +
+                'class="goal-budget-input" value="' + bv + '" placeholder="הוסף תקציב" aria-label="תקציב חודשי"></td>' +
             '<td class="num">' + ils0(s.projected) + '</td>' +
             '<td class="num ' + remCls + '">' + remCell + '</td>' +
             '</tr>';
@@ -250,13 +252,20 @@ function renderGoals(data) {
     fr.className = 'num ' + (data.totals.remaining < 0 ? 'neg' : 'pos');
 }
 
+// Strip ₪ / commas / spaces → plain number (or '' when blank). The budget POST
+// contract still receives a plain number.
+function parseBudget(str) {
+    const n = parseFloat(String(str).replace(/[^\d.]/g, ''));
+    return isNaN(n) ? '' : n;
+}
+
 async function saveBudget(supplier, value, inputEl) {
     inputEl.classList.add('saving');
     try {
         const res = await fetch('/api/goal/budget', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ supplier_name: supplier, monthly_budget: value }),
+            body: JSON.stringify({ supplier_name: supplier, monthly_budget: parseBudget(value) }),
         });
         if (!res.ok) throw new Error('save failed');
         renderGoals(await res.json());
@@ -272,6 +281,17 @@ document.addEventListener('change', e => {
     if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
     const tr = e.target.closest('tr');
     if (tr) saveBudget(tr.dataset.supplier, e.target.value, e.target);
+});
+
+// Focus → show the plain number for easy typing; blur → reformat ₪ + commas.
+document.addEventListener('focusin', e => {
+    if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
+    e.target.value = parseBudget(e.target.value) || '';
+});
+document.addEventListener('focusout', e => {
+    if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
+    const n = parseBudget(e.target.value);
+    e.target.value = (n && n > 0) ? ils0(n) : '';
 });
 
 document.addEventListener('click', e => {
