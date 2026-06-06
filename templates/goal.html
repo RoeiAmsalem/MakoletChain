@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}יעד - קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    .goal-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 1rem; }
+    .goal-sub { font-size: 0.8rem; color: #94a3b8; margin-top: 0.15rem; }
+    .goal-table td, .goal-table th { white-space: nowrap; }
+    .goal-budget-input {
+        width: 92px; background: #0f172a; color: #e2e8f0;
+        border: 1px solid #334155; border-radius: 6px; padding: 6px 8px;
+        font-size: 0.9rem; text-align: left; direction: ltr; outline: none;
+    }
+    .goal-budget-input:focus { border-color: #3b82f6; }
+    .goal-budget-input.saving { opacity: 0.5; }
+    .goal-budget-input.saved { border-color: #22c55e; }
+    .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+    .pos { color: #86efac; font-weight: 600; }
+    .neg { color: #fca5a5; font-weight: 600; }
+    .muted { color: #64748b; }
+    .goal-table tfoot td { background: #0f172a !important; font-weight: 700; border-top: 2px solid #334155; }
+    @media (max-width: 480px) {
+        .goal-kpis { gap: 0.4rem; }
+        .goal-kpis .kpi-card { padding: 0.7rem !important; }
+        .goal-kpis .kpi-value { font-size: 1.15rem !important; }
+        .goal-kpis .kpi-label { font-size: 0.7rem !important; }
+        .goal-budget-input { width: 78px; }
+        .data-table { min-width: 0; }
+        .goal-table td, .goal-table th { padding: 0.5rem 0.45rem !important; font-size: 0.82rem; }
+    }
+</style>
+{% endblock %}
+{% block content %}
+<section class="goal-kpis">
+    <div class="kpi-card kpi-card--fixed">
+        <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">תקציב</span></div>
+        <span class="kpi-value" id="tot-budget">{{ '₪ {:,.0f}'.format(totals.budget) }}</span>
+    </div>
+    <div class="kpi-card kpi-card--goods">
+        <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">קצב</span></div>
+        <span class="kpi-value" id="tot-projected" style="color:white">{{ '₪ {:,.0f}'.format(totals.projected) }}</span>
+    </div>
+    <div class="kpi-card {{ 'kpi-card--profit' if totals.remaining >= 0 else 'kpi-card--loss' }}" id="tot-remaining-card">
+        <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
+        <span class="kpi-value {{ 'profit' if totals.remaining >= 0 else 'loss' }}" id="tot-remaining">{{ '₪ {:,.0f}'.format(totals.remaining) }}</span>
+    </div>
+</section>
+
+<section class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.85rem;flex-wrap:wrap;gap:0.4rem">
+        <h2 class="section-title" style="margin-bottom:0">תקציב ספקים</h2>
+        <span class="goal-sub" id="day-line">יום {{ days_elapsed }} מתוך {{ days_in_month }}</span>
+    </div>
+
+    {% if suppliers %}
+    <div style="overflow-x:auto">
+        <table class="data-table goal-table" id="goal-table">
+            <thead>
+                <tr>
+                    <th>ספק</th>
+                    <th class="num">תקציב</th>
+                    <th class="num">קצב</th>
+                    <th class="num">יתרה</th>
+                </tr>
+            </thead>
+            <tbody id="goal-tbody">
+                {% for s in suppliers %}
+                <tr data-supplier="{{ s.supplier_name }}">
+                    <td>{{ s.supplier_name }}</td>
+                    <td class="num">
+                        <input type="number" inputmode="decimal" min="0" step="50"
+                               class="goal-budget-input" value="{{ '%g'|format(s.budget) if s.budget is not none else '' }}"
+                               placeholder="—" aria-label="תקציב חודשי ל{{ s.supplier_name }}">
+                    </td>
+                    <td class="num">₪ {{ '{:,.0f}'.format(s.projected) }}</td>
+                    <td class="num {{ '' if s.remaining is none else ('neg' if s.remaining < 0 else 'pos') }}">
+                        {% if s.remaining is none %}<span class="muted">—</span>{% else %}₪ {{ '{:,.0f}'.format(s.remaining) }}{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td>סה"כ</td>
+                    <td class="num" id="foot-budget">₪ {{ '{:,.0f}'.format(totals.budget) }}</td>
+                    <td class="num" id="foot-projected">₪ {{ '{:,.0f}'.format(totals.projected) }}</td>
+                    <td class="num {{ 'neg' if totals.remaining < 0 else 'pos' }}" id="foot-remaining">₪ {{ '{:,.0f}'.format(totals.remaining) }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">🎯</div>
+        <h3>אין ספקים לחודש זה</h3>
+        <p>ספקים יופיעו אוטומטית מנתוני הסחורה (BilBoy)</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const ils0 = n => '₪ ' + Math.round(n).toLocaleString('en-US');
+
+function rerender(data) {
+    document.getElementById('day-line').textContent = 'יום ' + data.days_elapsed + ' מתוך ' + data.days_in_month;
+    const tbody = document.getElementById('goal-tbody');
+    if (!tbody) { location.reload(); return; }
+    tbody.innerHTML = data.suppliers.map(s => {
+        const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');
+        const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
+        const bv = s.budget === null ? '' : (Math.round(s.budget * 100) / 100);
+        return `<tr data-supplier="${s.supplier_name.replace(/"/g, '&quot;')}">
+            <td>${s.supplier_name}</td>
+            <td class="num"><input type="number" inputmode="decimal" min="0" step="50" class="goal-budget-input" value="${bv}" placeholder="—" aria-label="תקציב חודשי"></td>
+            <td class="num">${ils0(s.projected)}</td>
+            <td class="num ${remCls}">${remCell}</td>
+        </tr>`;
+    }).join('');
+    document.getElementById('tot-budget').textContent = ils0(data.totals.budget);
+    document.getElementById('tot-projected').textContent = ils0(data.totals.projected);
+    const remEl = document.getElementById('tot-remaining');
+    remEl.textContent = ils0(data.totals.remaining);
+    remEl.className = 'kpi-value ' + (data.totals.remaining >= 0 ? 'profit' : 'loss');
+    document.getElementById('tot-remaining-card').className = 'kpi-card ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
+    document.getElementById('foot-budget').textContent = ils0(data.totals.budget);
+    document.getElementById('foot-projected').textContent = ils0(data.totals.projected);
+    const fr = document.getElementById('foot-remaining');
+    fr.textContent = ils0(data.totals.remaining);
+    fr.className = 'num ' + (data.totals.remaining < 0 ? 'neg' : 'pos');
+}
+
+async function saveBudget(supplier, value, inputEl) {
+    inputEl.classList.add('saving');
+    try {
+        const res = await fetch('/api/goal/budget', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ supplier_name: supplier, monthly_budget: value }),
+        });
+        if (!res.ok) throw new Error('save failed');
+        const data = await res.json();
+        rerender(data);
+        // Flag the just-saved row green briefly.
+        const row = document.querySelector(`tr[data-supplier="${CSS.escape(supplier)}"] .goal-budget-input`);
+        if (row) { row.classList.add('saved'); setTimeout(() => row.classList.remove('saved'), 1200); }
+    } catch (e) {
+        inputEl.classList.remove('saving');
+        alert('שמירת התקציב נכשלה, נסה שוב');
+    }
+}
+
+document.addEventListener('change', e => {
+    if (!e.target.classList.contains('goal-budget-input')) return;
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    saveBudget(tr.dataset.supplier, e.target.value, e.target);
+});
+</script>
+{% endblock %}

@@ -1197,6 +1197,147 @@ def api_goods_doc_detail(row_id):
     })
 
 
+# ── Goal — per-supplier monthly purchase-budget tracker ──────────
+# Manager sets a monthly budget (תקציב) per supplier; the page shows the
+# projected month-end spend at the current pace (קצב, a simple run-rate over
+# the goods bought so far this month) versus that budget, with the remaining
+# headroom (יתרה = תקציב − קצב, red when negative). Single branch, current
+# month. The "actual" spend MUST reconcile to /goods, so we reuse the exact
+# _goods_doc_context aggregation (same dedup/status/franchise rules, pre-VAT
+# basis) and just group its supplier totals — never a fresh goods query.
+
+def _goal_data(branch_id, db):
+    """Build the /goal payload for one branch + the current Israel-time month.
+
+    Supplier roster = suppliers with goods this month OR last month, UNION
+    suppliers that have a saved budget (so the full roster shows early in the
+    month and budgeted-but-unordered suppliers still appear). mtd_spend is the
+    pre-VAT goods total from /goods's own aggregation. projected is the run-rate
+    mtd_spend * days_in_month / days_elapsed (days_elapsed floored at 1)."""
+    now = _now_il()
+    month = now.strftime('%Y-%m')
+    prev_month = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+    days_in_month = calendar.monthrange(now.year, now.month)[1]
+    days_elapsed = max(1, now.day)
+
+    # Below-floor guard: a floored branch must not see a pre-floor month. The
+    # current month is at/after the floor in practice, but guard anyway so the
+    # endpoint can never leak pre-floor goods.
+    if _month_below_floor(branch_id, month, db):
+        cur_groups = []
+    else:
+        cur_groups = _goods_doc_context(branch_id, month, db)['groups']
+    if _month_below_floor(branch_id, prev_month, db):
+        prev_groups = []
+    else:
+        prev_groups = _goods_doc_context(branch_id, prev_month, db)['groups']
+
+    # pre-VAT MTD spend per supplier (reconciles to /goods total_before_vat).
+    cur_spend = {g['supplier']: g['total_before_vat'] for g in cur_groups}
+
+    budget_rows = db.execute(
+        "SELECT supplier_name, monthly_budget FROM supplier_budgets "
+        "WHERE branch_id = ?", (branch_id,)
+    ).fetchall()
+    budgets = {r['supplier_name']: r['monthly_budget'] for r in budget_rows}
+
+    roster = set(cur_spend) | {g['supplier'] for g in prev_groups} | set(budgets)
+    roster.discard('—')
+    roster.discard(None)
+
+    suppliers = []
+    for name in roster:
+        mtd = round(cur_spend.get(name, 0.0), 2)
+        projected = round(mtd * days_in_month / days_elapsed, 2)  # days_elapsed >= 1
+        budget = budgets.get(name)
+        remaining = round(budget - projected, 2) if budget is not None else None
+        suppliers.append({
+            'supplier_name': name,
+            'mtd_spend': mtd,
+            'projected': projected,
+            'budget': budget,
+            'remaining': remaining,
+        })
+
+    # Most over-budget first: budgeted rows (remaining ASC) above unbudgeted
+    # rows (biggest projected spend first).
+    suppliers.sort(key=lambda s: (
+        s['budget'] is None,
+        s['remaining'] if s['remaining'] is not None else 0,
+        -s['projected'],
+    ))
+
+    total_budget = round(sum(s['budget'] for s in suppliers if s['budget'] is not None), 2)
+    total_projected = round(sum(s['projected'] for s in suppliers), 2)
+    total_remaining = round(total_budget - total_projected, 2)
+
+    return {
+        'suppliers': suppliers,
+        'days_elapsed': days_elapsed,
+        'days_in_month': days_in_month,
+        'month': month,
+        'totals': {
+            'budget': total_budget,
+            'projected': total_projected,
+            'remaining': total_remaining,
+        },
+    }
+
+
+@app.route('/goal')
+@login_required
+def goal():
+    ctx = _page_context('goal')
+    db = get_db()
+    data = _goal_data(ctx['branch_id'], db)
+    ctx.update(data)
+    return render_template('goal.html', **ctx)
+
+
+@app.route('/api/goal/data')
+@login_required
+def api_goal_data():
+    branch_id = get_branch_id()
+    if not branch_id:
+        return jsonify({'error': 'no_branch'}), 400
+    db = get_db()
+    return jsonify(_goal_data(branch_id, db))
+
+
+@app.route('/api/goal/budget', methods=['POST'])
+@login_required
+def api_goal_budget():
+    branch_id = get_branch_id()
+    if not branch_id:
+        return jsonify({'error': 'no_branch'}), 400
+    data = request.get_json(silent=True) or {}
+    supplier = (data.get('supplier_name') or '').strip()
+    if not supplier:
+        return jsonify({'error': 'missing_supplier'}), 400
+
+    raw = data.get('monthly_budget')
+    try:
+        budget = float(raw) if raw not in (None, '') else 0.0
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid_budget'}), 400
+
+    db = get_db()
+    if budget <= 0:
+        # Empty or 0 clears the budget.
+        db.execute(
+            "DELETE FROM supplier_budgets WHERE branch_id = ? AND supplier_name = ?",
+            (branch_id, supplier))
+    else:
+        db.execute(
+            "INSERT INTO supplier_budgets (branch_id, supplier_name, monthly_budget, updated_at) "
+            "VALUES (?, ?, ?, datetime('now')) "
+            "ON CONFLICT(branch_id, supplier_name) DO UPDATE SET "
+            "  monthly_budget = excluded.monthly_budget, updated_at = datetime('now')",
+            (branch_id, supplier, budget))
+    db.commit()
+    return jsonify({'ok': True, **_goal_data(branch_id, db)})
+
+
 @app.route('/employees')
 @login_required
 def employees():
