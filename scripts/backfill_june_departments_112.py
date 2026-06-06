@@ -38,14 +38,22 @@ SKIP_LOCAL_BRANCH_IDS = {9011}
 MONTH = '2026-06'
 
 
-def _june_days() -> list[str]:
+def _june_days(start_str=None, end_str=None) -> list[str]:
     """June-2026 calendar days from the 1st through today (IL), capped at the
-    30th. Future days have no data, so there's nothing to pull for them."""
+    30th. Future days have no data, so there's nothing to pull for them.
+
+    Optional start_str/end_str (YYYY-MM-DD) narrow the window for a scoped
+    backfill (e.g. June 1-5 only). Both are clamped to the natural June window
+    and never exceed today, so they can only shrink the range, never widen it."""
     today = datetime.now(IL_TZ).date()
     start = date(2026, 6, 1)
     end = date(2026, 6, 30)
     if today < end:
         end = today
+    if start_str:
+        start = max(start, date.fromisoformat(start_str))
+    if end_str:
+        end = min(end, date.fromisoformat(end_str))
     if end < start:
         return []
     days = []
@@ -70,10 +78,15 @@ def main():
                     help='Actually INSERT rows. Default is dry-run (no writes).')
     ap.add_argument('--branch-id', type=int,
                     help='Limit to a single local branch id (for spot checks).')
+    ap.add_argument('--start-date',
+                    help='YYYY-MM-DD lower bound (clamped to June 1).')
+    ap.add_argument('--end-date',
+                    help='YYYY-MM-DD upper bound (clamped to today / June 30). '
+                         'e.g. 2026-06-05 to exclude today.')
     args = ap.parse_args()
 
     mode = 'APPLY (writing)' if args.apply else 'DRY-RUN (no writes)'
-    days = _june_days()
+    days = _june_days(args.start_date, args.end_date)
     print(f'June-2026 dept gap-fill from report 112 — {mode}')
     print(f'days: {days[0]}..{days[-1]} ({len(days)} day(s))' if days
           else 'no June days to process')
