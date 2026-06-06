@@ -1268,8 +1268,14 @@ def _goal_data(branch_id, db):
         -s['projected'],
     ))
 
-    total_budget = round(sum(s['budget'] for s in suppliers if s['budget'] is not None), 2)
-    total_projected = round(sum(s['projected'] for s in suppliers), 2)
+    # Totals are summed over budgeted suppliers ONLY, so all three share one
+    # basis. Summing קצב/יתרה over unbudgeted suppliers too made the headline
+    # יתרה look like a huge blowout on branches where only a few suppliers are
+    # budgeted (the "N ספקים חורגים" count was already budgeted-only). Per-row
+    # data is untouched — unbudgeted rows still show their own קצב.
+    budgeted = [s for s in suppliers if s['budget'] is not None and s['budget'] > 0]
+    total_budget = round(sum(s['budget'] for s in budgeted), 2)
+    total_projected = round(sum(s['projected'] for s in budgeted), 2)
     total_remaining = round(total_budget - total_projected, 2)
 
     return {

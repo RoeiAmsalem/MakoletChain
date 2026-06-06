@@ -122,3 +122,18 @@ def test_reconciles_to_goods_total(db, monkeypatch):
     sum_mtd = round(sum(s['mtd_spend'] for s in data['suppliers']), 2)
     goods_total = _goods_doc_context(BRANCH, MONTH, db)['total_before_vat']
     assert sum_mtd == goods_total == 800.0  # 100 + 200 + 500
+
+
+def test_totals_summed_over_budgeted_only(db, monkeypatch):
+    """All three totals share one basis: budgeted suppliers only. Budgets are
+    set on א (1000, projected 930) and ד (800, projected 0). ב is unbudgeted
+    with projected 1550 and must NOT inflate Σ קצב / Σ יתרה."""
+    _freeze(monkeypatch, 10)  # day 10 of 31
+    data = _goal_data(BRANCH, db)
+    t = data['totals']
+    assert t['budget'] == 1800.0                 # 1000 + 800
+    assert t['projected'] == 930.0               # 930 + 0 — excludes ב's 1550
+    assert t['remaining'] == round(1800.0 - 930.0, 2)  # 870, NOT 1800 - 2480
+    # ב is unbudgeted: its per-row קצב still shows but is excluded from totals.
+    s = _by_name(data)
+    assert s['סופר ב']['budget'] is None and s['סופר ב']['projected'] == 1550.0
