@@ -119,10 +119,140 @@
         .supplier-group .sg-total { font-size: 0.85rem; }
         .supplier-group .sg-count { font-size: 0.72rem; }
     }
+    /* ── segmented toggle (מסמכים / תקציב) — scoped to /goods, mirrors the
+       home page's local seg-control so the control is styled on this page too ── */
+    .seg-control {
+        display: inline-flex; background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1); border-radius: 999px;
+        padding: 4px; gap: 4px;
+    }
+    .seg-btn {
+        background: transparent; color: #cbd5e1; border: none; border-radius: 999px;
+        padding: 6px 18px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+        font-family: inherit; white-space: nowrap;
+        transition: background 0.15s, color 0.15s;
+    }
+    .seg-btn.active { background: #6366f1; color: #fff; }
+    /* תקציב (supplier-budget) view */
+    .goal-sub { font-size: 0.8rem; color: #94a3b8; }
+    .goal-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 0.6rem; }
+    .goal-overpace { font-size: 0.82rem; color: #fca5a5; font-weight: 600; margin-bottom: 1rem; min-height: 1.1rem; }
+    .goal-overpace.ok { color: #86efac; }
+    /* Cohesive colored summary tiles, matching the /goods KPI family. Targeted
+       by DOM order (stable on desktop AND mobile — the יתרה headline is 3rd in
+       source even when visually reordered): 1=סה"כ תקציב, 2=קצב חזוי, 3=יתרה.
+         • יתרה   — green/red headline (--profit/--loss gradient via JS).
+         • קצב חזוי — blue (the --goods family, as it was before).
+         • סה"כ תקציב — indigo (the app's seg-toggle accent #6366f1; NOT brown). */
+    .goal-kpis .kpi-label { white-space: nowrap; }
+    .goal-kpis .kpi-card:nth-child(1) {                       /* סה"כ תקציב — indigo */
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        border: 1px solid rgba(99,102,241,0.4); box-shadow: none;
+    }
+    .goal-kpis .kpi-card:nth-child(2) {                       /* קצב חזוי — blue */
+        background: linear-gradient(135deg, #4c8ffb 0%, #2563eb 100%);
+        border: 1px solid rgba(76,143,251,0.35); box-shadow: none;
+    }
+    .goal-kpis .kpi-card:nth-child(1) .kpi-value,
+    .goal-kpis .kpi-card:nth-child(2) .kpi-value { color: #fff; }
+    .goal-kpis .kpi-card:nth-child(1) .kpi-label,
+    .goal-kpis .kpi-card:nth-child(2) .kpi-label { color: rgba(255,255,255,0.85); }
+    /* Mobile summary: יתרה headline full-width on top, the two quiet cards in a
+       row beneath — compact, no cramped 3-up, no wrapped labels. */
+    @media (max-width: 768px) {
+        .goal-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .goal-kpi-headline { grid-column: 1 / -1; order: -1; }
+        .goal-kpi-headline .kpi-value { font-size: 1.7rem !important; }
+        .goal-kpis .kpi-card { padding: 0.7rem 0.85rem !important; }
+        .goal-kpi-quiet .kpi-value { font-size: 1.15rem !important; }
+        .goal-kpis .kpi-label { font-size: 0.74rem !important; }
+        .goal-kpis .kpi-icon { font-size: 1rem !important; }
+    }
+    .goal-table td, .goal-table th { white-space: nowrap; }
+    /* Phone: the desktop 4-col table becomes a stack of supplier CARDS — name on
+       its own line, then [תקציב input] … [יתרה] on a clean second line. No
+       name-wrapping pressure, even rows, no horizontal scroll. קצב lives in the
+       summary strip; the tfoot totals are the summary strip too, so both hide. */
+    @media (max-width: 768px) {
+        #goal-table, #goal-table tbody { display: block; }
+        #goal-table thead, #goal-table tfoot { display: none; }
+        #goal-table tbody tr {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.6rem;
+            border: 1px solid #334155; border-radius: 10px;
+            background: rgba(255,255,255,0.025) !important;
+            margin-bottom: 0.5rem; padding: 0.7rem 0.85rem;
+        }
+        #goal-table tbody td {
+            display: block; border: none !important; padding: 0 !important;
+            background: transparent !important; font-size: 0.92rem;
+        }
+        #goal-table tbody td:nth-child(1) {   /* supplier name — own line */
+            flex: 0 0 100%; font-weight: 600; color: #fff;
+            white-space: normal; line-height: 1.3;
+        }
+        #goal-table tbody td:nth-child(3) { display: none; }   /* קצב — in summary strip */
+        #goal-table tbody td:nth-child(4) {   /* יתרה — pushed to inline-end */
+            margin-inline-start: auto; font-weight: 700;
+        }
+        /* label only on budgeted rows (.neg/.pos); unbudgeted show a bare "—" */
+        #goal-table tbody td.neg::before, #goal-table tbody td.pos::before {
+            content: 'יתרה '; color: #94a3b8; font-weight: 500; font-size: 0.78rem;
+        }
+    }
+    /* Budget context line under a supplier in the מסמכים "לפי ספק" list.
+       The summary needs flex-wrap so this 100%-basis line drops below the name. */
+    .supplier-group summary { flex-wrap: wrap; }
+    .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
+    .goal-budget-input {
+        width: 104px; background: #0f172a; color: #e2e8f0;
+        border: 1px solid #334155; border-radius: 6px; padding: 6px 8px;
+        font-size: 0.9rem; text-align: left; direction: ltr; outline: none;
+        font-variant-numeric: tabular-nums;
+    }
+    .goal-budget-input:focus { border-color: #3b82f6; }
+    .goal-budget-input.saving { opacity: 0.5; }
+    .goal-budget-input.saved { border-color: #22c55e; }
+    .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+    /* The shared `.data-table thead th { text-align:right }` outranks `.num`, so
+       numeric headers were right-aligned while their cells (תקציב input / קצב /
+       יתרה) are left-aligned — the header sat to the right of its values. Match
+       the headers to the cells so each header sits directly above its column. */
+    #goal-table thead th.num { text-align: left; }
+    .pos { color: #86efac; font-weight: 600; }
+    .neg { color: #fca5a5; font-weight: 600; }
+    .muted { color: #64748b; }
+    .goal-table tfoot td { background: #0f172a !important; font-weight: 700; border-top: 2px solid #334155; }
+    /* ── Mobile (≤768px) touch + legibility pass (theme/colors unchanged) ──
+       Verified under a real iPhone 13 device profile, not a window resize. */
+    @media (max-width: 768px) {
+        /* מסמכים/תקציב toggle: full-width segments, ≥44px tap height. Overrides
+           the global `@media .seg-btn{padding:6px 14px}` (lower specificity). */
+        #goods-view-toggle { width: 100%; max-width: 360px; }
+        #goods-view-toggle .seg-btn { flex: 1; min-height: 44px; padding: 10px 16px; font-size: 0.95rem; }
+        /* תקציב input: 16px stops iOS zoom-on-focus; 44px tap height. */
+        .goal-budget-input { font-size: 16px !important; min-height: 44px; width: 116px; padding: 8px 10px; }
+        /* clickable supplier row — comfortable tap height. */
+        .supplier-group summary { min-height: 48px; }
+        /* legible secondary text — no tiny labels. */
+        .goal-sub, .goal-overpace { font-size: 0.85rem; }
+        .sg-budget { font-size: 0.8rem; }
+    }
 </style>
 {% endblock %}
 
 {% block content %}
+
+<!-- View toggle: doc list (default) ⇄ supplier-budget (תקציב). Matches the
+     segmented control used on the home P/L + hourly chart. -->
+<div style="display:flex;justify-content:center;margin-bottom:1rem;">
+    <div class="seg-control" id="goods-view-toggle">
+        <button type="button" id="goods-view-docs" class="seg-btn active" onclick="switchGoodsView('docs')">מסמכים</button>
+        <button type="button" id="goods-view-goals" class="seg-btn" onclick="switchGoodsView('goals')">תקציב</button>
+    </div>
+</div>
+
+<!-- ── מסמכים: existing invoice/doc list (unchanged) ── -->
+<div id="goods-docs-view">
 
 <!-- KPI Cards -->
 <section class="goods-kpis">
@@ -269,6 +399,61 @@
         <p>מסמכים יסונכרנו אוטומטית מ-BilBoy</p>
     </div>
     {% endif %}
+</section>
+</div><!-- /#goods-docs-view -->
+
+<!-- ── תקציב: per-supplier budget tracker (lazy-loaded from /api/goal/data) ── -->
+<section class="card" id="goods-goals-view" hidden>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.85rem;flex-wrap:wrap;gap:0.4rem">
+        <h2 class="section-title" style="margin-bottom:0">תקציב ספקים</h2>
+        <span class="goal-sub" id="goal-day-line"></span>
+    </div>
+    <div id="goal-loading" class="doc-modal-loading" style="padding:2rem 1rem">טוען תקציב…</div>
+    <div id="goal-empty" class="empty-state" hidden>
+        <div class="icon">🎯</div>
+        <h3>אין ספקים לחודש זה</h3>
+        <p>ספקים יופיעו אוטומטית מנתוני הסחורה (BilBoy)</p>
+    </div>
+    <!-- Compact budget summary strip — totals come from /api/goal/data, same
+         numbers as the table's bottom totals row. Shown only with data. -->
+    <div id="goal-summary" hidden>
+        <div class="goal-kpis">
+            <div class="kpi-card goal-kpi-quiet">
+                <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">סה"כ&nbsp;תקציב</span></div>
+                <span class="kpi-value" id="goal-tot-budget">—</span>
+            </div>
+            <div class="kpi-card goal-kpi-quiet">
+                <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">קצב&nbsp;חזוי</span></div>
+                <span class="kpi-value" id="goal-tot-projected">—</span>
+            </div>
+            <div class="kpi-card goal-kpi-headline" id="goal-tot-remaining-card">
+                <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
+                <span class="kpi-value" id="goal-tot-remaining">—</span>
+            </div>
+        </div>
+        <div class="goal-overpace" id="goal-overpace"></div>
+    </div>
+    <div id="goal-table-wrap" style="overflow-x:auto" hidden>
+        <table class="data-table goal-table" id="goal-table">
+            <thead>
+                <tr>
+                    <th>ספק</th>
+                    <th class="num">תקציב</th>
+                    <th class="num">קצב</th>
+                    <th class="num">יתרה</th>
+                </tr>
+            </thead>
+            <tbody id="goal-tbody"></tbody>
+            <tfoot>
+                <tr>
+                    <td>סה"כ</td>
+                    <td class="num" id="goal-foot-budget">—</td>
+                    <td class="num" id="goal-foot-projected">—</td>
+                    <td class="num" id="goal-foot-remaining">—</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
 </section>
 
 <!-- Invoice line-item detail modal (loaded on demand) -->
@@ -475,5 +660,154 @@ document.addEventListener('keydown', e => {
         openDocDetail(document.activeElement.dataset.rowId);
     }
 });
+
+// ── תקציב: supplier-budget view (lazy-loaded from /api/goal/data) ──
+const ils0 = n => '₪ ' + Math.round(n).toLocaleString('en-US');
+let _goalsLoaded = false;
+// /api/goal/data is current-month pace — annotations only make sense when the
+// month picker is on the current month.
+const GOODS_IS_CURRENT_MONTH = {{ (selected_month == current_month) | tojson }};
+
+function switchGoodsView(view) {
+    const isGoals = view === 'goals';
+    document.getElementById('goods-docs-view').hidden = isGoals;
+    document.getElementById('goods-goals-view').hidden = !isGoals;
+    document.getElementById('goods-view-docs').classList.toggle('active', !isGoals);
+    document.getElementById('goods-view-goals').classList.toggle('active', isGoals);
+    // Lazy-load on first switch to תקציב — not on initial page load.
+    if (isGoals && !_goalsLoaded) { _goalsLoaded = true; loadGoals(); }
+}
+
+async function loadGoals() {
+    const loading = document.getElementById('goal-loading');
+    const wrap = document.getElementById('goal-table-wrap');
+    const empty = document.getElementById('goal-empty');
+    loading.hidden = false; wrap.hidden = true; empty.hidden = true;
+    try {
+        const res = await fetch('/api/goal/data');
+        if (!res.ok) throw new Error('load failed');
+        renderGoals(await res.json());
+    } catch (e) {
+        _goalsLoaded = false;  // allow retry on next switch
+        loading.textContent = 'טעינת התקציב נכשלה, נסה שוב';
+    }
+}
+
+function renderGoals(data) {
+    document.getElementById('goal-day-line').textContent =
+        'יום ' + data.days_elapsed + ' מתוך ' + data.days_in_month;
+    const loading = document.getElementById('goal-loading');
+    const wrap = document.getElementById('goal-table-wrap');
+    const empty = document.getElementById('goal-empty');
+    const summary = document.getElementById('goal-summary');
+    loading.hidden = true;
+    if (!data.suppliers.length) { wrap.hidden = true; summary.hidden = true; empty.hidden = false; return; }
+    empty.hidden = true; wrap.hidden = false; summary.hidden = false;
+
+    // Summary strip — same totals as the bottom totals row.
+    document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
+    document.getElementById('goal-tot-projected').textContent = ils0(data.totals.projected);
+    const tr = document.getElementById('goal-tot-remaining');
+    tr.textContent = ils0(data.totals.remaining);
+    tr.className = 'kpi-value ' + (data.totals.remaining >= 0 ? 'profit' : 'loss');
+    document.getElementById('goal-tot-remaining-card').className =
+        'kpi-card goal-kpi-headline ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
+    const overCount = data.suppliers.filter(s => s.remaining !== null && s.remaining < 0).length;
+    const op = document.getElementById('goal-overpace');
+    op.textContent = overCount + ' ספקים חורגים מהקצב';
+    op.classList.toggle('ok', overCount === 0);
+
+    document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
+        const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');
+        const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
+        // Idle: formatted like קצב/יתרה (₪ + commas via ils0). Text input so the
+        // ₪/commas can show; focus swaps to the raw number (see budget handlers).
+        const bv = s.budget === null ? '' : ils0(s.budget);
+        return '<tr data-supplier="' + esc(s.supplier_name) + '">' +
+            '<td>' + esc(s.supplier_name) + '</td>' +
+            '<td class="num"><input type="text" inputmode="decimal" ' +
+                'class="goal-budget-input" value="' + bv + '" placeholder="הוסף תקציב" aria-label="תקציב חודשי"></td>' +
+            '<td class="num">' + ils0(s.projected) + '</td>' +
+            '<td class="num ' + remCls + '">' + remCell + '</td>' +
+            '</tr>';
+    }).join('');
+    document.getElementById('goal-foot-budget').textContent = ils0(data.totals.budget);
+    document.getElementById('goal-foot-projected').textContent = ils0(data.totals.projected);
+    const fr = document.getElementById('goal-foot-remaining');
+    fr.textContent = ils0(data.totals.remaining);
+    fr.className = 'num ' + (data.totals.remaining < 0 ? 'neg' : 'pos');
+}
+
+// Strip ₪ / commas / spaces → plain number (or '' when blank). The budget POST
+// contract still receives a plain number.
+function parseBudget(str) {
+    const n = parseFloat(String(str).replace(/[^\d.]/g, ''));
+    return isNaN(n) ? '' : n;
+}
+
+async function saveBudget(supplier, value, inputEl) {
+    inputEl.classList.add('saving');
+    try {
+        const res = await fetch('/api/goal/budget', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ supplier_name: supplier, monthly_budget: parseBudget(value) }),
+        });
+        if (!res.ok) throw new Error('save failed');
+        renderGoals(await res.json());
+        const row = document.querySelector('tr[data-supplier="' + (window.CSS && CSS.escape ? CSS.escape(supplier) : supplier) + '"] .goal-budget-input');
+        if (row) { row.classList.add('saved'); setTimeout(() => row.classList.remove('saved'), 1200); }
+    } catch (e) {
+        inputEl.classList.remove('saving');
+        alert('שמירת התקציב נכשלה, נסה שוב');
+    }
+}
+
+document.addEventListener('change', e => {
+    if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
+    const tr = e.target.closest('tr');
+    if (tr) saveBudget(tr.dataset.supplier, e.target.value, e.target);
+});
+
+// Focus → show the plain number for easy typing; blur → reformat ₪ + commas.
+document.addEventListener('focusin', e => {
+    if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
+    e.target.value = parseBudget(e.target.value) || '';
+});
+document.addEventListener('focusout', e => {
+    if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
+    const n = parseBudget(e.target.value);
+    e.target.value = (n && n > 0) ? ils0(n) : '';
+});
+
+// ── מסמכים → לפי ספק: annotate each supplier group with תקציב · יתרה ──
+// Reuses GET /api/goal/data (current-month budget + remaining pace), merged by
+// supplier_name. Current month only — pace figures mislead on a closed month.
+function annotateSupplierBudgets() {
+    if (!GOODS_IS_CURRENT_MONTH) return;
+    const groups = document.querySelectorAll('#goods-docs-view .supplier-group');
+    if (!groups.length) return;  // not in the "לפי ספק" grouped view
+    fetch('/api/goal/data')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            if (!data) return;
+            const map = {};
+            data.suppliers.forEach(s => { if (s.budget !== null) map[s.supplier_name] = s; });
+            groups.forEach(g => {
+                if (g.querySelector('.sg-budget')) return;  // idempotent
+                const nameEl = g.querySelector('.sg-name');
+                const s = nameEl && map[nameEl.textContent.trim()];
+                if (!s) return;
+                const remCls = s.remaining < 0 ? 'neg' : 'pos';
+                const div = document.createElement('div');
+                div.className = 'sg-budget';
+                div.innerHTML = 'תקציב ' + ils0(s.budget) +
+                    ' · <span class="' + remCls + '">יתרה ' + ils0(s.remaining) + '</span>';
+                g.querySelector('summary').appendChild(div);
+            });
+        })
+        .catch(() => {});  // annotation is non-critical — never break the doc list
+}
+annotateSupplierBudgets();
 </script>
 {% endblock %}
