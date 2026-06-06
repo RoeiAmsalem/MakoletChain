@@ -5,7 +5,7 @@ Renders under a REAL mobile device profile — Playwright's iPhone 13 descriptor
 window resize. Captures screenshots of the מסמכים→לפי ספק view and the יעדים view,
 and measures horizontal-scroll + touch-target sizes + input font-size.
 
-Usage:  python3 scripts/mobile_verify_goods.py <label>     # label e.g. before / after
+Usage:  python3 scripts/mobile_verify_goods.py <label> [branch_id]   # label e.g. before / after
 """
 import sys
 import sqlite3
@@ -15,7 +15,7 @@ from playwright.sync_api import sync_playwright
 LABEL = sys.argv[1] if len(sys.argv) > 1 else 'run'
 DB = '/opt/makolet-chain-staging/db/makolet_chain.db'
 UID, EMAIL, PW, BASE = 1, 'makoletdashboard@gmail.com', 'TempShot2026!', 'http://127.0.0.1:8081'
-BRANCH = 9015
+BRANCH = int(sys.argv[2]) if len(sys.argv) > 2 else 9015
 
 
 def hscroll(page):
