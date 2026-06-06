@@ -53,11 +53,10 @@ def show_branch(branch_id):
     print(f"\n=== branch {branch_id} — month {data['month']} ===")
     print(f"day {data['days_elapsed']} of {data['days_in_month']}  "
           f"({len(data['suppliers'])} suppliers)")
-    print("  supplier | mtd_spend | projected | remaining")
+    print("  supplier | mtd_spend (הוצאה) | remaining (יתרה)")
     for s in data['suppliers'][:3]:
         rem = "—" if s['remaining'] is None else f"{s['remaining']:.2f}"
-        print(f"  {s['supplier_name']} | {s['mtd_spend']:.2f} | "
-              f"{s['projected']:.2f} | {rem}")
+        print(f"  {s['supplier_name']} | {s['mtd_spend']:.2f} | {rem}")
 
     sum_mtd = round(sum(s['mtd_spend'] for s in data['suppliers']), 2)
     match = "MATCH" if abs(sum_mtd - goods_total) < 0.02 else "MISMATCH"
@@ -81,7 +80,7 @@ def persistence_roundtrip(branch_id, data):
     body = r.get_json()
     row = next(s for s in body['suppliers'] if s['supplier_name'] == supplier)
     print(f"  POST 12345 -> HTTP {r.status_code} | budget={row['budget']} | "
-          f"projected={row['projected']:.2f} | remaining={row['remaining']:.2f}")
+          f"mtd_spend={row['mtd_spend']:.2f} | remaining={row['remaining']:.2f}")
 
     # Prove it persisted to the DB (independent read).
     conn = _conn()
