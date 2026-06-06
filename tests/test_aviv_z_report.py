@@ -44,6 +44,16 @@ def _stub_possible_values_empty_by_default(monkeypatch):
                         lambda b, t: [])
 
 
+@pytest.fixture(autouse=True)
+def _stub_dept_112_no_network(monkeypatch):
+    """The dept source is report 112 now; run_for_branch pulls it on every
+    successful Z. Default it to a no-op (no HTTP, no rows) for every test so
+    the suite never touches the network. Tests that exercise the 112 source
+    explicitly override zr.fetch_112_departments.
+    """
+    monkeypatch.setattr(zr, 'fetch_112_departments', lambda b, d, t: [])
+
+
 @pytest.fixture
 def staging_db():
     """In-memory DB with migration 010's schema + a minimal branches row."""
@@ -1326,11 +1336,90 @@ def test_fetched_at_displays_israel_time():
 FIXTURE_XLS = os.path.join(os.path.dirname(__file__), 'fixtures',
                            'aviv_z_902_127_2026-05-27.xls')
 
+# Report 112 (מכירות לפי מחלקות) XLS — the CURRENT department source. Captured
+# live from branch 127, 2026-05-27, via /reports/result outputType=XLS.
+FIXTURE_112_XLS = os.path.join(os.path.dirname(__file__), 'fixtures',
+                               'aviv_112_127_2026-05-27.xls')
+
 
 @pytest.fixture
 def sample_xls_bytes() -> bytes:
     with open(FIXTURE_XLS, 'rb') as f:
         return f.read()
+
+
+@pytest.fixture
+def sample_112_xls_bytes() -> bytes:
+    with open(FIXTURE_112_XLS, 'rb') as f:
+        return f.read()
+
+
+# ── report 112 dept parser ─────────────────────────────────────────────────
+
+def test_parse_112_departments_extracts_all_rows(sample_112_xls_bytes):
+    """Fixture has 40 dept rows + a grand-total terminator. Parser returns one
+    dict per dept, never the total row, each with a positive code/name/sale."""
+    depts = zr.parse_112_departments(sample_112_xls_bytes)
+    assert len(depts) == 40, f'expected 40 depts, got {len(depts)}'
+    for d in depts:
+        assert isinstance(d['dept_code'], int) and d['dept_code'] > 0
+        assert d['dept_name'] and d['dept_name'] != 'סה"כ'
+        assert d['sale_incl_vat'] is not None
+    # No duplicate codes.
+    codes = [d['dept_code'] for d in depts]
+    assert len(codes) == len(set(codes))
+
+
+def test_parse_112_departments_known_values(sample_112_xls_bytes):
+    """Spot-check branch 127 / 2026-05-27 against the live XLS dump, including
+    the new cost/profit/margin columns and the '<code> - <name>' split."""
+    by_code = {d['dept_code']: d for d in
+               zr.parse_112_departments(sample_112_xls_bytes)}
+    # dept 2 — ירקות פירות
+    d2 = by_code[2]
+    assert d2['dept_name'] == 'ירקות פירות'
+    assert d2['sale_incl_vat'] == 679.31
+    assert d2['cost_ex_vat'] == 396.686
+    assert d2['profit'] == 282.63
+    assert d2['profit_pct'] == 41.60
+    assert d2['contrib_pct'] == 5.55
+    assert d2['qty'] == 51.08
+    # dept 5 — מקרר חלב, dept 83 — טבק (the home tiles)
+    assert by_code[5]['sale_incl_vat'] == 2804.08
+    assert by_code[83]['sale_incl_vat'] == 1500.50
+    assert 'חלב' in by_code[5]['dept_name']
+
+
+def test_parse_112_departments_handles_bad_bytes():
+    """Random bytes → [] and a log, never an exception. Same supplementary-data
+    safety net as the 902 parser."""
+    assert zr.parse_112_departments(b'not an xls at all') == []
+
+
+def test_parse_112_departments_amount_maps_to_sale_incl_vat(sample_112_xls_bytes):
+    """The number that becomes z_department_sales.amount is sale_incl_vat —
+    proving the column keeps its 902 meaning after the switch."""
+    depts = zr.parse_112_departments(sample_112_xls_bytes)
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE z_department_sales (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL,
+            dept_code INTEGER NOT NULL, dept_name TEXT NOT NULL,
+            amount REAL NOT NULL, qty REAL,
+            cost_ex_vat REAL, profit REAL, profit_pct REAL, contrib_pct REAL,
+            fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (branch_id, date, dept_code));
+    ''')
+    zr.upsert_department_sales(conn, 127, '2026-05-27', depts)
+    by_code = {d['dept_code']: d for d in depts}
+    rows = conn.execute(
+        'SELECT dept_code, amount, cost_ex_vat FROM z_department_sales '
+        'WHERE branch_id=127').fetchall()
+    for r in rows:
+        assert r['amount'] == by_code[r['dept_code']]['sale_incl_vat']
+    # And a new column round-tripped.
+    assert {r['dept_code']: r['cost_ex_vat'] for r in rows}[2] == 396.686
 
 
 def test_parse_902_xls_departments_extracts_all_rows(sample_xls_bytes):
@@ -1399,6 +1488,10 @@ def staging_db_with_depts():
             dept_name TEXT NOT NULL,
             amount REAL NOT NULL,
             qty REAL,
+            cost_ex_vat REAL,
+            profit REAL,
+            profit_pct REAL,
+            contrib_pct REAL,
             fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (branch_id, date, dept_code)
         );
@@ -1497,6 +1590,10 @@ def staging_db_with_z_and_depts():
             dept_name TEXT NOT NULL,
             amount REAL NOT NULL,
             qty REAL,
+            cost_ex_vat REAL,
+            profit REAL,
+            profit_pct REAL,
+            contrib_pct REAL,
             fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (branch_id, date, dept_code)
         );
@@ -1508,29 +1605,25 @@ def staging_db_with_z_and_depts():
     return conn
 
 
-def test_xls_failure_does_not_break_z_pull(monkeypatch,
-                                            staging_db_with_z_and_depts,
-                                            sample_pdf_bytes):
-    """Core invariant: XLS-side errors are supplementary. If the XLS call
-    bombs (network/parse/anything), the Z pull's return value is still
-    ok=True with the parsed total. No dept rows. No exception out."""
+def test_dept_112_failure_does_not_break_z_pull(monkeypatch,
+                                                staging_db_with_z_and_depts,
+                                                sample_pdf_bytes):
+    """Core invariant: the 112 dept pull is supplementary. If it bombs
+    (network/parse/anything), the Z pull's return value is still ok=True with
+    the parsed total. No dept rows. No exception out."""
     monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
     monkeypatch.setattr(zr, '_refresh', lambda t: t)
     monkeypatch.setattr(zr, 'fetch_902_filters',
                         lambda b, t: {'data': [{'value': [
                             {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]})
-
-    def fake_submit(branch, z, token, output_type='PDF'):
-        if output_type == 'XLS':
-            raise RuntimeError('Aviv XLS server flaked')
-        return 'https://example.invalid/report.pdf'
-
-    monkeypatch.setattr(zr, 'submit_902', fake_submit)
+    monkeypatch.setattr(zr, 'submit_902',
+                        lambda branch, z, token, output_type='PDF':
+                        'https://example.invalid/report.pdf')
     monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
-    # download_xls shouldn't even be reached, but stub it defensively.
-    monkeypatch.setattr(zr, 'download_xls',
-                        lambda u, t: (_ for _ in ()).throw(
-                            AssertionError('download_xls should not be called')))
+    # The dept source is report 112 now — make it blow up.
+    monkeypatch.setattr(zr, 'fetch_112_departments',
+                        lambda b, d, t: (_ for _ in ()).throw(
+                            RuntimeError('Aviv 112 server flaked')))
 
     result = zr.run_for_branch(126, '2026-05-20',
                                conn=staging_db_with_z_and_depts)
@@ -1544,39 +1637,80 @@ def test_xls_failure_does_not_break_z_pull(monkeypatch,
     assert n == 0
 
 
-def test_xls_success_writes_dept_rows(monkeypatch,
-                                       staging_db_with_z_and_depts,
-                                       sample_pdf_bytes, sample_xls_bytes):
-    """Happy path: PDF succeeds (Z total lands), XLS succeeds → all dept
-    rows for the fixture (~39) are persisted; spot-check dept 5 = 2804.08."""
+def test_dept_112_success_writes_dept_rows(monkeypatch,
+                                           staging_db_with_z_and_depts,
+                                           sample_pdf_bytes, sample_112_xls_bytes):
+    """Source switch happy path: PDF succeeds (Z total lands), the report-112
+    pull succeeds → dept rows persist with amount == sale_incl_vat and the new
+    cost/profit/margin columns populated. Real parse_112_departments runs."""
     monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
     monkeypatch.setattr(zr, '_refresh', lambda t: t)
     monkeypatch.setattr(zr, 'fetch_902_filters',
                         lambda b, t: {'data': [{'value': [
                             {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]})
-
-    def fake_submit(branch, z, token, output_type='PDF'):
-        return (f'https://example.invalid/r.{output_type.lower()}')
-
-    monkeypatch.setattr(zr, 'submit_902', fake_submit)
+    monkeypatch.setattr(zr, 'submit_902',
+                        lambda branch, z, token, output_type='PDF':
+                        'https://example.invalid/r.pdf')
     monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
-    monkeypatch.setattr(zr, 'download_xls', lambda u, t: sample_xls_bytes)
+    # 112 source: run the REAL parser against the captured fixture bytes
+    # (overrides the autouse no-network stub).
+    monkeypatch.setattr(
+        zr, 'fetch_112_departments',
+        lambda b, d, t: zr.parse_112_departments(sample_112_xls_bytes))
 
     result = zr.run_for_branch(126, '2026-05-20',
                                conn=staging_db_with_z_and_depts)
     assert result['ok'] is True
 
     rows = staging_db_with_z_and_depts.execute(
-        'SELECT dept_code, amount FROM z_department_sales '
+        'SELECT dept_code, dept_name, amount, qty, cost_ex_vat, profit, '
+        'profit_pct, contrib_pct FROM z_department_sales '
         'WHERE branch_id=? AND date=?',
         (126, '2026-05-20')).fetchall()
     assert len(rows) >= 30
-    by_code = {r['dept_code']: r['amount'] for r in rows}
-    # Fixture is from branch 127 but mocked through branch 126's pull —
-    # the XLS bytes determine the dept values, not the branch arg.
-    assert by_code.get(5) == 2804.08
-    assert by_code.get(83) == 1500.50
-    assert by_code.get(2) == 698.92
+    by_code = {r['dept_code']: r for r in rows}
+    # amount IS the 112 sale-incl-VAT figure (fixture: branch 127, 2026-05-27).
+    assert by_code[5]['amount'] == 2804.08
+    assert by_code[83]['amount'] == 1500.50
+    assert by_code[2]['amount'] == 679.31
+    # The grand-total row must NOT be stored as a department.
+    assert all(r['dept_name'] != 'סה"כ' for r in rows)
+    # New columns populated from 112 (dept 5).
+    assert by_code[5]['cost_ex_vat'] == 1840.554
+    assert by_code[5]['profit'] == 632.23
+    assert by_code[5]['profit_pct'] == 22.55
+    assert by_code[5]['contrib_pct'] == 22.92
+
+
+def test_run_for_branch_does_not_call_902_xls_dept_parser(
+        monkeypatch, staging_db_with_z_and_depts, sample_pdf_bytes,
+        sample_112_xls_bytes):
+    """Guard the source switch: parse_902_xls_departments is dormant and must
+    never be invoked on the live agent path. Trip-wire it to raise."""
+    monkeypatch.setattr(zr, '_login', lambda u, p: ('tok', 999))
+    monkeypatch.setattr(zr, '_refresh', lambda t: t)
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: {'data': [{'value': [
+                            {'key': 2525, 'value': '2026-05-20 23:59:59'}]}]})
+    monkeypatch.setattr(zr, 'submit_902',
+                        lambda branch, z, token, output_type='PDF':
+                        'https://example.invalid/r.pdf')
+    monkeypatch.setattr(zr, 'download_pdf', lambda u, t: sample_pdf_bytes)
+    monkeypatch.setattr(
+        zr, 'fetch_112_departments',
+        lambda b, d, t: zr.parse_112_departments(sample_112_xls_bytes))
+    monkeypatch.setattr(zr, 'parse_902_xls_departments',
+                        lambda b: (_ for _ in ()).throw(
+                            AssertionError('parse_902_xls_departments must not '
+                                           'be called — 112 is the source')))
+
+    result = zr.run_for_branch(126, '2026-05-20',
+                               conn=staging_db_with_z_and_depts)
+    assert result['ok'] is True
+    # Real 112 parse ran → dept rows landed.
+    n = staging_db_with_z_and_depts.execute(
+        'SELECT COUNT(*) AS c FROM z_department_sales').fetchone()['c']
+    assert n >= 30
 
 
 def test_build_submit_body_xls_outputtype():
