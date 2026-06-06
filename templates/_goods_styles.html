@@ -95,12 +95,25 @@
     .goal-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 0.6rem; }
     .goal-overpace { font-size: 0.82rem; color: #fca5a5; font-weight: 600; margin-bottom: 1rem; min-height: 1.1rem; }
     .goal-overpace.ok { color: #86efac; }
-    /* יתרה is the colored headline (--profit/--loss gradient via JS); the other
-       two are quiet/neutral cards (drops the off-palette brown תקציב card). */
+    /* Cohesive colored summary tiles, matching the /goods KPI family. Targeted
+       by DOM order (stable on desktop AND mobile — the יתרה headline is 3rd in
+       source even when visually reordered): 1=סה"כ תקציב, 2=קצב חזוי, 3=יתרה.
+         • יתרה   — green/red headline (--profit/--loss gradient via JS).
+         • קצב חזוי — blue (the --goods family, as it was before).
+         • סה"כ תקציב — indigo (the app's seg-toggle accent #6366f1; NOT brown). */
     .goal-kpis .kpi-label { white-space: nowrap; }
-    .goal-kpi-quiet { background: rgba(30,41,59,0.55); border: 1px solid #334155; box-shadow: none; }
-    .goal-kpi-quiet .kpi-value { color: #e2e8f0; }
-    .goal-kpi-quiet .kpi-label { color: #94a3b8; }
+    .goal-kpis .kpi-card:nth-child(1) {                       /* סה"כ תקציב — indigo */
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        border: 1px solid rgba(99,102,241,0.4); box-shadow: none;
+    }
+    .goal-kpis .kpi-card:nth-child(2) {                       /* קצב חזוי — blue */
+        background: linear-gradient(135deg, #4c8ffb 0%, #2563eb 100%);
+        border: 1px solid rgba(76,143,251,0.35); box-shadow: none;
+    }
+    .goal-kpis .kpi-card:nth-child(1) .kpi-value,
+    .goal-kpis .kpi-card:nth-child(2) .kpi-value { color: #fff; }
+    .goal-kpis .kpi-card:nth-child(1) .kpi-label,
+    .goal-kpis .kpi-card:nth-child(2) .kpi-label { color: rgba(255,255,255,0.85); }
     /* Mobile summary: יתרה headline full-width on top, the two quiet cards in a
        row beneath — compact, no cramped 3-up, no wrapped labels. */
     @media (max-width: 768px) {
