@@ -225,7 +225,7 @@ function renderGoals(data) {
     tr.textContent = ils0(data.totals.remaining);
     tr.className = 'kpi-value ' + (data.totals.remaining >= 0 ? 'profit' : 'loss');
     document.getElementById('goal-tot-remaining-card').className =
-        'kpi-card ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
+        'kpi-card goal-kpi-headline ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
     const overCount = data.suppliers.filter(s => s.remaining !== null && s.remaining < 0).length;
     const op = document.getElementById('goal-overpace');
     op.textContent = overCount + ' ספקים חורגים מהקצב';

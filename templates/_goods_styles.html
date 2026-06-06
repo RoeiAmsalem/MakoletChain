@@ -95,23 +95,53 @@
     .goal-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 0.6rem; }
     .goal-overpace { font-size: 0.82rem; color: #fca5a5; font-weight: 600; margin-bottom: 1rem; min-height: 1.1rem; }
     .goal-overpace.ok { color: #86efac; }
-    @media (max-width: 480px) {
-        .goal-kpis { gap: 0.4rem; }
-        .goal-kpis .kpi-card { padding: 0.7rem !important; }
-        .goal-kpis .kpi-value { font-size: 1.1rem !important; }
-        .goal-kpis .kpi-label { font-size: 0.72rem !important; }
+    /* יתרה is the colored headline (--profit/--loss gradient via JS); the other
+       two are quiet/neutral cards (drops the off-palette brown תקציב card). */
+    .goal-kpis .kpi-label { white-space: nowrap; }
+    .goal-kpi-quiet { background: rgba(30,41,59,0.55); border: 1px solid #334155; box-shadow: none; }
+    .goal-kpi-quiet .kpi-value { color: #e2e8f0; }
+    .goal-kpi-quiet .kpi-label { color: #94a3b8; }
+    /* Mobile summary: יתרה headline full-width on top, the two quiet cards in a
+       row beneath — compact, no cramped 3-up, no wrapped labels. */
+    @media (max-width: 768px) {
+        .goal-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .goal-kpi-headline { grid-column: 1 / -1; order: -1; }
+        .goal-kpi-headline .kpi-value { font-size: 1.7rem !important; }
+        .goal-kpis .kpi-card { padding: 0.7rem 0.85rem !important; }
+        .goal-kpi-quiet .kpi-value { font-size: 1.15rem !important; }
+        .goal-kpis .kpi-label { font-size: 0.74rem !important; }
         .goal-kpis .kpi-icon { font-size: 1rem !important; }
     }
     .goal-table td, .goal-table th { white-space: nowrap; }
-    /* Phone: drop the per-row קצב column (3rd) — it's already in the summary
-       strip — so ספק | תקציב | יתרה fit at 390px with no clip/scroll. Also let
-       the long ספק names wrap (1st col) so the table never exceeds the width. */
+    /* Phone: the desktop 4-col table becomes a stack of supplier CARDS — name on
+       its own line, then [תקציב input] … [יתרה] on a clean second line. No
+       name-wrapping pressure, even rows, no horizontal scroll. קצב lives in the
+       summary strip; the tfoot totals are the summary strip too, so both hide. */
     @media (max-width: 768px) {
-        #goal-table thead th:nth-child(3),
-        #goal-table tbody td:nth-child(3),
-        #goal-table tfoot td:nth-child(3) { display: none; }
-        #goal-table thead th:nth-child(1),
-        #goal-table tbody td:nth-child(1) { white-space: normal; word-break: break-word; }
+        #goal-table, #goal-table tbody { display: block; }
+        #goal-table thead, #goal-table tfoot { display: none; }
+        #goal-table tbody tr {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.6rem;
+            border: 1px solid #334155; border-radius: 10px;
+            background: rgba(255,255,255,0.025) !important;
+            margin-bottom: 0.5rem; padding: 0.7rem 0.85rem;
+        }
+        #goal-table tbody td {
+            display: block; border: none !important; padding: 0 !important;
+            background: transparent !important; font-size: 0.92rem;
+        }
+        #goal-table tbody td:nth-child(1) {   /* supplier name — own line */
+            flex: 0 0 100%; font-weight: 600; color: #fff;
+            white-space: normal; line-height: 1.3;
+        }
+        #goal-table tbody td:nth-child(3) { display: none; }   /* קצב — in summary strip */
+        #goal-table tbody td:nth-child(4) {   /* יתרה — pushed to inline-end */
+            margin-inline-start: auto; font-weight: 700;
+        }
+        /* label only on budgeted rows (.neg/.pos); unbudgeted show a bare "—" */
+        #goal-table tbody td.neg::before, #goal-table tbody td.pos::before {
+            content: 'יתרה '; color: #94a3b8; font-weight: 500; font-size: 0.78rem;
+        }
     }
     /* Budget context line under a supplier in the מסמכים "לפי ספק" list. */
     .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
@@ -134,9 +164,6 @@
     .neg { color: #fca5a5; font-weight: 600; }
     .muted { color: #64748b; }
     .goal-table tfoot td { background: #0f172a !important; font-weight: 700; border-top: 2px solid #334155; }
-    @media (max-width: 480px) {
-        .goal-table td, .goal-table th { padding: 0.55rem 0.5rem !important; font-size: 0.9rem; }
-    }
     .view-toggle { display: flex; gap: 0.5rem; align-items: center; }
     .view-toggle-label { font-size: 0.82rem; color: #94a3b8; font-weight: 600; }
     .supplier-group { border: 1px solid #334155; border-radius: 8px; margin-bottom: 0.5rem; background: rgba(255,255,255,0.02); }
