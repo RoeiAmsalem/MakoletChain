@@ -103,6 +103,15 @@
         .goal-kpis .kpi-icon { font-size: 1rem !important; }
     }
     .goal-table td, .goal-table th { white-space: nowrap; }
+    /* Phone: drop the per-row קצב column (3rd) — it's already in the summary
+       strip — so ספק | תקציב | יתרה fit at 390px with no clip/scroll. */
+    @media (max-width: 768px) {
+        #goal-table thead th:nth-child(3),
+        #goal-table tbody td:nth-child(3),
+        #goal-table tfoot td:nth-child(3) { display: none; }
+    }
+    /* Budget context line under a supplier in the מסמכים "לפי ספק" list. */
+    .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
     .goal-budget-input {
         width: 92px; background: #0f172a; color: #e2e8f0;
         border: 1px solid #334155; border-radius: 6px; padding: 6px 8px;
@@ -126,7 +135,7 @@
     .supplier-group summary {
         cursor: pointer; padding: 0.75rem 1rem; display: flex; align-items: center;
         justify-content: space-between; gap: 0.75rem; list-style: none;
-        font-weight: 600; user-select: none;
+        font-weight: 600; user-select: none; flex-wrap: wrap;
     }
     .supplier-group summary::-webkit-details-marker { display: none; }
     .supplier-group summary::before { content: '▸'; color: #94a3b8; font-size: 0.85rem; transition: transform 0.15s; }

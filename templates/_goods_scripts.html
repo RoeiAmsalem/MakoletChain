@@ -178,6 +178,9 @@ function closeDocDetail() {
 // ── יעדים: supplier-budget view (lazy-loaded from /api/goal/data) ──
 const ils0 = n => '₪ ' + Math.round(n).toLocaleString('en-US');
 let _goalsLoaded = false;
+// /api/goal/data is current-month pace — annotations only make sense when the
+// month picker is on the current month.
+const GOODS_IS_CURRENT_MONTH = {{ (selected_month == current_month) | tojson }};
 
 function switchGoodsView(view) {
     const isGoals = view === 'goals';
@@ -284,4 +287,34 @@ document.addEventListener('keydown', e => {
         openDocDetail(document.activeElement.dataset.rowId);
     }
 });
+
+// ── מסמכים → לפי ספק: annotate each supplier group with תקציב · יתרה ──
+// Reuses GET /api/goal/data (current-month budget + remaining pace), merged by
+// supplier_name. Current month only — pace figures mislead on a closed month.
+function annotateSupplierBudgets() {
+    if (!GOODS_IS_CURRENT_MONTH) return;
+    const groups = document.querySelectorAll('#goods-docs-view .supplier-group');
+    if (!groups.length) return;  // not in the "לפי ספק" grouped view
+    fetch('/api/goal/data')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            if (!data) return;
+            const map = {};
+            data.suppliers.forEach(s => { if (s.budget !== null) map[s.supplier_name] = s; });
+            groups.forEach(g => {
+                if (g.querySelector('.sg-budget')) return;  // idempotent
+                const nameEl = g.querySelector('.sg-name');
+                const s = nameEl && map[nameEl.textContent.trim()];
+                if (!s) return;
+                const remCls = s.remaining < 0 ? 'neg' : 'pos';
+                const div = document.createElement('div');
+                div.className = 'sg-budget';
+                div.innerHTML = 'תקציב ' + ils0(s.budget) +
+                    ' · <span class="' + remCls + '">יתרה ' + ils0(s.remaining) + '</span>';
+                g.querySelector('summary').appendChild(div);
+            });
+        })
+        .catch(() => {});  // annotation is non-critical — never break the doc list
+}
+annotateSupplierBudgets();
 </script>
