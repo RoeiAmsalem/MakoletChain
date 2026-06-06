@@ -30,6 +30,13 @@ REPORT_ID = 112
 _CODE_RE = re.compile(r'^\s*(\d+)\s*-\s*(.+?)\s*$')
 
 
+def _f(v):
+    try:
+        return float(str(v).replace('%', '').replace(',', '').strip())
+    except (ValueError, AttributeError):
+        return 0.0
+
+
 def aviv_id_for(local_id):
     conn = sqlite3.connect(DB)
     r = conn.execute('SELECT aviv_branch_id FROM branches WHERE id=?',
@@ -84,10 +91,10 @@ def pull_112(av, token, day):
             continue
         code = int(m.group(1))
         out[code] = {
-            'name': m.group(2), 'contrib': sh.cell_value(i, 0),
-            'profit_pct': sh.cell_value(i, 1), 'profit': sh.cell_value(i, 2),
-            'sale_incl_vat': sh.cell_value(i, 3), 'cost_ex_vat': sh.cell_value(i, 4),
-            'qty': sh.cell_value(i, 5),
+            'name': m.group(2), 'contrib': _f(sh.cell_value(i, 0)),
+            'profit_pct': _f(sh.cell_value(i, 1)), 'profit': _f(sh.cell_value(i, 2)),
+            'sale_incl_vat': _f(sh.cell_value(i, 3)), 'cost_ex_vat': _f(sh.cell_value(i, 4)),
+            'qty': _f(sh.cell_value(i, 5)),
         }
     return out
 
