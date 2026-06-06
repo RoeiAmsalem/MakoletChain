@@ -97,7 +97,8 @@ def main():
     print('url:', file_url)
     g = requests.get(file_url, headers={'Authtoken': tok}, timeout=60, verify=False)
     xls = g.content
-    print(f'xls bytes={len(xls)}')
+    import hashlib
+    print(f'xls bytes={len(xls)} md5={hashlib.md5(xls).hexdigest()}')
 
     # 3) Dump rows.
     try:
