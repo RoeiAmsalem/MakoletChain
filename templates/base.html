@@ -45,7 +45,6 @@
             <li><a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a></li>
             <li><a href="/sales" class="{% if active_page == 'sales' %}active{% endif %}">הכנסות</a></li>
             <li><a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a></li>
-            <li><a href="/goal" class="{% if active_page == 'goal' %}active{% endif %}">יעד</a></li>
             <li><a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a></li>
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
             {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
@@ -98,7 +97,6 @@
         <a href="/" class="{% if active_page == 'home' %}active{% endif %}">בית</a>
         <a href="/sales" class="{% if active_page == 'sales' %}active{% endif %}">הכנסות</a>
         <a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a>
-        <a href="/goal" class="{% if active_page == 'goal' %}active{% endif %}">יעד</a>
         <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
         {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
@@ -170,7 +168,8 @@ async function loadBranchSwitcher() {
     branches.forEach(b => {
         const opt = document.createElement('option');
         opt.value = b.id;
-        opt.textContent = b.name + ' — ' + b.city;
+        // Append " — city" only when the branch has a city (avoids "Name — null").
+        opt.textContent = b.city ? (b.name + ' — ' + b.city) : b.name;
         if (b.id == CURRENT_BRANCH_ID) opt.selected = true;
         sel.appendChild(opt);
     });

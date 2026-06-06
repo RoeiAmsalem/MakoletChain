@@ -175,6 +175,88 @@ function closeDocDetail() {
     if (body) body.innerHTML = '<div class="doc-modal-loading">טוען פירוט מסמך…</div>';
 }
 
+// ── יעדים: supplier-budget view (lazy-loaded from /api/goal/data) ──
+const ils0 = n => '₪ ' + Math.round(n).toLocaleString('en-US');
+let _goalsLoaded = false;
+
+function switchGoodsView(view) {
+    const isGoals = view === 'goals';
+    document.getElementById('goods-docs-view').hidden = isGoals;
+    document.getElementById('goods-goals-view').hidden = !isGoals;
+    document.getElementById('goods-view-docs').classList.toggle('active', !isGoals);
+    document.getElementById('goods-view-goals').classList.toggle('active', isGoals);
+    // Lazy-load on first switch to יעדים — not on initial page load.
+    if (isGoals && !_goalsLoaded) { _goalsLoaded = true; loadGoals(); }
+}
+
+async function loadGoals() {
+    const loading = document.getElementById('goal-loading');
+    const wrap = document.getElementById('goal-table-wrap');
+    const empty = document.getElementById('goal-empty');
+    loading.hidden = false; wrap.hidden = true; empty.hidden = true;
+    try {
+        const res = await fetch('/api/goal/data');
+        if (!res.ok) throw new Error('load failed');
+        renderGoals(await res.json());
+    } catch (e) {
+        _goalsLoaded = false;  // allow retry on next switch
+        loading.textContent = 'טעינת היעדים נכשלה, נסה שוב';
+    }
+}
+
+function renderGoals(data) {
+    document.getElementById('goal-day-line').textContent =
+        'יום ' + data.days_elapsed + ' מתוך ' + data.days_in_month;
+    const loading = document.getElementById('goal-loading');
+    const wrap = document.getElementById('goal-table-wrap');
+    const empty = document.getElementById('goal-empty');
+    loading.hidden = true;
+    if (!data.suppliers.length) { wrap.hidden = true; empty.hidden = false; return; }
+    empty.hidden = true; wrap.hidden = false;
+
+    document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
+        const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');
+        const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
+        const bv = s.budget === null ? '' : (Math.round(s.budget * 100) / 100);
+        return '<tr data-supplier="' + esc(s.supplier_name) + '">' +
+            '<td>' + esc(s.supplier_name) + '</td>' +
+            '<td class="num"><input type="number" inputmode="decimal" min="0" step="50" ' +
+                'class="goal-budget-input" value="' + bv + '" placeholder="—" aria-label="תקציב חודשי"></td>' +
+            '<td class="num">' + ils0(s.projected) + '</td>' +
+            '<td class="num ' + remCls + '">' + remCell + '</td>' +
+            '</tr>';
+    }).join('');
+    document.getElementById('goal-foot-budget').textContent = ils0(data.totals.budget);
+    document.getElementById('goal-foot-projected').textContent = ils0(data.totals.projected);
+    const fr = document.getElementById('goal-foot-remaining');
+    fr.textContent = ils0(data.totals.remaining);
+    fr.className = 'num ' + (data.totals.remaining < 0 ? 'neg' : 'pos');
+}
+
+async function saveBudget(supplier, value, inputEl) {
+    inputEl.classList.add('saving');
+    try {
+        const res = await fetch('/api/goal/budget', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ supplier_name: supplier, monthly_budget: value }),
+        });
+        if (!res.ok) throw new Error('save failed');
+        renderGoals(await res.json());
+        const row = document.querySelector('tr[data-supplier="' + (window.CSS && CSS.escape ? CSS.escape(supplier) : supplier) + '"] .goal-budget-input');
+        if (row) { row.classList.add('saved'); setTimeout(() => row.classList.remove('saved'), 1200); }
+    } catch (e) {
+        inputEl.classList.remove('saving');
+        alert('שמירת התקציב נכשלה, נסה שוב');
+    }
+}
+
+document.addEventListener('change', e => {
+    if (!e.target.classList || !e.target.classList.contains('goal-budget-input')) return;
+    const tr = e.target.closest('tr');
+    if (tr) saveBudget(tr.dataset.supplier, e.target.value, e.target);
+});
+
 document.addEventListener('click', e => {
     const row = e.target.closest('.doc-row');
     if (row) { openDocDetail(row.dataset.rowId); return; }

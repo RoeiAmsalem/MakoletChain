@@ -1,4 +1,16 @@
 
+<!-- View toggle: doc list (default) ⇄ supplier-budget goals. Matches the
+     segmented control used on the home P/L + hourly chart. -->
+<div style="display:flex;justify-content:center;margin-bottom:1rem;">
+    <div class="seg-control" id="goods-view-toggle">
+        <button type="button" id="goods-view-docs" class="seg-btn active" onclick="switchGoodsView('docs')">מסמכים</button>
+        <button type="button" id="goods-view-goals" class="seg-btn" onclick="switchGoodsView('goals')">יעדים</button>
+    </div>
+</div>
+
+<!-- ── מסמכים: existing invoice/doc list (unchanged) ── -->
+<div id="goods-docs-view">
+
 <!-- KPI Cards -->
 <section class="goods-kpis">
     <div class="kpi-card kpi-card--goods">
@@ -154,6 +166,42 @@
         <p>מסמכים יסונכרנו אוטומטית מ-BilBoy</p>
     </div>
     {% endif %}
+</section>
+</div><!-- /#goods-docs-view -->
+
+<!-- ── יעדים: per-supplier budget tracker (lazy-loaded from /api/goal/data) ── -->
+<section class="card" id="goods-goals-view" hidden>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.85rem;flex-wrap:wrap;gap:0.4rem">
+        <h2 class="section-title" style="margin-bottom:0">תקציב ספקים</h2>
+        <span class="goal-sub" id="goal-day-line"></span>
+    </div>
+    <div id="goal-loading" class="doc-modal-loading" style="padding:2rem 1rem">טוען יעדים…</div>
+    <div id="goal-empty" class="empty-state" hidden>
+        <div class="icon">🎯</div>
+        <h3>אין ספקים לחודש זה</h3>
+        <p>ספקים יופיעו אוטומטית מנתוני הסחורה (BilBoy)</p>
+    </div>
+    <div id="goal-table-wrap" style="overflow-x:auto" hidden>
+        <table class="data-table goal-table" id="goal-table">
+            <thead>
+                <tr>
+                    <th>ספק</th>
+                    <th class="num">תקציב</th>
+                    <th class="num">קצב</th>
+                    <th class="num">יתרה</th>
+                </tr>
+            </thead>
+            <tbody id="goal-tbody"></tbody>
+            <tfoot>
+                <tr>
+                    <td>סה"כ</td>
+                    <td class="num" id="goal-foot-budget">—</td>
+                    <td class="num" id="goal-foot-projected">—</td>
+                    <td class="num" id="goal-foot-remaining">—</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
 </section>
 
 <!-- Invoice line-item detail modal (loaded on demand) -->

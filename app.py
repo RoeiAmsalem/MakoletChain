@@ -1198,16 +1198,17 @@ def api_goods_doc_detail(row_id):
 
 
 # ── Goal — per-supplier monthly purchase-budget tracker ──────────
-# Manager sets a monthly budget (תקציב) per supplier; the page shows the
-# projected month-end spend at the current pace (קצב, a simple run-rate over
-# the goods bought so far this month) versus that budget, with the remaining
-# headroom (יתרה = תקציב − קצב, red when negative). Single branch, current
-# month. The "actual" spend MUST reconcile to /goods, so we reuse the exact
+# Manager sets a monthly budget (תקציב) per supplier; the יעדים toggle on the
+# /goods page shows the projected month-end spend at the current pace (קצב, a
+# simple run-rate over the goods bought so far this month) versus that budget,
+# with the remaining headroom (יתרה = תקציב − קצב, red when negative). Single
+# branch, current month. Served as JSON by /api/goal/data + /api/goal/budget.
+# The "actual" spend MUST reconcile to /goods, so we reuse the exact
 # _goods_doc_context aggregation (same dedup/status/franchise rules, pre-VAT
 # basis) and just group its supplier totals — never a fresh goods query.
 
 def _goal_data(branch_id, db):
-    """Build the /goal payload for one branch + the current Israel-time month.
+    """Build the budget-tracker payload for one branch + current Israel month.
 
     Supplier roster = suppliers with goods this month OR last month, UNION
     suppliers that have a saved budget (so the full roster shows early in the
@@ -1282,16 +1283,6 @@ def _goal_data(branch_id, db):
             'remaining': total_remaining,
         },
     }
-
-
-@app.route('/goal')
-@login_required
-def goal():
-    ctx = _page_context('goal')
-    db = get_db()
-    data = _goal_data(ctx['branch_id'], db)
-    ctx.update(data)
-    return render_template('goal.html', **ctx)
 
 
 @app.route('/api/goal/data')

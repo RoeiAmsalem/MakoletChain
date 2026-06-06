@@ -276,6 +276,23 @@ body {
     box-shadow: var(--shadow);
 }
 
+/* --- Segmented toggle (shared: home P/L, hourly chart, goods doc/goal) --- */
+.seg-control {
+    display: inline-flex; background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 999px;
+    padding: 4px; gap: 4px;
+}
+.seg-btn {
+    background: transparent; color: #cbd5e1; border: none; border-radius: 999px;
+    padding: 6px 18px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    font-family: inherit; white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+}
+.seg-btn.active { background: #6366f1; color: #fff; }
+@media (max-width: 768px) {
+    .seg-btn { padding: 6px 14px; font-size: 0.8rem; }
+}
+
 /* --- KPI Cards Grid ------------------------------------------ */
 .cards-grid {
     display: grid;
