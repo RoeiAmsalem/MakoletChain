@@ -6,6 +6,10 @@ Then captures the יעדים view under a real iPhone 13 device profile.
 
 Usage:  python3 scripts/diag_goal_127.py
 """
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 import sqlite3
 import app as app_module
 from app import app, _goal_data, _goods_doc_context
