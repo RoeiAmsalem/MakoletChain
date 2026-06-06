@@ -125,6 +125,11 @@
     .goal-budget-input.saving { opacity: 0.5; }
     .goal-budget-input.saved { border-color: #22c55e; }
     .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+    /* The shared `.data-table thead th { text-align:right }` outranks `.num`, so
+       numeric headers were right-aligned while their cells (תקציב input / קצב /
+       יתרה) are left-aligned — the header sat to the right of its values. Match
+       the headers to the cells so each header sits directly above its column. */
+    #goal-table thead th.num { text-align: left; }
     .pos { color: #86efac; font-weight: 600; }
     .neg { color: #fca5a5; font-weight: 600; }
     .muted { color: #64748b; }
