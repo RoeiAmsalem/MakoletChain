@@ -207,6 +207,13 @@ async function loadGoals() {
     }
 }
 
+// יתרה color rule (per-row, foot, strip headline, מסמכים annotation):
+//   > 0 → green (.pos), < 0 → red (.neg), == 0 → neutral (no color), null → none.
+function remCls(r) {
+    if (r === null || r === undefined) return '';
+    return r > 0 ? 'pos' : (r < 0 ? 'neg' : '');
+}
+
 function renderGoals(data) {
     document.getElementById('goal-day-line').textContent =
         'יום ' + data.days_elapsed + ' מתוך ' + data.days_in_month;
@@ -218,38 +225,40 @@ function renderGoals(data) {
     if (!data.suppliers.length) { wrap.hidden = true; summary.hidden = true; empty.hidden = false; return; }
     empty.hidden = true; wrap.hidden = false; summary.hidden = false;
 
-    // Summary strip — same totals as the bottom totals row.
+    // Summary strip — budgeted-only totals (same numbers as the bottom row).
     document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
-    document.getElementById('goal-tot-projected').textContent = ils0(data.totals.projected);
+    document.getElementById('goal-tot-spent').textContent = ils0(data.totals.spent);
     const tr = document.getElementById('goal-tot-remaining');
+    const tc = remCls(data.totals.remaining);
     tr.textContent = ils0(data.totals.remaining);
-    tr.className = 'kpi-value ' + (data.totals.remaining >= 0 ? 'profit' : 'loss');
+    tr.className = 'kpi-value ' + (tc === 'pos' ? 'profit' : (tc === 'neg' ? 'loss' : ''));
     document.getElementById('goal-tot-remaining-card').className =
-        'kpi-card goal-kpi-headline ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
+        'kpi-card goal-kpi-headline ' +
+        (tc === 'pos' ? 'kpi-card--profit' : (tc === 'neg' ? 'kpi-card--loss' : ''));
     const overCount = data.suppliers.filter(s => s.remaining !== null && s.remaining < 0).length;
     const op = document.getElementById('goal-overpace');
-    op.textContent = overCount + ' ספקים חורגים מהקצב';
+    op.textContent = overCount + ' ספקים חורגים מהתקציב';
     op.classList.toggle('ok', overCount === 0);
 
     document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
-        const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');
+        const rc = remCls(s.remaining);
         const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
-        // Idle: formatted like קצב/יתרה (₪ + commas via ils0). Text input so the
+        // Idle: formatted like הוצאה/יתרה (₪ + commas via ils0). Text input so the
         // ₪/commas can show; focus swaps to the raw number (see budget handlers).
         const bv = s.budget === null ? '' : ils0(s.budget);
         return '<tr data-supplier="' + esc(s.supplier_name) + '">' +
             '<td>' + esc(s.supplier_name) + '</td>' +
             '<td class="num"><input type="text" inputmode="decimal" ' +
                 'class="goal-budget-input" value="' + bv + '" placeholder="הוסף תקציב" aria-label="תקציב חודשי"></td>' +
-            '<td class="num">' + ils0(s.projected) + '</td>' +
-            '<td class="num ' + remCls + '">' + remCell + '</td>' +
+            '<td class="num goal-spend">' + ils0(s.mtd_spend) + '</td>' +
+            '<td class="num goal-rem ' + rc + '">' + remCell + '</td>' +
             '</tr>';
     }).join('');
     document.getElementById('goal-foot-budget').textContent = ils0(data.totals.budget);
-    document.getElementById('goal-foot-projected').textContent = ils0(data.totals.projected);
+    document.getElementById('goal-foot-spent').textContent = ils0(data.totals.spent);
     const fr = document.getElementById('goal-foot-remaining');
     fr.textContent = ils0(data.totals.remaining);
-    fr.className = 'num ' + (data.totals.remaining < 0 ? 'neg' : 'pos');
+    fr.className = 'num ' + remCls(data.totals.remaining);
 }
 
 // Strip ₪ / commas / spaces → plain number (or '' when blank). The budget POST
@@ -326,11 +335,11 @@ function annotateSupplierBudgets() {
                 const nameEl = g.querySelector('.sg-name');
                 const s = nameEl && map[nameEl.textContent.trim()];
                 if (!s) return;
-                const remCls = s.remaining < 0 ? 'neg' : 'pos';
+                const rc = remCls(s.remaining);
                 const div = document.createElement('div');
                 div.className = 'sg-budget';
                 div.innerHTML = 'תקציב ' + ils0(s.budget) +
-                    ' · <span class="' + remCls + '">יתרה ' + ils0(s.remaining) + '</span>';
+                    ' · <span class="' + rc + '">יתרה ' + ils0(s.remaining) + '</span>';
                 g.querySelector('summary').appendChild(div);
             });
         })

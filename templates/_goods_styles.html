@@ -97,16 +97,16 @@
     .goal-overpace.ok { color: #86efac; }
     /* Cohesive colored summary tiles, matching the /goods KPI family. Targeted
        by DOM order (stable on desktop AND mobile — the יתרה headline is 3rd in
-       source even when visually reordered): 1=סה"כ תקציב, 2=קצב חזוי, 3=יתרה.
-         • יתרה   — green/red headline (--profit/--loss gradient via JS).
-         • קצב חזוי — blue (the --goods family, as it was before).
+       source even when visually reordered): 1=סה"כ תקציב, 2=סה"כ הוצאה, 3=יתרה.
+         • יתרה   — green/red/neutral headline (--profit/--loss gradient via JS).
+         • סה"כ הוצאה — blue (the --goods family).
          • סה"כ תקציב — indigo (the app's seg-toggle accent #6366f1; NOT brown). */
     .goal-kpis .kpi-label { white-space: nowrap; }
     .goal-kpis .kpi-card:nth-child(1) {                       /* סה"כ תקציב — indigo */
         background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
         border: 1px solid rgba(99,102,241,0.4); box-shadow: none;
     }
-    .goal-kpis .kpi-card:nth-child(2) {                       /* קצב חזוי — blue */
+    .goal-kpis .kpi-card:nth-child(2) {                       /* סה"כ הוצאה — blue */
         background: linear-gradient(135deg, #4c8ffb 0%, #2563eb 100%);
         border: 1px solid rgba(76,143,251,0.35); box-shadow: none;
     }
@@ -126,35 +126,48 @@
         .goal-kpis .kpi-icon { font-size: 1rem !important; }
     }
     .goal-table td, .goal-table th { white-space: nowrap; }
-    /* Phone: the desktop 4-col table becomes a stack of supplier CARDS — name on
-       its own line, then [תקציב input] … [יתרה] on a clean second line. No
-       name-wrapping pressure, even rows, no horizontal scroll. קצב lives in the
-       summary strip; the tfoot totals are the summary strip too, so both hide. */
+    /* Phone (iPhone 13): the desktop 4-col table becomes a stack of supplier
+       CARDS. Name on its own line, then a 3-up labeled row — תקציב (input) ·
+       הוצאה · יתרה — each with a small grey label above its value so all four
+       read cleanly at phone width with no clipping and no horizontal scroll. */
     @media (max-width: 768px) {
         #goal-table, #goal-table tbody { display: block; }
         #goal-table thead, #goal-table tfoot { display: none; }
         #goal-table tbody tr {
-            display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.6rem;
-            border: 1px solid #334155; border-radius: 10px;
+            display: grid;
+            grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr);
+            gap: 0.4rem 0.7rem; align-items: start;
+            border: 1px solid #334155; border-radius: 12px;
             background: rgba(255,255,255,0.025) !important;
-            margin-bottom: 0.5rem; padding: 0.7rem 0.85rem;
+            margin-bottom: 0.6rem; padding: 0.8rem 0.9rem;
         }
         #goal-table tbody td {
             display: block; border: none !important; padding: 0 !important;
-            background: transparent !important; font-size: 0.92rem;
+            background: transparent !important;
         }
-        #goal-table tbody td:nth-child(1) {   /* supplier name — own line */
-            flex: 0 0 100%; font-weight: 600; color: #fff;
-            white-space: normal; line-height: 1.3;
+        #goal-table tbody td:nth-child(1) {   /* supplier name — own line, full width */
+            grid-column: 1 / -1; font-weight: 700; color: #fff; font-size: 1rem;
+            white-space: normal; line-height: 1.3; margin-bottom: 0.1rem;
         }
-        #goal-table tbody td:nth-child(3) { display: none; }   /* קצב — in summary strip */
-        #goal-table tbody td:nth-child(4) {   /* יתרה — pushed to inline-end */
-            margin-inline-start: auto; font-weight: 700;
+        /* label above each field; values right-aligned to sit under the label */
+        #goal-table tbody td.num { text-align: right; }
+        #goal-table tbody td.num::before {
+            display: block; color: #94a3b8; font-weight: 500;
+            font-size: 0.72rem; margin-bottom: 0.3rem; white-space: nowrap;
         }
-        /* label only on budgeted rows (.neg/.pos); unbudgeted show a bare "—" */
-        #goal-table tbody td.neg::before, #goal-table tbody td.pos::before {
-            content: 'יתרה '; color: #94a3b8; font-weight: 500; font-size: 0.78rem;
+        #goal-table tbody td:nth-child(2)::before { content: 'תקציב'; }
+        #goal-table tbody td.goal-spend::before  { content: 'הוצאה'; }
+        #goal-table tbody td.goal-rem::before    { content: 'יתרה'; }
+        #goal-table tbody td.goal-spend {
+            color: #e2e8f0; font-size: 1rem; font-variant-numeric: tabular-nums;
         }
+        #goal-table tbody td.goal-rem {
+            font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums;
+        }
+        /* neutral (יתרה == 0 / unbudgeted "—") only — must NOT outrank .pos/.neg */
+        #goal-table tbody td.goal-rem:not(.pos):not(.neg) { color: #e2e8f0; }
+        /* input fills its column so it stays a comfortable, easy-to-edit field */
+        #goal-table tbody td .goal-budget-input { width: 100%; }
     }
     /* Budget context line under a supplier in the מסמכים "לפי ספק" list. */
     .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
@@ -169,7 +182,7 @@
     .goal-budget-input.saved { border-color: #22c55e; }
     .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
     /* The shared `.data-table thead th { text-align:right }` outranks `.num`, so
-       numeric headers were right-aligned while their cells (תקציב input / קצב /
+       numeric headers were right-aligned while their cells (תקציב input / הוצאה /
        יתרה) are left-aligned — the header sat to the right of its values. Match
        the headers to the cells so each header sits directly above its column. */
     #goal-table thead th.num { text-align: left; }

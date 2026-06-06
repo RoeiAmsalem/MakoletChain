@@ -1199,13 +1199,13 @@ def api_goods_doc_detail(row_id):
 
 # ── Goal — per-supplier monthly purchase-budget tracker ──────────
 # Manager sets a monthly budget (תקציב) per supplier; the יעדים toggle on the
-# /goods page shows the projected month-end spend at the current pace (קצב, a
-# simple run-rate over the goods bought so far this month) versus that budget,
-# with the remaining headroom (יתרה = תקציב − קצב, red when negative). Single
-# branch, current month. Served as JSON by /api/goal/data + /api/goal/budget.
-# The "actual" spend MUST reconcile to /goods, so we reuse the exact
-# _goods_doc_context aggregation (same dedup/status/franchise rules, pre-VAT
-# basis) and just group its supplier totals — never a fresh goods query.
+# /goods page shows the ACTUAL month-to-date spend (הוצאה) versus that budget,
+# with the remaining headroom (יתרה = תקציב − הוצאה, green when positive, red
+# when negative, neutral at exactly 0). Single branch, current month. Served as
+# JSON by /api/goal/data + /api/goal/budget. The הוצאה MUST reconcile to /goods,
+# so we reuse the exact _goods_doc_context aggregation (same dedup/status/
+# franchise rules, pre-VAT basis) and just group its supplier totals — never a
+# fresh goods query.
 
 def _goal_data(branch_id, db):
     """Build the budget-tracker payload for one branch + current Israel month.
@@ -1213,8 +1213,8 @@ def _goal_data(branch_id, db):
     Supplier roster = suppliers with goods this month OR last month, UNION
     suppliers that have a saved budget (so the full roster shows early in the
     month and budgeted-but-unordered suppliers still appear). mtd_spend is the
-    pre-VAT goods total from /goods's own aggregation. projected is the run-rate
-    mtd_spend * days_in_month / days_elapsed (days_elapsed floored at 1)."""
+    actual pre-VAT goods total from /goods's own aggregation (the "הוצאה"
+    value); remaining (יתרה) = budget − mtd_spend."""
     now = _now_il()
     month = now.strftime('%Y-%m')
     prev_month = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
@@ -1249,34 +1249,33 @@ def _goal_data(branch_id, db):
     suppliers = []
     for name in roster:
         mtd = round(cur_spend.get(name, 0.0), 2)
-        projected = round(mtd * days_in_month / days_elapsed, 2)  # days_elapsed >= 1
         budget = budgets.get(name)
-        remaining = round(budget - projected, 2) if budget is not None else None
+        # יתרה = תקציב − actual spent (mtd). Actual-spending model, not pace.
+        remaining = round(budget - mtd, 2) if budget is not None else None
         suppliers.append({
             'supplier_name': name,
             'mtd_spend': mtd,
-            'projected': projected,
             'budget': budget,
             'remaining': remaining,
         })
 
     # Most over-budget first: budgeted rows (remaining ASC) above unbudgeted
-    # rows (biggest projected spend first).
+    # rows (biggest actual spend first).
     suppliers.sort(key=lambda s: (
         s['budget'] is None,
         s['remaining'] if s['remaining'] is not None else 0,
-        -s['projected'],
+        -s['mtd_spend'],
     ))
 
     # Totals are summed over budgeted suppliers ONLY, so all three share one
-    # basis. Summing קצב/יתרה over unbudgeted suppliers too made the headline
+    # basis. Summing הוצאה/יתרה over unbudgeted suppliers too made the headline
     # יתרה look like a huge blowout on branches where only a few suppliers are
     # budgeted (the "N ספקים חורגים" count was already budgeted-only). Per-row
-    # data is untouched — unbudgeted rows still show their own קצב.
+    # data is untouched — unbudgeted rows still show their own הוצאה.
     budgeted = [s for s in suppliers if s['budget'] is not None and s['budget'] > 0]
     total_budget = round(sum(s['budget'] for s in budgeted), 2)
-    total_projected = round(sum(s['projected'] for s in budgeted), 2)
-    total_remaining = round(total_budget - total_projected, 2)
+    total_spent = round(sum(s['mtd_spend'] for s in budgeted), 2)
+    total_remaining = round(total_budget - total_spent, 2)
 
     return {
         'suppliers': suppliers,
@@ -1285,7 +1284,7 @@ def _goal_data(branch_id, db):
         'month': month,
         'totals': {
             'budget': total_budget,
-            'projected': total_projected,
+            'spent': total_spent,
             'remaining': total_remaining,
         },
     }
