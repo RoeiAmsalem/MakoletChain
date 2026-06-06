@@ -76,10 +76,7 @@ def main():
         text = _extract_pdf_text(pdf_bytes)
         # Dump full text for the control so we can SEE where depts live in a
         # known-good PDF; broken ones only dumped if they show any marker.
-        is_control = bid == 9017
-        hit = report(text, dump=is_control)
-        if hit and not is_control:
-            report(text, dump=True)
+        report(text, dump=True)  # dump all three in full for the record
         # XLS side-by-side
         xls_url = submit_902(av, z, token, output_type='XLS')
         xls_bytes = download_xls(xls_url, token)
