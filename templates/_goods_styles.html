@@ -104,11 +104,14 @@
     }
     .goal-table td, .goal-table th { white-space: nowrap; }
     /* Phone: drop the per-row קצב column (3rd) — it's already in the summary
-       strip — so ספק | תקציב | יתרה fit at 390px with no clip/scroll. */
+       strip — so ספק | תקציב | יתרה fit at 390px with no clip/scroll. Also let
+       the long ספק names wrap (1st col) so the table never exceeds the width. */
     @media (max-width: 768px) {
         #goal-table thead th:nth-child(3),
         #goal-table tbody td:nth-child(3),
         #goal-table tfoot td:nth-child(3) { display: none; }
+        #goal-table thead th:nth-child(1),
+        #goal-table tbody td:nth-child(1) { white-space: normal; word-break: break-word; }
     }
     /* Budget context line under a supplier in the מסמכים "לפי ספק" list. */
     .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
