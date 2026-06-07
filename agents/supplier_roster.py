@@ -38,10 +38,13 @@ def prior_two_months(now: datetime | None = None) -> tuple[str, str]:
     return older_last.strftime('%Y-%m'), newer_last.strftime('%Y-%m')
 
 
-def build_for_branch(conn, branch_id: int, now: datetime | None = None) -> int:
-    """Replace branch_id's roster with distinct goods suppliers from the prior 2
-    calendar months. NO visible_from floor; franchise supplier + blank/— names
-    excluded. Returns the number of roster rows written."""
+def prior_two_month_suppliers(conn, branch_id: int,
+                              now: datetime | None = None) -> list[str]:
+    """Distinct goods suppliers over the prior 2 calendar months — the roster
+    source of truth. NO visible_from floor; franchise supplier + blank/— names
+    excluded. Used BOTH to build the supplier_roster table AND as _goal_data's
+    live fallback when the table hasn't been built for the branch yet (so the
+    budget page never depends on the monthly build having already run)."""
     older, newer = prior_two_months(now)
 
     frow = conn.execute(
@@ -73,7 +76,13 @@ def build_for_branch(conn, branch_id: int, now: datetime | None = None) -> int:
             continue
         seen.add(s)
         names.append(s)
+    return names
 
+
+def build_for_branch(conn, branch_id: int, now: datetime | None = None) -> int:
+    """Replace branch_id's roster with the prior-2-month supplier set. Returns
+    the number of roster rows written."""
+    names = prior_two_month_suppliers(conn, branch_id, now)
     conn.execute('DELETE FROM supplier_roster WHERE branch_id = ?', (branch_id,))
     conn.executemany(
         "INSERT OR IGNORE INTO supplier_roster (branch_id, supplier_name, updated_at) "
