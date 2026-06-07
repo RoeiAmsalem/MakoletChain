@@ -1081,11 +1081,13 @@ def _goods_doc_context(branch_id, month, db):
 
 # ── Budget (תקציב) — per-supplier monthly purchase-budget tracker ──
 # Manager sets a monthly budget (תקציב) per supplier; the תקציב toggle on the
-# /goods page shows the projected month-end spend at the current pace (קצב, a
-# simple run-rate over the goods bought so far this month) versus that budget,
-# with the remaining headroom (יתרה = תקציב − קצב, red when negative). Single
-# branch, current month. Served as JSON by /api/goal/data + /api/goal/budget.
-# The "actual" spend MUST reconcile to /goods, so we reuse the exact
+# /goods page shows the ACTUAL month-to-date spend (הוצאה) versus that budget,
+# with the remaining headroom (יתרה = תקציב − הוצאה, green when positive, red
+# when negative, neutral at exactly 0). projected (קצב) is an INFORMATIONAL
+# run-rate (mtd_spend / days_elapsed × days_in_month) surfaced per supplier —
+# it does NOT affect יתרה or the color rule and is never summed into totals.
+# Single branch, current month. Served as JSON by /api/goal/data +
+# /api/goal/budget. The הוצאה MUST reconcile to /goods, so we reuse the exact
 # _goods_doc_context aggregation (same dedup/status/franchise rules, pre-VAT
 # basis) and just group its supplier totals — never a fresh goods query.
 # NOTE: the API/route/internal names stay /api/goal/* + _goal_data (only the
@@ -1097,25 +1099,22 @@ def _goal_data(branch_id, db):
     Supplier roster = suppliers with goods this month OR last month, UNION
     suppliers that have a saved budget (so the full roster shows early in the
     month and budgeted-but-unordered suppliers still appear). mtd_spend is the
-    pre-VAT goods total from /goods's own aggregation. projected is the run-rate
-    mtd_spend * days_in_month / days_elapsed (days_elapsed floored at 1)."""
+    actual pre-VAT goods total from /goods's own aggregation (the "הוצאה"
+    value); remaining (יתרה) = budget − mtd_spend. projected (קצב) is the
+    informational run-rate mtd_spend × days_in_month / days_elapsed."""
     now = _now_il()
     month = now.strftime('%Y-%m')
-    prev_month = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     days_elapsed = max(1, now.day)
 
     # Below-floor guard: a floored branch must not see a pre-floor month. The
     # current month is at/after the floor in practice, but guard anyway so the
-    # endpoint can never leak pre-floor goods.
+    # endpoint can never leak pre-floor goods. (Displayed spend stays
+    # floor-respecting; the roster table below is deliberately floor-IGNORING.)
     if _month_below_floor(branch_id, month, db):
         cur_groups = []
     else:
         cur_groups = _goods_doc_context(branch_id, month, db)['groups']
-    if _month_below_floor(branch_id, prev_month, db):
-        prev_groups = []
-    else:
-        prev_groups = _goods_doc_context(branch_id, prev_month, db)['groups']
 
     # pre-VAT MTD spend per supplier (reconciles to /goods total_before_vat).
     cur_spend = {g['supplier']: g['total_before_vat'] for g in cur_groups}
@@ -1126,16 +1125,30 @@ def _goal_data(branch_id, db):
     ).fetchall()
     budgets = {r['supplier_name']: r['monthly_budget'] for r in budget_rows}
 
-    roster = set(cur_spend) | {g['supplier'] for g in prev_groups} | set(budgets)
+    # Full roster (supplier_roster, migration 029) — built monthly from the
+    # prior 2 months of BilBoy goods (floor-IGNORING, franchise-excluded) so a
+    # manager can budget any supplier before ordering this month. Union with
+    # current-month spenders + budgeted suppliers so brand-new / budgeted names
+    # are never missed. If the table is empty (before the first build) the union
+    # degrades to current ∪ budgeted — no breakage.
+    roster_rows = db.execute(
+        "SELECT supplier_name FROM supplier_roster WHERE branch_id = ?",
+        (branch_id,)
+    ).fetchall()
+    roster_names = {r['supplier_name'] for r in roster_rows}
+
+    roster = roster_names | set(cur_spend) | set(budgets)
     roster.discard('—')
     roster.discard(None)
 
     suppliers = []
     for name in roster:
         mtd = round(cur_spend.get(name, 0.0), 2)
-        projected = round(mtd * days_in_month / days_elapsed, 2)  # days_elapsed >= 1
         budget = budgets.get(name)
-        remaining = round(budget - projected, 2) if budget is not None else None
+        # יתרה = תקציב − actual spent (mtd). Actual-spending model, not pace.
+        remaining = round(budget - mtd, 2) if budget is not None else None
+        # קצב — informational run-rate only (does NOT feed יתרה/totals/color).
+        projected = round(mtd * days_in_month / days_elapsed, 2)  # days_elapsed >= 1
         suppliers.append({
             'supplier_name': name,
             'mtd_spend': mtd,
@@ -1145,22 +1158,27 @@ def _goal_data(branch_id, db):
         })
 
     # Most over-budget first: budgeted rows (remaining ASC) above unbudgeted
-    # rows (biggest projected spend first).
+    # rows (biggest actual spend first).
     suppliers.sort(key=lambda s: (
         s['budget'] is None,
         s['remaining'] if s['remaining'] is not None else 0,
-        -s['projected'],
+        -s['mtd_spend'],
     ))
 
     # Totals are summed over budgeted suppliers ONLY, so all three share one
-    # basis. Summing קצב/יתרה over unbudgeted suppliers too made the headline
+    # basis. Summing הוצאה/יתרה over unbudgeted suppliers too made the headline
     # יתרה look like a huge blowout on branches where only a few suppliers are
     # budgeted (the "N ספקים חורגים" count was already budgeted-only). Per-row
-    # data is untouched — unbudgeted rows still show their own קצב.
+    # data is untouched — unbudgeted rows still show their own הוצאה.
     budgeted = [s for s in suppliers if s['budget'] is not None and s['budget'] > 0]
     total_budget = round(sum(s['budget'] for s in budgeted), 2)
-    total_projected = round(sum(s['projected'] for s in budgeted), 2)
-    total_remaining = round(total_budget - total_projected, 2)
+    total_spent = round(sum(s['mtd_spend'] for s in budgeted), 2)
+    total_remaining = round(total_budget - total_spent, 2)
+
+    # קצב הזמנות — store-wide ordering pace: Σ projected (run-rate) over ALL
+    # suppliers (budgeted AND unbudgeted). Informational; SEPARATE from the
+    # budgeted-only תקציב/הוצאה/יתרה totals and never affects יתרה.
+    total_order_pace = round(sum(s['projected'] for s in suppliers), 2)
 
     return {
         'suppliers': suppliers,
@@ -1169,8 +1187,9 @@ def _goal_data(branch_id, db):
         'month': month,
         'totals': {
             'budget': total_budget,
-            'projected': total_projected,
+            'spent': total_spent,
             'remaining': total_remaining,
+            'order_pace': total_order_pace,
         },
     }
 

@@ -135,69 +135,113 @@
     .seg-btn.active { background: #6366f1; color: #fff; }
     /* תקציב (supplier-budget) view */
     .goal-sub { font-size: 0.8rem; color: #94a3b8; }
-    .goal-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 0.6rem; }
+    .goal-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-bottom: 0.6rem; }
     .goal-overpace { font-size: 0.82rem; color: #fca5a5; font-weight: 600; margin-bottom: 1rem; min-height: 1.1rem; }
     .goal-overpace.ok { color: #86efac; }
-    /* Cohesive colored summary tiles, matching the /goods KPI family. Targeted
-       by DOM order (stable on desktop AND mobile — the יתרה headline is 3rd in
-       source even when visually reordered): 1=סה"כ תקציב, 2=קצב חזוי, 3=יתרה.
-         • יתרה   — green/red headline (--profit/--loss gradient via JS).
-         • קצב חזוי — blue (the --goods family, as it was before).
-         • סה"כ תקציב — indigo (the app's seg-toggle accent #6366f1; NOT brown). */
+    /* Cohesive colored summary tiles, matching the /goods KPI family. Source
+       order: 1=סה"כ תקציב, 2=סה"כ הוצאה, 3=יתרה (headline), 4=קצב הזמנות.
+         • יתרה   — green/red/neutral headline (--profit/--loss gradient via JS).
+         • סה"כ הוצאה — blue (the --goods family).
+         • סה"כ תקציב — indigo (the app's seg-toggle accent #6366f1; NOT brown).
+         • קצב הזמנות — slate/gray, deliberately OFF the budgeted palette so it
+           reads as a store-wide informational figure, not a budgeted total. */
     .goal-kpis .kpi-label { white-space: nowrap; }
     .goal-kpis .kpi-card:nth-child(1) {                       /* סה"כ תקציב — indigo */
         background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
         border: 1px solid rgba(99,102,241,0.4); box-shadow: none;
     }
-    .goal-kpis .kpi-card:nth-child(2) {                       /* קצב חזוי — blue */
+    .goal-kpis .kpi-card:nth-child(2) {                       /* סה"כ הוצאה — blue */
         background: linear-gradient(135deg, #4c8ffb 0%, #2563eb 100%);
         border: 1px solid rgba(76,143,251,0.35); box-shadow: none;
     }
+    .goal-kpis .goal-kpi-pace {                               /* קצב הזמנות — slate */
+        background: linear-gradient(135deg, #475569 0%, #334155 100%);
+        border: 1px solid rgba(148,163,184,0.35); box-shadow: none;
+    }
     .goal-kpis .kpi-card:nth-child(1) .kpi-value,
-    .goal-kpis .kpi-card:nth-child(2) .kpi-value { color: #fff; }
+    .goal-kpis .kpi-card:nth-child(2) .kpi-value,
+    .goal-kpis .goal-kpi-pace .kpi-value { color: #fff; }
     .goal-kpis .kpi-card:nth-child(1) .kpi-label,
-    .goal-kpis .kpi-card:nth-child(2) .kpi-label { color: rgba(255,255,255,0.85); }
-    /* Mobile summary: יתרה headline full-width on top, the two quiet cards in a
-       row beneath — compact, no cramped 3-up, no wrapped labels. */
+    .goal-kpis .kpi-card:nth-child(2) .kpi-label,
+    .goal-kpis .goal-kpi-pace .kpi-label { color: rgba(255,255,255,0.85); }
+    /* Mobile summary: יתרה headline full-width on top, the three quiet tiles
+       (תקציב · הוצאה · קצב הזמנות) in a compact 3-up row beneath. Icons hidden
+       and labels allowed to wrap so nothing clips at 390px. */
     @media (max-width: 768px) {
-        .goal-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .goal-kpis { grid-template-columns: repeat(3, 1fr); gap: 0.4rem; margin-bottom: 0.5rem; }
         .goal-kpi-headline { grid-column: 1 / -1; order: -1; }
         .goal-kpi-headline .kpi-value { font-size: 1.7rem !important; }
-        .goal-kpis .kpi-card { padding: 0.7rem 0.85rem !important; }
-        .goal-kpi-quiet .kpi-value { font-size: 1.15rem !important; }
-        .goal-kpis .kpi-label { font-size: 0.74rem !important; }
-        .goal-kpis .kpi-icon { font-size: 1rem !important; }
+        .goal-kpis .kpi-card { padding: 0.55rem 0.45rem !important; }
+        .goal-kpi-quiet .kpi-value { font-size: 0.98rem !important; }
+        .goal-kpis .goal-kpi-quiet .kpi-icon { display: none; }   /* free width for the label */
+        .goal-kpis .kpi-label { font-size: 0.66rem !important; white-space: normal; line-height: 1.15; }
+        .goal-kpis .goal-kpi-headline .kpi-icon { font-size: 1rem !important; }
     }
     .goal-table td, .goal-table th { white-space: nowrap; }
-    /* Phone: the desktop 4-col table becomes a stack of supplier CARDS — name on
-       its own line, then [תקציב input] … [יתרה] on a clean second line. No
-       name-wrapping pressure, even rows, no horizontal scroll. קצב lives in the
-       summary strip; the tfoot totals are the summary strip too, so both hide. */
+    .goal-table td.goal-pace { color: #94a3b8; }   /* קצב — informational, muted */
+    /* Row tint by budget status (subtle, dark-theme legible). Mirrors the יתרה
+       color rule: יתרה > 0 → green, < 0 → red, == 0 / no budget → no tint. The
+       יתרה VALUE stays colored via .pos/.neg; this is the row background cue.
+       Desktop: tint the cells (a <tr> background can be hidden by cell bg). */
+    #goal-table tbody tr.goal-under td { background: rgba(34,197,94,0.07); }
+    #goal-table tbody tr.goal-over  td { background: rgba(239,68,68,0.07); }
+    /* Phone (iPhone 13): the desktop 5-col table becomes a stack of supplier
+       CARDS. Name on its own line, then the four metrics — תקציב (input) ·
+       הוצאה · קצב · יתרה — in a clean 2×2 labeled grid so all read at phone
+       width with no clipping and no horizontal scroll. */
     @media (max-width: 768px) {
         #goal-table, #goal-table tbody { display: block; }
         #goal-table thead, #goal-table tfoot { display: none; }
         #goal-table tbody tr {
-            display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.6rem;
-            border: 1px solid #334155; border-radius: 10px;
+            display: grid;
+            grid-template-columns: 1fr 1fr; gap: 0.55rem 0.7rem; align-items: start;
+            border: 1px solid #334155; border-radius: 12px;
             background: rgba(255,255,255,0.025) !important;
-            margin-bottom: 0.5rem; padding: 0.7rem 0.85rem;
+            margin-bottom: 0.6rem; padding: 0.8rem 0.9rem;
+        }
+        /* Card-edge tint: colored start accent + faint wash (cells are transparent
+           on mobile, so the tr background shows). */
+        #goal-table tbody tr.goal-under {
+            background: rgba(34,197,94,0.08) !important;
+            border-color: rgba(34,197,94,0.45);
+            border-inline-start: 3px solid rgba(34,197,94,0.85);
+        }
+        #goal-table tbody tr.goal-over {
+            background: rgba(239,68,68,0.08) !important;
+            border-color: rgba(239,68,68,0.45);
+            border-inline-start: 3px solid rgba(239,68,68,0.85);
         }
         #goal-table tbody td {
             display: block; border: none !important; padding: 0 !important;
-            background: transparent !important; font-size: 0.92rem;
+            background: transparent !important;
         }
-        #goal-table tbody td:nth-child(1) {   /* supplier name — own line */
-            flex: 0 0 100%; font-weight: 600; color: #fff;
-            white-space: normal; line-height: 1.3;
+        #goal-table tbody td:nth-child(1) {   /* supplier name — own line, full width */
+            grid-column: 1 / -1; font-weight: 700; color: #fff; font-size: 1rem;
+            white-space: normal; line-height: 1.3; margin-bottom: 0.1rem;
         }
-        #goal-table tbody td:nth-child(3) { display: none; }   /* קצב — in summary strip */
-        #goal-table tbody td:nth-child(4) {   /* יתרה — pushed to inline-end */
-            margin-inline-start: auto; font-weight: 700;
+        /* label above each field; values right-aligned to sit under the label */
+        #goal-table tbody td.num { text-align: right; }
+        #goal-table tbody td.num::before {
+            display: block; color: #94a3b8; font-weight: 500;
+            font-size: 0.72rem; margin-bottom: 0.3rem; white-space: nowrap;
         }
-        /* label only on budgeted rows (.neg/.pos); unbudgeted show a bare "—" */
-        #goal-table tbody td.neg::before, #goal-table tbody td.pos::before {
-            content: 'יתרה '; color: #94a3b8; font-weight: 500; font-size: 0.78rem;
+        #goal-table tbody td:nth-child(2)::before { content: 'תקציב'; }
+        #goal-table tbody td.goal-spend::before  { content: 'הוצאה'; }
+        #goal-table tbody td.goal-pace::before   { content: 'קצב'; }
+        #goal-table tbody td.goal-rem::before    { content: 'יתרה'; }
+        #goal-table tbody td.goal-spend {
+            color: #e2e8f0; font-size: 1rem; font-variant-numeric: tabular-nums;
         }
+        #goal-table tbody td.goal-pace {
+            color: #94a3b8; font-size: 1rem; font-variant-numeric: tabular-nums;
+        }
+        #goal-table tbody td.goal-rem {
+            font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums;
+        }
+        /* neutral (יתרה == 0 / unbudgeted "—") only — must NOT outrank .pos/.neg */
+        #goal-table tbody td.goal-rem:not(.pos):not(.neg) { color: #e2e8f0; }
+        /* input fills its column so it stays a comfortable, easy-to-edit field */
+        #goal-table tbody td .goal-budget-input { width: 100%; }
     }
     /* Budget context line under a supplier in the מסמכים "לפי ספק" list.
        The summary needs flex-wrap so this 100%-basis line drops below the name. */
@@ -214,7 +258,7 @@
     .goal-budget-input.saved { border-color: #22c55e; }
     .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
     /* The shared `.data-table thead th { text-align:right }` outranks `.num`, so
-       numeric headers were right-aligned while their cells (תקציב input / קצב /
+       numeric headers were right-aligned while their cells (תקציב input / הוצאה /
        יתרה) are left-aligned — the header sat to the right of its values. Match
        the headers to the cells so each header sits directly above its column. */
     #goal-table thead th.num { text-align: left; }
@@ -423,12 +467,16 @@
                 <span class="kpi-value" id="goal-tot-budget">—</span>
             </div>
             <div class="kpi-card goal-kpi-quiet">
-                <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">קצב&nbsp;חזוי</span></div>
-                <span class="kpi-value" id="goal-tot-projected">—</span>
+                <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">סה"כ&nbsp;הוצאה</span></div>
+                <span class="kpi-value" id="goal-tot-spent">—</span>
             </div>
             <div class="kpi-card goal-kpi-headline" id="goal-tot-remaining-card">
                 <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
                 <span class="kpi-value" id="goal-tot-remaining">—</span>
+            </div>
+            <div class="kpi-card goal-kpi-quiet goal-kpi-pace">
+                <div class="kpi-header"><span class="kpi-icon">🛒</span><span class="kpi-label">קצב&nbsp;הזמנות</span></div>
+                <span class="kpi-value" id="goal-tot-orderpace">—</span>
             </div>
         </div>
         <div class="goal-overpace" id="goal-overpace"></div>
@@ -439,6 +487,7 @@
                 <tr>
                     <th>ספק</th>
                     <th class="num">תקציב</th>
+                    <th class="num">הוצאה</th>
                     <th class="num">קצב</th>
                     <th class="num">יתרה</th>
                 </tr>
@@ -448,7 +497,8 @@
                 <tr>
                     <td>סה"כ</td>
                     <td class="num" id="goal-foot-budget">—</td>
-                    <td class="num" id="goal-foot-projected">—</td>
+                    <td class="num" id="goal-foot-spent">—</td>
+                    <td class="num goal-foot-pace">—</td>
                     <td class="num" id="goal-foot-remaining">—</td>
                 </tr>
             </tfoot>
@@ -693,6 +743,13 @@ async function loadGoals() {
     }
 }
 
+// יתרה color rule (per-row, foot, strip headline, מסמכים annotation):
+//   > 0 → green (.pos), < 0 → red (.neg), == 0 → neutral (no color), null → none.
+function remCls(r) {
+    if (r === null || r === undefined) return '';
+    return r > 0 ? 'pos' : (r < 0 ? 'neg' : '');
+}
+
 function renderGoals(data) {
     document.getElementById('goal-day-line').textContent =
         'יום ' + data.days_elapsed + ' מתוך ' + data.days_in_month;
@@ -704,38 +761,46 @@ function renderGoals(data) {
     if (!data.suppliers.length) { wrap.hidden = true; summary.hidden = true; empty.hidden = false; return; }
     empty.hidden = true; wrap.hidden = false; summary.hidden = false;
 
-    // Summary strip — same totals as the bottom totals row.
+    // Summary strip — budgeted-only totals (same numbers as the bottom row).
     document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
-    document.getElementById('goal-tot-projected').textContent = ils0(data.totals.projected);
+    document.getElementById('goal-tot-spent').textContent = ils0(data.totals.spent);
+    // קצב הזמנות — store-wide pace over ALL suppliers (informational, separate
+    // from the budgeted-only tiles).
+    document.getElementById('goal-tot-orderpace').textContent = ils0(data.totals.order_pace);
     const tr = document.getElementById('goal-tot-remaining');
+    const tc = remCls(data.totals.remaining);
     tr.textContent = ils0(data.totals.remaining);
-    tr.className = 'kpi-value ' + (data.totals.remaining >= 0 ? 'profit' : 'loss');
+    tr.className = 'kpi-value ' + (tc === 'pos' ? 'profit' : (tc === 'neg' ? 'loss' : ''));
     document.getElementById('goal-tot-remaining-card').className =
-        'kpi-card goal-kpi-headline ' + (data.totals.remaining >= 0 ? 'kpi-card--profit' : 'kpi-card--loss');
+        'kpi-card goal-kpi-headline ' +
+        (tc === 'pos' ? 'kpi-card--profit' : (tc === 'neg' ? 'kpi-card--loss' : ''));
     const overCount = data.suppliers.filter(s => s.remaining !== null && s.remaining < 0).length;
     const op = document.getElementById('goal-overpace');
-    op.textContent = overCount + ' ספקים חורגים מהקצב';
+    op.textContent = overCount + ' ספקים חורגים מהתקציב';
     op.classList.toggle('ok', overCount === 0);
 
     document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
-        const remCls = s.remaining === null ? '' : (s.remaining < 0 ? 'neg' : 'pos');
+        const rc = remCls(s.remaining);
+        // Row tint mirrors the יתרה color rule: >0 green, <0 red, ==0/none none.
+        const rowCls = rc === 'pos' ? 'goal-under' : (rc === 'neg' ? 'goal-over' : '');
         const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
-        // Idle: formatted like קצב/יתרה (₪ + commas via ils0). Text input so the
+        // Idle: formatted like הוצאה/יתרה (₪ + commas via ils0). Text input so the
         // ₪/commas can show; focus swaps to the raw number (see budget handlers).
         const bv = s.budget === null ? '' : ils0(s.budget);
-        return '<tr data-supplier="' + esc(s.supplier_name) + '">' +
+        return '<tr class="' + rowCls + '" data-supplier="' + esc(s.supplier_name) + '">' +
             '<td>' + esc(s.supplier_name) + '</td>' +
             '<td class="num"><input type="text" inputmode="decimal" ' +
                 'class="goal-budget-input" value="' + bv + '" placeholder="הוסף תקציב" aria-label="תקציב חודשי"></td>' +
-            '<td class="num">' + ils0(s.projected) + '</td>' +
-            '<td class="num ' + remCls + '">' + remCell + '</td>' +
+            '<td class="num goal-spend">' + ils0(s.mtd_spend) + '</td>' +
+            '<td class="num goal-pace">' + ils0(s.projected) + '</td>' +
+            '<td class="num goal-rem ' + rc + '">' + remCell + '</td>' +
             '</tr>';
     }).join('');
     document.getElementById('goal-foot-budget').textContent = ils0(data.totals.budget);
-    document.getElementById('goal-foot-projected').textContent = ils0(data.totals.projected);
+    document.getElementById('goal-foot-spent').textContent = ils0(data.totals.spent);
     const fr = document.getElementById('goal-foot-remaining');
     fr.textContent = ils0(data.totals.remaining);
-    fr.className = 'num ' + (data.totals.remaining < 0 ? 'neg' : 'pos');
+    fr.className = 'num ' + remCls(data.totals.remaining);
 }
 
 // Strip ₪ / commas / spaces → plain number (or '' when blank). The budget POST
@@ -798,11 +863,11 @@ function annotateSupplierBudgets() {
                 const nameEl = g.querySelector('.sg-name');
                 const s = nameEl && map[nameEl.textContent.trim()];
                 if (!s) return;
-                const remCls = s.remaining < 0 ? 'neg' : 'pos';
+                const rc = remCls(s.remaining);
                 const div = document.createElement('div');
                 div.className = 'sg-budget';
                 div.innerHTML = 'תקציב ' + ils0(s.budget) +
-                    ' · <span class="' + remCls + '">יתרה ' + ils0(s.remaining) + '</span>';
+                    ' · <span class="' + rc + '">יתרה ' + ils0(s.remaining) + '</span>';
                 g.querySelector('summary').appendChild(div);
             });
         })
