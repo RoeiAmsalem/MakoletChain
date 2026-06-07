@@ -365,6 +365,32 @@ scheduler.add_job(
 )
 
 
+def run_supplier_roster_build():
+    """1st of month, IL — rebuild the full per-branch supplier roster for the
+    /goods תקציב page from the prior 2 calendar months of BilBoy goods. Floor-
+    ignoring + franchise-excluded; the agent owns the branch loop + per-branch
+    error catching."""
+    from agents.supplier_roster import build_all
+    log.info("=== Supplier roster build (monthly 1st) started ===")
+    try:
+        res = build_all()
+        total = sum(v for v in res.values() if v >= 0)
+        log.info("=== Supplier roster build done: %d branches, %d rows ===",
+                 len(res), total)
+    except Exception as e:
+        log.error("Supplier roster build failed: %s", e)
+
+
+# 1st of month, 04:00 IL — rebuild the budget-page supplier roster (prior 2
+# months of goods). After the 02:00 nightly sync so it sees fresh goods.
+scheduler.add_job(
+    func=run_supplier_roster_build,
+    trigger=CronTrigger(day=1, hour=4, minute=0, timezone=IL_TZ),
+    id='supplier_roster_monthly',
+    name='Supplier roster build (1st of month)',
+)
+
+
 def run_iec_sync():
     """06:00 — daily IEC electricity invoice sync via SSH to Israeli VPS.
 

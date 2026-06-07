@@ -228,6 +228,9 @@ function renderGoals(data) {
     // Summary strip — budgeted-only totals (same numbers as the bottom row).
     document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
     document.getElementById('goal-tot-spent').textContent = ils0(data.totals.spent);
+    // קצב הזמנות — store-wide pace over ALL suppliers (informational, separate
+    // from the budgeted-only tiles).
+    document.getElementById('goal-tot-orderpace').textContent = ils0(data.totals.order_pace);
     const tr = document.getElementById('goal-tot-remaining');
     const tc = remCls(data.totals.remaining);
     tr.textContent = ils0(data.totals.remaining);

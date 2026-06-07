@@ -59,6 +59,11 @@ def db():
     # Budget-only supplier (no goods at all) + a budget on A.
     conn.execute("INSERT INTO supplier_budgets (branch_id, supplier_name, monthly_budget) VALUES (?, 'סופר א', 1000)", (BRANCH,))
     conn.execute("INSERT INTO supplier_budgets (branch_id, supplier_name, monthly_budget) VALUES (?, 'סופר ד', 800)", (BRANCH,))
+    # supplier_roster (migration 029): prior-month supplier ג + a roster-only
+    # supplier ה (never ordered, no budget). Both must appear on the budget page
+    # via the roster union, even with no current-month goods.
+    conn.execute("INSERT INTO supplier_roster (branch_id, supplier_name) VALUES (?, 'סופר ג')", (BRANCH,))
+    conn.execute("INSERT INTO supplier_roster (branch_id, supplier_name) VALUES (?, 'סופר ה')", (BRANCH,))
     conn.commit()
     yield conn
     conn.close()
@@ -168,7 +173,50 @@ def test_totals_summed_over_budgeted_only(db, monkeypatch):
     assert t['budget'] == 1800.0                 # 1000 + 800
     assert t['spent'] == 300.0                   # 300 + 0 — excludes ב's 500
     assert t['remaining'] == 1500.0              # 1800 - 300
-    assert 'projected' not in t
+    # קצב הזמנות is store-wide (all suppliers), kept SEPARATE from the
+    # budgeted-only trio — but it is a total, surfaced under order_pace.
+    assert 'order_pace' in t
     # ב is unbudgeted: its per-row הוצאה still shows but is excluded from totals.
     s = _by_name(data)
     assert s['סופר ב']['budget'] is None and s['סופר ב']['mtd_spend'] == 500.0
+
+
+def test_page_list_unions_roster(db, monkeypatch):
+    """Budget page = roster ∪ current-month spenders ∪ budgeted. A roster
+    supplier with NO current-month orders and NO budget (ה) still appears, with
+    הוצאה 0 / קצב 0 / יתרה None ("הוסף תקציב")."""
+    _freeze(monkeypatch, 10)
+    s = _by_name(_goal_data(BRANCH, db))
+    # roster-only ה
+    assert 'סופר ה' in s
+    assert s['סופר ה']['mtd_spend'] == 0.0
+    assert s['סופר ה']['projected'] == 0.0
+    assert s['סופר ה']['remaining'] is None
+    # current-month spender (א), budgeted-only (ד), roster prior-month (ג) all present
+    for name in ('סופר א', 'סופר ב', 'סופר ג', 'סופר ד', 'סופר ה'):
+        assert name in s
+
+
+def test_page_list_falls_back_without_roster(db, monkeypatch):
+    """If the roster table is empty for the branch, the page degrades to
+    current-month ∪ budgeted (no breakage, no roster-only rows)."""
+    _freeze(monkeypatch, 10)
+    db.execute("DELETE FROM supplier_roster WHERE branch_id = ?", (BRANCH,))
+    db.commit()
+    s = _by_name(_goal_data(BRANCH, db))
+    # current spenders + budgeted survive; roster-only ה and prior-month ג vanish
+    for name in ('סופר א', 'סופר ב', 'סופר ד'):
+        assert name in s
+    assert 'סופר ה' not in s
+    assert 'סופר ג' not in s
+
+
+def test_order_pace_is_all_suppliers(db, monkeypatch):
+    """קצב הזמנות (order_pace) = Σ projected over ALL suppliers (budgeted AND
+    unbudgeted) — the store's whole ordering pace, and it exceeds the
+    budgeted-only spend when big suppliers are unbudgeted (ב here)."""
+    _freeze(monkeypatch, 10)  # day 10 of 31
+    t = _goal_data(BRANCH, db)['totals']
+    # א proj 930 + ב proj 1550 + ג/ד/ה 0 = 2480
+    assert t['order_pace'] == 2480.0
+    assert t['order_pace'] > t['spent']   # 2480 > 300 — unbudgeted ב lifts the pace

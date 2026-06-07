@@ -1220,21 +1220,17 @@ def _goal_data(branch_id, db):
     informational run-rate mtd_spend × days_in_month / days_elapsed."""
     now = _now_il()
     month = now.strftime('%Y-%m')
-    prev_month = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
     days_in_month = calendar.monthrange(now.year, now.month)[1]
     days_elapsed = max(1, now.day)
 
     # Below-floor guard: a floored branch must not see a pre-floor month. The
     # current month is at/after the floor in practice, but guard anyway so the
-    # endpoint can never leak pre-floor goods.
+    # endpoint can never leak pre-floor goods. (Displayed spend stays
+    # floor-respecting; the roster table below is deliberately floor-IGNORING.)
     if _month_below_floor(branch_id, month, db):
         cur_groups = []
     else:
         cur_groups = _goods_doc_context(branch_id, month, db)['groups']
-    if _month_below_floor(branch_id, prev_month, db):
-        prev_groups = []
-    else:
-        prev_groups = _goods_doc_context(branch_id, prev_month, db)['groups']
 
     # pre-VAT MTD spend per supplier (reconciles to /goods total_before_vat).
     cur_spend = {g['supplier']: g['total_before_vat'] for g in cur_groups}
@@ -1245,7 +1241,19 @@ def _goal_data(branch_id, db):
     ).fetchall()
     budgets = {r['supplier_name']: r['monthly_budget'] for r in budget_rows}
 
-    roster = set(cur_spend) | {g['supplier'] for g in prev_groups} | set(budgets)
+    # Full roster (supplier_roster, migration 029) — built monthly from the
+    # prior 2 months of BilBoy goods (floor-IGNORING, franchise-excluded) so a
+    # manager can budget any supplier before ordering this month. Union with
+    # current-month spenders + budgeted suppliers so brand-new / budgeted names
+    # are never missed. If the table is empty (before the first build) the union
+    # degrades to current ∪ budgeted — no breakage.
+    roster_rows = db.execute(
+        "SELECT supplier_name FROM supplier_roster WHERE branch_id = ?",
+        (branch_id,)
+    ).fetchall()
+    roster_names = {r['supplier_name'] for r in roster_rows}
+
+    roster = roster_names | set(cur_spend) | set(budgets)
     roster.discard('—')
     roster.discard(None)
 
@@ -1283,6 +1291,11 @@ def _goal_data(branch_id, db):
     total_spent = round(sum(s['mtd_spend'] for s in budgeted), 2)
     total_remaining = round(total_budget - total_spent, 2)
 
+    # קצב הזמנות — store-wide ordering pace: Σ projected (run-rate) over ALL
+    # suppliers (budgeted AND unbudgeted). Informational; SEPARATE from the
+    # budgeted-only תקציב/הוצאה/יתרה totals and never affects יתרה.
+    total_order_pace = round(sum(s['projected'] for s in suppliers), 2)
+
     return {
         'suppliers': suppliers,
         'days_elapsed': days_elapsed,
@@ -1292,6 +1305,7 @@ def _goal_data(branch_id, db):
             'budget': total_budget,
             'spent': total_spent,
             'remaining': total_remaining,
+            'order_pace': total_order_pace,
         },
     }
 

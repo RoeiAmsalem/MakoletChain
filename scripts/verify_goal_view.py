@@ -40,6 +40,7 @@ def probe(pg):
     return pg.evaluate("""() => {
         const rows = [...document.querySelectorAll('#goal-table tbody tr')];
         const de = document.documentElement;
+        const txt = id => (document.getElementById(id)||{}).textContent || '';
         return {
             rows: rows.length,
             pace_cells: document.querySelectorAll('#goal-table tbody td.goal-pace').length,
@@ -47,6 +48,10 @@ def probe(pg):
             over: document.querySelectorAll('#goal-table tbody tr.goal-over').length,
             header_has_kotzev: [...document.querySelectorAll('#goal-table thead th')]
                 .some(th => th.textContent.trim() === 'קצב'),
+            strip_tiles: document.querySelectorAll('#goal-summary .goal-kpis .kpi-card').length,
+            has_pace_tile: !!document.querySelector('#goal-summary .goal-kpi-pace'),
+            orderpace: txt('goal-tot-orderpace'),
+            tot_spent: txt('goal-tot-spent'),
             hscroll: Math.max(de.scrollWidth, document.body.scrollWidth) - de.clientWidth,
         };
     }""")
@@ -95,6 +100,12 @@ print(f"\n=== /goods תקציב view — branch {BRANCH} ===")
 print(f"device (mobile): {i['device']}")
 print("shots: /tmp/goal_iphone.png  /tmp/goal_desktop.png")
 print(f"rows: mobile={i['rows']} desktop={d['rows']}")
+print(f"strip tiles: mobile={i['strip_tiles']} desktop={d['strip_tiles']}  "
+      f"[{'PASS' if i['strip_tiles'] == 4 and d['strip_tiles'] == 4 else 'FAIL — want 4'}]")
+print(f"קצב הזמנות tile present + value: mobile='{i['orderpace']}' (pace_tile={i['has_pace_tile']})  "
+      f"[{'PASS' if i['has_pace_tile'] and i['orderpace'] not in ('', '—') else 'FAIL'}]")
+print(f"קצב הזמנות {d['orderpace']} vs סה\"כ הוצאה {d['tot_spent']} "
+      f"(all-suppliers pace should exceed budgeted-only spend)")
 print(f"קצב header present (desktop): {d['header_has_kotzev']}  "
       f"[{'PASS' if d['header_has_kotzev'] else 'FAIL'}]")
 print(f"קצב cells populated: mobile={i['pace_cells']} desktop={d['pace_cells']}  "
