@@ -5079,6 +5079,30 @@ def admin_franchise_classifier():
                            **_page_context('franchise_classifier'))
 
 
+@app.route('/products')
+@_admin_required
+def products_catalog():
+    """POC chain-wide product catalog (admin-only). Reads the `products` table
+    built by scripts/build_product_catalog.py from BilBoy line-items. STANDALONE
+    — not wired into /goods, budget, or the doc view. Highlights products seen
+    under >1 supplier across the chain (the mis-file mess)."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT product_id, name, supplier, suppliers_seen, latest_price, "
+        "       latest_price_date, barcode, last_seen, doc_count "
+        "FROM products ORDER BY doc_count DESC, name"
+    ).fetchall()
+    products = [dict(r) for r in rows]
+    summary = {
+        'total': len(products),
+        'flagged': sum(1 for p in products if (p['suppliers_seen'] or 0) > 1),
+        'observations': db.execute(
+            "SELECT COUNT(*) AS c FROM product_observations").fetchone()['c'],
+    }
+    return render_template('products.html', products=products, summary=summary,
+                           **_page_context('products'))
+
+
 @app.route('/api/admin/franchise-classifier/<int:item_id>', methods=['POST'])
 @_admin_required
 def api_franchise_classifier_update(item_id):

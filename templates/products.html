@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}קטלוג מוצרים (POC) — קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    .pc-wrap { max-width: 1200px; margin: 0 auto; padding: 1.25rem 1rem; }
+    .pc-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin: 0; }
+    .pc-subtitle { font-size: 0.82rem; color: var(--text-secondary); margin: 0.2rem 0 1rem; }
+    .pc-summary { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
+    .pc-card {
+        background: var(--card); border: 1px solid var(--card-border);
+        border-radius: var(--radius); padding: 0.6rem 0.95rem; min-width: 130px;
+    }
+    .pc-card .lbl { font-size: 0.72rem; color: var(--text-secondary); }
+    .pc-card .val { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); }
+    .pc-card.flag .val { color: #fca5a5; }
+    .pc-controls { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-bottom: 0.8rem; }
+    .pc-search {
+        flex: 1; min-width: 220px; background: #0f172a; color: var(--text-primary);
+        border: 1px solid var(--card-border); border-radius: 8px; padding: 0.55rem 0.8rem;
+        font-size: 0.95rem; font-family: inherit; outline: none;
+    }
+    .pc-search:focus { border-color: #3b82f6; }
+    .pc-flagtoggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;
+        color: var(--text-secondary); cursor: pointer; user-select: none; }
+    .pc-count { font-size: 0.8rem; color: var(--text-secondary); }
+    .pc-table-wrap { overflow-x: auto; border: 1px solid var(--card-border); border-radius: var(--radius); }
+    table.pc { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+    table.pc thead th {
+        position: sticky; top: 0; background: #0f172a; color: var(--text-secondary);
+        text-align: right; padding: 0.55rem 0.7rem; font-weight: 600; white-space: nowrap;
+        cursor: pointer; border-bottom: 1px solid var(--card-border);
+    }
+    table.pc thead th .arr { color: #3b82f6; font-size: 0.75rem; }
+    table.pc tbody td { padding: 0.5rem 0.7rem; border-bottom: 1px solid rgba(148,163,184,0.12);
+        color: var(--text-primary); }
+    table.pc tbody tr:hover { background: rgba(59,130,246,0.06); }
+    table.pc .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
+    .pc-name { font-weight: 600; }
+    /* mis-file flag: product seen under >1 supplier across the chain */
+    tr.flagged { background: rgba(239,68,68,0.08); }
+    tr.flagged:hover { background: rgba(239,68,68,0.14); }
+    .sup-badge { display: inline-block; margin-inline-start: 0.4rem; font-size: 0.7rem;
+        font-weight: 700; padding: 0.05rem 0.4rem; border-radius: 999px;
+        background: rgba(239,68,68,0.2); color: #fca5a5; }
+    .pc-empty { padding: 2rem 1rem; text-align: center; color: var(--text-secondary); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="pc-wrap">
+    <h1 class="pc-title">קטלוג מוצרים — רשת (POC)</h1>
+    <p class="pc-subtitle">
+        קטלוג מאוחד מתוך שורות חשבוניות BilBoy בכל הסניפים. מוצר עם יותר מספק אחד
+        מסומן באדום (תיוק שגוי). עמוד עצמאי — אינו מחובר ל/goods או לתקציב.
+    </p>
+
+    <div class="pc-summary">
+        <div class="pc-card"><div class="lbl">מוצרים ייחודיים</div><div class="val">{{ summary.total }}</div></div>
+        <div class="pc-card flag"><div class="lbl">מסומנים (&gt;1 ספק)</div><div class="val">{{ summary.flagged }}</div></div>
+        <div class="pc-card"><div class="lbl">תצפיות (שורות)</div><div class="val">{{ summary.observations }}</div></div>
+    </div>
+
+    <div class="pc-controls">
+        <input type="text" id="pc-search" class="pc-search" placeholder="חיפוש לפי שם מוצר או ברקוד…" autocomplete="off">
+        <label class="pc-flagtoggle"><input type="checkbox" id="pc-flagonly"> הצג רק מסומנים</label>
+        <span class="pc-count" id="pc-count"></span>
+    </div>
+
+    {% if products %}
+    <div class="pc-table-wrap">
+        <table class="pc" id="pc-table">
+            <thead>
+                <tr>
+                    <th data-key="name" data-type="str">שם מוצר</th>
+                    <th data-key="supplier" data-type="str">ספק</th>
+                    <th data-key="latest_price" data-type="num" class="num">מחיר אחרון</th>
+                    <th data-key="barcode" data-type="str" class="num">ברקוד</th>
+                    <th data-key="last_seen" data-type="str" class="num">נראה לאחרונה</th>
+                    <th data-key="doc_count" data-type="num" class="num"># מסמכים</th>
+                </tr>
+            </thead>
+            <tbody id="pc-body">
+                {% for p in products %}
+                <tr class="{% if (p.suppliers_seen or 0) > 1 %}flagged{% endif %}"
+                    data-name="{{ p.name|e }}" data-barcode="{{ p.barcode|e }}"
+                    data-flagged="{{ 1 if (p.suppliers_seen or 0) > 1 else 0 }}">
+                    <td class="pc-name">{{ p.name or '—' }}</td>
+                    <td>{{ p.supplier or '—' }}{% if (p.suppliers_seen or 0) > 1 %}<span class="sup-badge">{{ p.suppliers_seen }} ספקים</span>{% endif %}</td>
+                    <td class="num">{% if p.latest_price is not none %}₪{{ '%.2f'|format(p.latest_price) }}{% else %}—{% endif %}</td>
+                    <td class="num">{{ p.barcode or '—' }}</td>
+                    <td class="num">{{ (p.last_seen or '')[:10] }}</td>
+                    <td class="num">{{ p.doc_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="pc-empty">
+        הקטלוג ריק — הרץ <code>scripts/build_product_catalog.py</code> ב-staging כדי לאכלס אותו.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    var body = document.getElementById('pc-body');
+    if (!body) return;
+    var rows = Array.prototype.slice.call(body.querySelectorAll('tr'));
+    var search = document.getElementById('pc-search');
+    var flagOnly = document.getElementById('pc-flagonly');
+    var countEl = document.getElementById('pc-count');
+    var sortKey = 'doc_count', sortType = 'num', sortDir = -1;
+
+    function val(tr, key, type) {
+        var cellIndex = { name: 0, supplier: 1, latest_price: 2, barcode: 3, last_seen: 4, doc_count: 5 }[key];
+        var txt = tr.children[cellIndex].textContent.trim();
+        if (type === 'num') { var n = parseFloat(txt.replace(/[^\d.\-]/g, '')); return isNaN(n) ? -Infinity : n; }
+        return txt;
+    }
+    function apply() {
+        var q = (search.value || '').trim().toLowerCase();
+        var only = flagOnly.checked;
+        var shown = 0;
+        rows.forEach(function (tr) {
+            var name = (tr.getAttribute('data-name') || '').toLowerCase();
+            var bc = (tr.getAttribute('data-barcode') || '').toLowerCase();
+            var matchQ = !q || name.indexOf(q) >= 0 || bc.indexOf(q) >= 0;
+            var matchFlag = !only || tr.getAttribute('data-flagged') === '1';
+            var vis = matchQ && matchFlag;
+            tr.style.display = vis ? '' : 'none';
+            if (vis) shown++;
+        });
+        countEl.textContent = shown + ' / ' + rows.length + ' מוצרים';
+    }
+    function sort() {
+        var sorted = rows.slice().sort(function (a, b) {
+            var va = val(a, sortKey, sortType), vb = val(b, sortKey, sortType);
+            if (va < vb) return -1 * sortDir;
+            if (va > vb) return 1 * sortDir;
+            return 0;
+        });
+        sorted.forEach(function (tr) { body.appendChild(tr); });
+    }
+    document.querySelectorAll('#pc-table thead th').forEach(function (th) {
+        th.addEventListener('click', function () {
+            var key = th.getAttribute('data-key'), type = th.getAttribute('data-type');
+            if (sortKey === key) { sortDir = -sortDir; } else { sortKey = key; sortType = type; sortDir = (type === 'num') ? -1 : 1; }
+            document.querySelectorAll('#pc-table thead th .arr').forEach(function (a) { a.remove(); });
+            var arr = document.createElement('span'); arr.className = 'arr';
+            arr.textContent = sortDir > 0 ? ' ▲' : ' ▼'; th.appendChild(arr);
+            sort();
+        });
+    });
+    search.addEventListener('input', apply);
+    flagOnly.addEventListener('change', apply);
+    apply();
+})();
+</script>
+{% endblock %}
