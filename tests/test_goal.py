@@ -197,18 +197,27 @@ def test_page_list_unions_roster(db, monkeypatch):
         assert name in s
 
 
-def test_page_list_falls_back_without_roster(db, monkeypatch):
-    """If the roster table is empty for the branch, the page degrades to
-    current-month ∪ budgeted (no breakage, no roster-only rows)."""
+def test_self_heal_when_roster_table_empty(db, monkeypatch):
+    """Floored-store bug fix: a branch with a visible_from floor AND an empty
+    supplier_roster (the monthly build hasn't run for it yet) must still list
+    its prior-period suppliers — derived LIVE from the prior 2 months of goods.
+    The floor never clamps the LIST: ג ordered in April, below a May floor, with
+    no current-month order and no budget, still appears. (Pre-fix this branch
+    would collapse to current ∪ budgeted and drop ג — the prod symptom.)"""
     _freeze(monkeypatch, 10)
+    db.execute("UPDATE branches SET visible_from = '2026-05-01' WHERE id = ?", (BRANCH,))
     db.execute("DELETE FROM supplier_roster WHERE branch_id = ?", (BRANCH,))
     db.commit()
     s = _by_name(_goal_data(BRANCH, db))
-    # current spenders + budgeted survive; roster-only ה and prior-month ג vanish
+    # prior-month supplier (below the floor) recovered despite the empty table
+    assert 'סופר ג' in s
+    assert s['סופר ג']['mtd_spend'] == 0.0
+    assert s['סופר ג']['remaining'] is None
+    # current spenders + budgeted always present
     for name in ('סופר א', 'סופר ב', 'סופר ד'):
         assert name in s
+    # ה was a manual roster-only row with no goods → not derivable by self-heal
     assert 'סופר ה' not in s
-    assert 'סופר ג' not in s
 
 
 def test_order_pace_is_all_suppliers(db, monkeypatch):

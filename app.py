@@ -1253,6 +1253,20 @@ def _goal_data(branch_id, db):
     ).fetchall()
     roster_names = {r['supplier_name'] for r in roster_rows}
 
+    # Self-heal: the supplier_roster table is populated only by the monthly
+    # (1st-of-month) build, so a branch not yet built — a new chain store, or
+    # any branch the month after a mid-month deploy — has an EMPTY table. Without
+    # this fallback the list would collapse to current ∪ budgeted, which drops
+    # every prior-period supplier; a floored low-activity store (little/no
+    # current ordering, no budgets) then shows only a few rows, or the empty
+    # state. Derive the roster live from the prior 2 months of goods (same
+    # floor-IGNORING, franchise-excluded source the builder uses) so the
+    # supplier LIST is complete regardless of whether the build has run. The
+    # floor still clamps displayed SPEND only, never which suppliers are listed.
+    if not roster_names:
+        from agents.supplier_roster import prior_two_month_suppliers
+        roster_names = set(prior_two_month_suppliers(db, branch_id, now))
+
     roster = roster_names | set(cur_spend) | set(budgets)
     roster.discard('—')
     roster.discard(None)
