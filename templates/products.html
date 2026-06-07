@@ -2,26 +2,28 @@
 {% block title %}קטלוג מוצרים (POC) — קופה שקופה{% endblock %}
 {% block head %}
 <style>
-    .pc-wrap { max-width: 1200px; margin: 0 auto; padding: 1.25rem 1rem; }
+    .pc-wrap { max-width: 1280px; margin: 0 auto; padding: 1.25rem 1rem; }
     .pc-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); margin: 0; }
-    .pc-subtitle { font-size: 0.82rem; color: var(--text-secondary); margin: 0.2rem 0 1rem; }
+    .pc-subtitle { font-size: 0.82rem; color: var(--text-secondary); margin: 0.2rem 0 1rem; max-width: 70ch; }
     .pc-summary { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1rem; }
     .pc-card {
         background: var(--card); border: 1px solid var(--card-border);
-        border-radius: var(--radius); padding: 0.6rem 0.95rem; min-width: 130px;
+        border-radius: var(--radius); padding: 0.6rem 0.95rem; min-width: 120px;
     }
     .pc-card .lbl { font-size: 0.72rem; color: var(--text-secondary); }
     .pc-card .val { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); }
-    .pc-card.flag .val { color: #fca5a5; }
-    .pc-controls { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-bottom: 0.8rem; }
+    .pc-card.zik .val { color: #c4b5fd; }
+    .pc-card.auto .val { color: #86efac; }
+    .pc-card.review .val { color: #fca5a5; }
+    .pc-controls { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; margin-bottom: 0.8rem; }
     .pc-search {
         flex: 1; min-width: 220px; background: #0f172a; color: var(--text-primary);
         border: 1px solid var(--card-border); border-radius: 8px; padding: 0.55rem 0.8rem;
         font-size: 0.95rem; font-family: inherit; outline: none;
     }
     .pc-search:focus { border-color: #3b82f6; }
-    .pc-flagtoggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;
-        color: var(--text-secondary); cursor: pointer; user-select: none; }
+    .pc-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem;
+        color: var(--text-secondary); cursor: pointer; user-select: none; white-space: nowrap; }
     .pc-count { font-size: 0.8rem; color: var(--text-secondary); }
     .pc-table-wrap { overflow-x: auto; border: 1px solid var(--card-border); border-radius: var(--radius); }
     table.pc { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
@@ -36,12 +38,19 @@
     table.pc tbody tr:hover { background: rgba(59,130,246,0.06); }
     table.pc .num { direction: ltr; text-align: left; font-variant-numeric: tabular-nums; }
     .pc-name { font-weight: 600; }
-    /* mis-file flag: product seen under >1 supplier across the chain */
-    tr.flagged { background: rgba(239,68,68,0.08); }
-    tr.flagged:hover { background: rgba(239,68,68,0.14); }
-    .sup-badge { display: inline-block; margin-inline-start: 0.4rem; font-size: 0.7rem;
+    /* זיכיונות-filed product rows */
+    tr.zik { background: rgba(139,92,246,0.07); }
+    tr.zik.review { background: rgba(239,68,68,0.09); }
+    tr.zik:hover { background: rgba(139,92,246,0.14); }
+    .zik-badge { display: inline-block; margin-inline-start: 0.4rem; font-size: 0.68rem;
         font-weight: 700; padding: 0.05rem 0.4rem; border-radius: 999px;
+        background: rgba(139,92,246,0.25); color: #c4b5fd; }
+    .suggest-auto { color: #86efac; font-weight: 600; }
+    .badge-review { display: inline-block; font-size: 0.7rem; font-weight: 700;
+        padding: 0.08rem 0.5rem; border-radius: 999px;
         background: rgba(239,68,68,0.2); color: #fca5a5; }
+    .var-badge { display: inline-block; margin-inline-start: 0.35rem; font-size: 0.66rem;
+        color: var(--text-secondary); }
     .pc-empty { padding: 2rem 1rem; text-align: center; color: var(--text-secondary); }
 </style>
 {% endblock %}
@@ -49,19 +58,23 @@
 <div class="pc-wrap">
     <h1 class="pc-title">קטלוג מוצרים — רשת (POC)</h1>
     <p class="pc-subtitle">
-        קטלוג מאוחד מתוך שורות חשבוניות BilBoy בכל הסניפים. מוצר עם יותר מספק אחד
-        מסומן באדום (תיוק שגוי). עמוד עצמאי — אינו מחובר ל/goods או לתקציב.
+        קטלוג מאוחד מתוך שורות חשבוניות BilBoy בכל הסניפים, כולל מסמכי זיכיונות
+        (שמסונן מ/goods). מוצר שמתויק תחת זיכיונות אך מופיע גם תחת ספק אמיתי —
+        מקבל הצעת ספק אוטומטית. עמוד עצמאי — זיכיונות עדיין לא נספר ב/goods.
     </p>
 
     <div class="pc-summary">
         <div class="pc-card"><div class="lbl">מוצרים ייחודיים</div><div class="val">{{ summary.total }}</div></div>
-        <div class="pc-card flag"><div class="lbl">מסומנים (&gt;1 ספק)</div><div class="val">{{ summary.flagged }}</div></div>
+        <div class="pc-card zik"><div class="lbl">מתויק זיכיונות</div><div class="val">{{ summary.zik_total }}</div></div>
+        <div class="pc-card auto"><div class="lbl">מופה אוטומטית</div><div class="val">{{ summary.zik_auto }}</div></div>
+        <div class="pc-card review"><div class="lbl">לבדיקה ידנית</div><div class="val">{{ summary.zik_review }}</div></div>
         <div class="pc-card"><div class="lbl">תצפיות (שורות)</div><div class="val">{{ summary.observations }}</div></div>
     </div>
 
     <div class="pc-controls">
         <input type="text" id="pc-search" class="pc-search" placeholder="חיפוש לפי שם מוצר או ברקוד…" autocomplete="off">
-        <label class="pc-flagtoggle"><input type="checkbox" id="pc-flagonly"> הצג רק מסומנים</label>
+        <label class="pc-toggle"><input type="checkbox" id="pc-zikonly"> רק זיכיונות</label>
+        <label class="pc-toggle"><input type="checkbox" id="pc-flagonly"> רק &gt;1 ספק</label>
         <span class="pc-count" id="pc-count"></span>
     </div>
 
@@ -71,20 +84,27 @@
             <thead>
                 <tr>
                     <th data-key="name" data-type="str">שם מוצר</th>
-                    <th data-key="supplier" data-type="str">ספק</th>
-                    <th data-key="latest_price" data-type="num" class="num">מחיר אחרון</th>
+                    <th data-key="supplier" data-type="str">ספק (גלם)</th>
+                    <th data-key="suggested" data-type="str">ספק מוצע</th>
+                    <th data-key="price" data-type="num" class="num">מחיר אחרון</th>
                     <th data-key="barcode" data-type="str" class="num">ברקוד</th>
                     <th data-key="last_seen" data-type="str" class="num">נראה לאחרונה</th>
-                    <th data-key="doc_count" data-type="num" class="num"># מסמכים</th>
+                    <th data-key="docs" data-type="num" class="num"># מסמכים</th>
                 </tr>
             </thead>
             <tbody id="pc-body">
                 {% for p in products %}
-                <tr class="{% if (p.suppliers_seen or 0) > 1 %}flagged{% endif %}"
+                <tr class="{% if p.raw_supplier %}zik{% endif %}{% if p.classification_status == 'needs-review' %} review{% endif %}"
                     data-name="{{ p.name|e }}" data-barcode="{{ p.barcode|e }}"
+                    data-zik="{{ 1 if p.raw_supplier else 0 }}"
                     data-flagged="{{ 1 if (p.suppliers_seen or 0) > 1 else 0 }}">
-                    <td class="pc-name">{{ p.name or '—' }}</td>
-                    <td>{{ p.supplier or '—' }}{% if (p.suppliers_seen or 0) > 1 %}<span class="sup-badge">{{ p.suppliers_seen }} ספקים</span>{% endif %}</td>
+                    <td class="pc-name">{{ p.name or '—' }}{% if (p.variant_count or 0) > 1 %}<span class="var-badge">({{ p.variant_count }} קודים)</span>{% endif %}</td>
+                    <td>{% if p.raw_supplier %}{{ p.raw_supplier }}<span class="zik-badge">זיכיונות</span>{% else %}{{ p.supplier or '—' }}{% endif %}</td>
+                    <td>
+                        {% if p.classification_status == 'auto' %}<span class="suggest-auto">{{ p.suggested_supplier }}</span>
+                        {% elif p.classification_status == 'needs-review' %}<span class="badge-review">לבדיקה ידנית</span>
+                        {% else %}<span style="color:var(--text-secondary)">—</span>{% endif %}
+                    </td>
                     <td class="num">{% if p.latest_price is not none %}₪{{ '%.2f'|format(p.latest_price) }}{% else %}—{% endif %}</td>
                     <td class="num">{{ p.barcode or '—' }}</td>
                     <td class="num">{{ (p.last_seen or '')[:10] }}</td>
@@ -108,39 +128,39 @@
     if (!body) return;
     var rows = Array.prototype.slice.call(body.querySelectorAll('tr'));
     var search = document.getElementById('pc-search');
+    var zikOnly = document.getElementById('pc-zikonly');
     var flagOnly = document.getElementById('pc-flagonly');
     var countEl = document.getElementById('pc-count');
-    var sortKey = 'doc_count', sortType = 'num', sortDir = -1;
+    var idx = { name: 0, supplier: 1, suggested: 2, price: 3, barcode: 4, last_seen: 5, docs: 6 };
+    var sortKey = 'docs', sortType = 'num', sortDir = -1;
 
     function val(tr, key, type) {
-        var cellIndex = { name: 0, supplier: 1, latest_price: 2, barcode: 3, last_seen: 4, doc_count: 5 }[key];
-        var txt = tr.children[cellIndex].textContent.trim();
+        var txt = tr.children[idx[key]].textContent.trim();
         if (type === 'num') { var n = parseFloat(txt.replace(/[^\d.\-]/g, '')); return isNaN(n) ? -Infinity : n; }
         return txt;
     }
     function apply() {
         var q = (search.value || '').trim().toLowerCase();
-        var only = flagOnly.checked;
         var shown = 0;
         rows.forEach(function (tr) {
             var name = (tr.getAttribute('data-name') || '').toLowerCase();
             var bc = (tr.getAttribute('data-barcode') || '').toLowerCase();
             var matchQ = !q || name.indexOf(q) >= 0 || bc.indexOf(q) >= 0;
-            var matchFlag = !only || tr.getAttribute('data-flagged') === '1';
-            var vis = matchQ && matchFlag;
+            var matchZik = !zikOnly.checked || tr.getAttribute('data-zik') === '1';
+            var matchFlag = !flagOnly.checked || tr.getAttribute('data-flagged') === '1';
+            var vis = matchQ && matchZik && matchFlag;
             tr.style.display = vis ? '' : 'none';
             if (vis) shown++;
         });
         countEl.textContent = shown + ' / ' + rows.length + ' מוצרים';
     }
     function sort() {
-        var sorted = rows.slice().sort(function (a, b) {
+        rows.slice().sort(function (a, b) {
             var va = val(a, sortKey, sortType), vb = val(b, sortKey, sortType);
             if (va < vb) return -1 * sortDir;
             if (va > vb) return 1 * sortDir;
             return 0;
-        });
-        sorted.forEach(function (tr) { body.appendChild(tr); });
+        }).forEach(function (tr) { body.appendChild(tr); });
     }
     document.querySelectorAll('#pc-table thead th').forEach(function (th) {
         th.addEventListener('click', function () {
@@ -153,6 +173,7 @@
         });
     });
     search.addEventListener('input', apply);
+    zikOnly.addEventListener('change', apply);
     flagOnly.addEventListener('change', apply);
     apply();
 })();

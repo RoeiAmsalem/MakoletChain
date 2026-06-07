@@ -3,13 +3,10 @@
 Viewport screenshots (not full-page — 2,900+ rows would be a giant image).
 
 Modes:
-  (no arg)  → real catalog view (/tmp/products_all.png)
-  demo      → TEMPORARILY marks the top-2 products suppliers_seen=2 to prove the
-              red-highlight + "show only flagged" filter render, screenshots the
-              flagged-only view (/tmp/products_flagged.png), then REVERTS. The
-              real data has 0 mis-files, so this only demonstrates the UI.
+  (no arg)  → full catalog view            (/tmp/products_all.png)
+  zik       → "רק זיכיונות" classification  (/tmp/products_zik.png)
 
-Usage:  python3 scripts/shot_products.py [demo]
+Usage:  python3 scripts/shot_products.py [zik]
 """
 import sys
 import sqlite3
@@ -18,19 +15,11 @@ from playwright.sync_api import sync_playwright
 
 DB = '/opt/makolet-chain-staging/db/makolet_chain.db'
 UID, EMAIL, PW, BASE = 1, 'makoletdashboard@gmail.com', 'TempShot2026!', 'http://127.0.0.1:8081'
-DEMO = len(sys.argv) > 1 and sys.argv[1] == 'demo'
+ZIK = len(sys.argv) > 1 and sys.argv[1] == 'zik'
 
 conn = sqlite3.connect(DB)
 old = conn.execute("SELECT password_hash FROM users WHERE id=?", (UID,)).fetchone()[0]
 conn.execute("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(PW), UID))
-
-demo_ids = []
-if DEMO:
-    demo_ids = [r[0] for r in conn.execute(
-        "SELECT product_id FROM products ORDER BY doc_count DESC LIMIT 2").fetchall()]
-    conn.executemany("UPDATE products SET suppliers_seen=2 WHERE product_id=?",
-                     [(i,) for i in demo_ids])
-    print(f"DEMO: temporarily flagged product_ids {demo_ids} (will revert)")
 conn.commit(); conn.close()
 
 try:
@@ -46,23 +35,21 @@ try:
         pg.wait_for_selector('#pc-table tbody tr', state='visible', timeout=15000)
         pg.wait_for_timeout(500)
         total = pg.eval_on_selector_all('#pc-table tbody tr', 'els => els.length')
-        flagged = pg.eval_on_selector_all('#pc-table tbody tr.flagged', 'els => els.length')
+        zik = pg.eval_on_selector_all('#pc-table tbody tr.zik', 'els => els.length')
 
-        if DEMO:
-            pg.check('#pc-flagonly')
+        if ZIK:
+            pg.check('#pc-zikonly')
             pg.wait_for_timeout(400)
-            out = '/tmp/products_flagged.png'
+            out = '/tmp/products_zik.png'
+            vis = pg.evaluate("() => Array.from(document.querySelectorAll('#pc-table tbody tr'))"
+                              ".filter(tr => tr.style.display !== 'none').length")
         else:
             out = '/tmp/products_all.png'
+            vis = total
         pg.screenshot(path=out)   # viewport only
         b.close()
-    print(f"shot: {out} | rows total={total} flagged(real or demo)={flagged}")
+    print(f"shot: {out} | rows total={total} zik={zik} | visible={vis}")
 finally:
     conn = sqlite3.connect(DB)
-    conn.execute("UPDATE users SET password_hash=? WHERE id=?", (old, UID))
-    if demo_ids:
-        conn.executemany("UPDATE products SET suppliers_seen=1 WHERE product_id=?",
-                         [(i,) for i in demo_ids])
-        print(f"DEMO: reverted {demo_ids} back to suppliers_seen=1")
-    conn.commit(); conn.close()
+    conn.execute("UPDATE users SET password_hash=? WHERE id=?", (old, UID)); conn.commit(); conn.close()
     print("cleanup: password restored")

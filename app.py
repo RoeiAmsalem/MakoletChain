@@ -5079,25 +5079,64 @@ def admin_franchise_classifier():
                            **_page_context('franchise_classifier'))
 
 
+def _dedup_products_by_barcode(products):
+    """Collapse rows that are the same physical product — same barcode, different
+    product_ids — into one display row (TASK 3). Representative prefers a
+    זיכיונות-flagged row (so the mess stays visible) then the most-documented;
+    doc_count is summed. If the representative is זיכיונות-only but a barcode
+    sibling carries a real supplier, borrow it as the suggestion (barcode-level
+    auto-map on top of the per-product_id mapping)."""
+    groups = {}
+    for p in products:
+        bc = (p.get('barcode') or '').strip()
+        key = bc if bc else f"__pid_{p['product_id']}"
+        groups.setdefault(key, []).append(p)
+    out = []
+    for rows in groups.values():
+        if len(rows) == 1:
+            out.append(dict(rows[0]))
+            continue
+        rows_sorted = sorted(
+            rows, key=lambda r: (r.get('raw_supplier') is None, -(r.get('doc_count') or 0)))
+        rep = dict(rows_sorted[0])
+        rep['doc_count'] = sum(r.get('doc_count') or 0 for r in rows)
+        rep['variant_count'] = len(rows)
+        if rep.get('raw_supplier') and not rep.get('suggested_supplier'):
+            real = next((r['supplier'] for r in rows
+                         if r.get('supplier') and 'זיכיונות' not in r['supplier']), None)
+            if real:
+                rep['suggested_supplier'] = real
+                rep['classification_status'] = 'auto'
+        out.append(rep)
+    out.sort(key=lambda r: -(r.get('doc_count') or 0))
+    return out
+
+
 @app.route('/products')
 @_admin_required
 def products_catalog():
     """POC chain-wide product catalog (admin-only). Reads the `products` table
-    built by scripts/build_product_catalog.py from BilBoy line-items. STANDALONE
-    — not wired into /goods, budget, or the doc view. Highlights products seen
-    under >1 supplier across the chain (the mis-file mess)."""
+    built by scripts/build_product_catalog.py from BilBoy line-items (incl. the
+    זיכיונות franchise docs the goods sync excludes). STANDALONE — not wired into
+    /goods, budget, or the doc view, and זיכיונות is still never counted in goods.
+    Shows UNIQUE products (deduped by barcode) and a זיכיונות classification view
+    mapping franchise-filed products to their real supplier."""
     db = get_db()
     rows = db.execute(
         "SELECT product_id, name, supplier, suppliers_seen, latest_price, "
-        "       latest_price_date, barcode, last_seen, doc_count "
+        "       latest_price_date, barcode, last_seen, doc_count, "
+        "       raw_supplier, suggested_supplier, classification_status "
         "FROM products ORDER BY doc_count DESC, name"
     ).fetchall()
-    products = [dict(r) for r in rows]
+    products = _dedup_products_by_barcode([dict(r) for r in rows])
     summary = {
         'total': len(products),
         'flagged': sum(1 for p in products if (p['suppliers_seen'] or 0) > 1),
         'observations': db.execute(
             "SELECT COUNT(*) AS c FROM product_observations").fetchone()['c'],
+        'zik_total': sum(1 for p in products if p.get('raw_supplier')),
+        'zik_auto': sum(1 for p in products if p.get('classification_status') == 'auto'),
+        'zik_review': sum(1 for p in products if p.get('classification_status') == 'needs-review'),
     }
     return render_template('products.html', products=products, summary=summary,
                            **_page_context('products'))
