@@ -1157,13 +1157,13 @@ def _goal_data(branch_id, db):
             'remaining': remaining,
         })
 
-    # Most over-budget first: budgeted rows (remaining ASC) above unbudgeted
-    # rows (biggest actual spend first).
-    suppliers.sort(key=lambda s: (
-        s['budget'] is None,
-        s['remaining'] if s['remaining'] is not None else 0,
-        -s['mtd_spend'],
-    ))
+    # Alphabetical by supplier name in Hebrew order (א→ת == Unicode codepoint
+    # order, so a plain string sort IS alphabetical). One single sequence — NOT
+    # grouped by budget/spend. Strip leading quotes/punctuation/space so quoted
+    # or ר.-style names sort by their first real letter. Feeds BOTH the desktop
+    # table and the mobile cards (they render data.suppliers in order).
+    _sort_strip = ' \t\r\n"\'״׳.־\-–—_()[]{}/*'
+    suppliers.sort(key=lambda s: (s['supplier_name'] or '').lstrip(_sort_strip))
 
     # Totals are summed over budgeted suppliers ONLY, so all three share one
     # basis. Summing הוצאה/יתרה over unbudgeted suppliers too made the headline
