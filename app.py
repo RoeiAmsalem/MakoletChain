@@ -1201,11 +1201,13 @@ def api_goods_doc_detail(row_id):
 # Manager sets a monthly budget (תקציב) per supplier; the יעדים toggle on the
 # /goods page shows the ACTUAL month-to-date spend (הוצאה) versus that budget,
 # with the remaining headroom (יתרה = תקציב − הוצאה, green when positive, red
-# when negative, neutral at exactly 0). Single branch, current month. Served as
-# JSON by /api/goal/data + /api/goal/budget. The הוצאה MUST reconcile to /goods,
-# so we reuse the exact _goods_doc_context aggregation (same dedup/status/
-# franchise rules, pre-VAT basis) and just group its supplier totals — never a
-# fresh goods query.
+# when negative, neutral at exactly 0). projected (קצב) is an INFORMATIONAL
+# run-rate (mtd_spend / days_elapsed × days_in_month) surfaced per supplier —
+# it does NOT affect יתרה or the color rule and is never summed into totals.
+# Single branch, current month. Served as JSON by /api/goal/data +
+# /api/goal/budget. The הוצאה MUST reconcile to /goods, so we reuse the exact
+# _goods_doc_context aggregation (same dedup/status/franchise rules, pre-VAT
+# basis) and just group its supplier totals — never a fresh goods query.
 
 def _goal_data(branch_id, db):
     """Build the budget-tracker payload for one branch + current Israel month.
@@ -1214,7 +1216,8 @@ def _goal_data(branch_id, db):
     suppliers that have a saved budget (so the full roster shows early in the
     month and budgeted-but-unordered suppliers still appear). mtd_spend is the
     actual pre-VAT goods total from /goods's own aggregation (the "הוצאה"
-    value); remaining (יתרה) = budget − mtd_spend."""
+    value); remaining (יתרה) = budget − mtd_spend. projected (קצב) is the
+    informational run-rate mtd_spend × days_in_month / days_elapsed."""
     now = _now_il()
     month = now.strftime('%Y-%m')
     prev_month = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
@@ -1252,9 +1255,12 @@ def _goal_data(branch_id, db):
         budget = budgets.get(name)
         # יתרה = תקציב − actual spent (mtd). Actual-spending model, not pace.
         remaining = round(budget - mtd, 2) if budget is not None else None
+        # קצב — informational run-rate only (does NOT feed יתרה/totals/color).
+        projected = round(mtd * days_in_month / days_elapsed, 2)  # days_elapsed >= 1
         suppliers.append({
             'supplier_name': name,
             'mtd_spend': mtd,
+            'projected': projected,
             'budget': budget,
             'remaining': remaining,
         })

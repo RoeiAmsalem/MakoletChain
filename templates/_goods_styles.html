@@ -126,20 +126,38 @@
         .goal-kpis .kpi-icon { font-size: 1rem !important; }
     }
     .goal-table td, .goal-table th { white-space: nowrap; }
-    /* Phone (iPhone 13): the desktop 4-col table becomes a stack of supplier
-       CARDS. Name on its own line, then a 3-up labeled row — תקציב (input) ·
-       הוצאה · יתרה — each with a small grey label above its value so all four
-       read cleanly at phone width with no clipping and no horizontal scroll. */
+    .goal-table td.goal-pace { color: #94a3b8; }   /* קצב — informational, muted */
+    /* Row tint by budget status (subtle, dark-theme legible). Mirrors the יתרה
+       color rule: יתרה > 0 → green, < 0 → red, == 0 / no budget → no tint. The
+       יתרה VALUE stays colored via .pos/.neg; this is the row background cue.
+       Desktop: tint the cells (a <tr> background can be hidden by cell bg). */
+    #goal-table tbody tr.goal-under td { background: rgba(34,197,94,0.07); }
+    #goal-table tbody tr.goal-over  td { background: rgba(239,68,68,0.07); }
+    /* Phone (iPhone 13): the desktop 5-col table becomes a stack of supplier
+       CARDS. Name on its own line, then the four metrics — תקציב (input) ·
+       הוצאה · קצב · יתרה — in a clean 2×2 labeled grid so all read at phone
+       width with no clipping and no horizontal scroll. */
     @media (max-width: 768px) {
         #goal-table, #goal-table tbody { display: block; }
         #goal-table thead, #goal-table tfoot { display: none; }
         #goal-table tbody tr {
             display: grid;
-            grid-template-columns: minmax(0,1.15fr) minmax(0,1fr) minmax(0,1fr);
-            gap: 0.4rem 0.7rem; align-items: start;
+            grid-template-columns: 1fr 1fr; gap: 0.55rem 0.7rem; align-items: start;
             border: 1px solid #334155; border-radius: 12px;
             background: rgba(255,255,255,0.025) !important;
             margin-bottom: 0.6rem; padding: 0.8rem 0.9rem;
+        }
+        /* Card-edge tint: colored start accent + faint wash (cells are transparent
+           on mobile, so the tr background shows). */
+        #goal-table tbody tr.goal-under {
+            background: rgba(34,197,94,0.08) !important;
+            border-color: rgba(34,197,94,0.45);
+            border-inline-start: 3px solid rgba(34,197,94,0.85);
+        }
+        #goal-table tbody tr.goal-over {
+            background: rgba(239,68,68,0.08) !important;
+            border-color: rgba(239,68,68,0.45);
+            border-inline-start: 3px solid rgba(239,68,68,0.85);
         }
         #goal-table tbody td {
             display: block; border: none !important; padding: 0 !important;
@@ -157,9 +175,13 @@
         }
         #goal-table tbody td:nth-child(2)::before { content: 'תקציב'; }
         #goal-table tbody td.goal-spend::before  { content: 'הוצאה'; }
+        #goal-table tbody td.goal-pace::before   { content: 'קצב'; }
         #goal-table tbody td.goal-rem::before    { content: 'יתרה'; }
         #goal-table tbody td.goal-spend {
             color: #e2e8f0; font-size: 1rem; font-variant-numeric: tabular-nums;
+        }
+        #goal-table tbody td.goal-pace {
+            color: #94a3b8; font-size: 1rem; font-variant-numeric: tabular-nums;
         }
         #goal-table tbody td.goal-rem {
             font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums;

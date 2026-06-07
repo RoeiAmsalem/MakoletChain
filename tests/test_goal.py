@@ -77,30 +77,49 @@ def _by_name(data):
 
 
 def test_remaining_is_budget_minus_spent(db, monkeypatch):
-    """יתרה = תקציב − actual MTD spend. No projected/קצב in the payload."""
+    """יתרה = תקציב − actual MTD spend (NOT pace). קצב is present per supplier
+    but must not affect remaining."""
     _freeze(monkeypatch, 10)
     data = _goal_data(BRANCH, db)
     assert data['days_elapsed'] == 10
     assert data['days_in_month'] == 31
     s = _by_name(data)
-    # A: mtd 300, budget 1000 → remaining = 1000 - 300 = 700 (positive/green)
+    # A: mtd 300, budget 1000 → remaining = 1000 - 300 = 700 (positive/green).
+    # projected (קצב) = 930 must NOT be what remaining is computed from.
     assert s['סופר א']['mtd_spend'] == 300.0
+    assert s['סופר א']['projected'] == 930.0
     assert s['סופר א']['remaining'] == 700.0
-    assert 'projected' not in s['סופר א']
     # B: mtd 500, no budget → remaining None
     assert s['סופר ב']['mtd_spend'] == 500.0
     assert s['סופר ב']['remaining'] is None
 
 
-def test_remaining_is_day_independent(db, monkeypatch):
-    """Actual-spending model has no run-rate, so spend & remaining do NOT change
-    with the day. Day 1 and day 28 produce identical numbers."""
+def test_projected_is_run_rate(db, monkeypatch):
+    """קצב (projected) = mtd_spend × days_in_month / days_elapsed — informational
+    pace, surfaced per supplier, NOT summed into totals."""
+    _freeze(monkeypatch, 10)  # day 10 of 31
+    data = _goal_data(BRANCH, db)
+    s = _by_name(data)
+    assert s['סופר א']['projected'] == 930.0    # 300 * 31 / 10
+    assert s['סופר ב']['projected'] == 1550.0   # 500 * 31 / 10
+    assert s['סופר ג']['projected'] == 0.0      # mtd 0
+    assert 'projected' not in data['totals']    # informational — never a total
+
+
+def test_remaining_is_day_independent_but_projected_is_not(db, monkeypatch):
+    """Actual-spending יתרה has no run-rate, so spend & remaining do NOT change
+    with the day. קצב (projected), being a run-rate, DOES change with the day."""
     _freeze(monkeypatch, 1)
     d1 = _by_name(_goal_data(BRANCH, db))
     _freeze(monkeypatch, 28)
     d28 = _by_name(_goal_data(BRANCH, db))
+    # יתרה / spend: day-independent
     assert d1['סופר א']['mtd_spend'] == d28['סופר א']['mtd_spend'] == 300.0
     assert d1['סופר א']['remaining'] == d28['סופר א']['remaining'] == 700.0
+    # קצב: day-dependent run-rate (day 1 → ×31, day 28 lower multiplier)
+    assert d1['סופר א']['projected'] == 300.0 * 31         # 9300
+    assert d28['סופר א']['projected'] > d28['סופר א']['mtd_spend']
+    assert d1['סופר א']['projected'] != d28['סופר א']['projected']
 
 
 def test_mtd_zero_remaining_is_full_budget(db, monkeypatch):

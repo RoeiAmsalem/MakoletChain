@@ -242,15 +242,18 @@ function renderGoals(data) {
 
     document.getElementById('goal-tbody').innerHTML = data.suppliers.map(s => {
         const rc = remCls(s.remaining);
+        // Row tint mirrors the יתרה color rule: >0 green, <0 red, ==0/none none.
+        const rowCls = rc === 'pos' ? 'goal-under' : (rc === 'neg' ? 'goal-over' : '');
         const remCell = s.remaining === null ? '<span class="muted">—</span>' : ils0(s.remaining);
         // Idle: formatted like הוצאה/יתרה (₪ + commas via ils0). Text input so the
         // ₪/commas can show; focus swaps to the raw number (see budget handlers).
         const bv = s.budget === null ? '' : ils0(s.budget);
-        return '<tr data-supplier="' + esc(s.supplier_name) + '">' +
+        return '<tr class="' + rowCls + '" data-supplier="' + esc(s.supplier_name) + '">' +
             '<td>' + esc(s.supplier_name) + '</td>' +
             '<td class="num"><input type="text" inputmode="decimal" ' +
                 'class="goal-budget-input" value="' + bv + '" placeholder="הוסף תקציב" aria-label="תקציב חודשי"></td>' +
             '<td class="num goal-spend">' + ils0(s.mtd_spend) + '</td>' +
+            '<td class="num goal-pace">' + ils0(s.projected) + '</td>' +
             '<td class="num goal-rem ' + rc + '">' + remCell + '</td>' +
             '</tr>';
     }).join('');
