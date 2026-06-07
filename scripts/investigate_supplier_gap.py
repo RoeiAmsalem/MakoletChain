@@ -51,8 +51,9 @@ def is_franchise(name, franchise):
 
 def distinct_suppliers(c, bid, franchise, months=None):
     if months:
+        ph = ','.join('?' * len(months))
         q = ("SELECT DISTINCT supplier FROM goods_documents WHERE branch_id=? "
-             "AND strftime('%Y-%m', doc_date) IN (%s)" % ','.join('?' * len(months)))
+             "AND strftime('%Y-%m', doc_date) IN (" + ph + ")")
         rows = c.execute(q, [bid, *months]).fetchall()
     else:
         rows = c.execute("SELECT DISTINCT supplier FROM goods_documents WHERE branch_id=?",
