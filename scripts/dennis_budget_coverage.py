@@ -56,6 +56,14 @@ BRANCHES = [(9018, 'דפנה', 1), (9015, 'הגנה', 2)]   # (id, label, amt-in
 _PUNCT = re.compile(r'["\'״׳()\[\]/.,\-–—_*]')
 _WS = re.compile(r'\s+')
 
+# Generic descriptor tokens that recur across DIFFERENT legal entities, so they
+# must NOT by themselves carry a fuzzy match (e.g. 'אינטרנשיונל' appears in BOTH
+# ויליפוד אינטרנשיונל and דילר בי.אמ.די אינטרנשיונל). A match needs a brand token.
+GENERIC = {
+    'אינטרנשיונל', 'גלידות', 'מזון', 'עלית', 'סחר', 'שיווק', 'יבוא', 'הפצה',
+    'מפיצים', 'ישראל', 'מוצרי', 'קבוצת', 'המרכזית', 'החברה',
+}
+
 
 def normalize(s):
     s = (s or '').lower()
@@ -66,7 +74,7 @@ def normalize(s):
 
 
 def toks(s):
-    return [t for t in normalize(s).split() if len(t) >= 3]
+    return [t for t in normalize(s).split() if len(t) >= 3 and t not in GENERIC]
 
 
 def pair_score(dname, oname):
@@ -131,8 +139,10 @@ def main():
             if di in dmatch:
                 on, sc, cov = dmatch[di]
                 matched.append((name, on))
-                # weak: only a single short (3-char) token carried the match.
-                if sc <= 3 or cov < 0.5:
+                # weak: the match covers less than half of Dennis's brand tokens
+                # (a partial-name hit worth eyeballing). Full short-name hits
+                # (cov 1.0, e.g. טרה→החברה המרכזית טרה) are confident, not flagged.
+                if cov < 0.5:
                     lowconf.append((name, on, sc, round(cov, 2)))
             else:
                 # MISSING from budget list → check goods all-time (fuzzy, best score).
