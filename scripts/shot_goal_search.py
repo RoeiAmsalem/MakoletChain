@@ -22,7 +22,7 @@ conn.commit(); conn.close()
 try:
     with sync_playwright() as p:
         b = p.chromium.launch()
-        ctx = b.new_context(viewport={'width': 1366, 'height': 1000})
+        ctx = b.new_context(viewport={'width': 1680, 'height': 1000})
         pg = ctx.new_page()
         pg.goto(f'{BASE}/login', wait_until='domcontentloaded')
         pg.fill('input[name=email]', EMAIL); pg.fill('input[name=password]', PW)
