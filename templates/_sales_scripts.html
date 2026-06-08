@@ -31,21 +31,18 @@ async function loadSales() {
                 <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">ממוצע ליום</span></div>
                 <span class="kpi-value" style="color:#93c5fd">${formatMoney(d.avg)}</span>
             </div>
-            <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
-                <div class="kpi-header"><span class="kpi-icon">🔝</span><span class="kpi-label">יום הכי גבוה</span></div>
-                <span class="kpi-value" style="color:#86efac">${formatMoney(d.highest)}</span>
-            </div>
-            <div class="kpi-card" style="background:linear-gradient(135deg,#7f1d1d,#991b1b);border-color:rgba(239,68,68,0.25)">
-                <div class="kpi-header"><span class="kpi-icon">🔻</span><span class="kpi-label">יום הכי נמוך</span></div>
-                <span class="kpi-value" style="color:#fca5a5">${formatMoney(d.lowest)}</span>
-            </div>
-            <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
-                <div class="kpi-header"><span class="kpi-icon">🧾</span><span class="kpi-label">ממוצע עסקאות יומי</span></div>
-                <span class="kpi-value" style="color:#86efac">${d.avg_daily_txn} עסקאות/יום</span>
+            <div class="kpi-card" style="grid-column:1/-1;background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">📅</span><span class="kpi-label">קצב הכנסות</span></div>
+                <span class="kpi-value" style="color:#93c5fd">${d.pace != null ? formatMoney(d.pace) : '—'}</span>
+                <span style="font-size:0.8rem;color:rgba(241,245,249,0.5)">לפי ממוצע ${d.days} ימים</span>
             </div>
             <div class="kpi-card" style="background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
                 <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">ממוצע לעסקה</span></div>
                 <span class="kpi-value" style="color:#93c5fd">₪ ${d.avg_txn_value}</span>
+            </div>
+            <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
+                <div class="kpi-header"><span class="kpi-icon">🧾</span><span class="kpi-label">ממוצע עסקאות יומי</span></div>
+                <span class="kpi-value" style="color:#86efac">${d.avg_daily_txn} עסקאות/יום</span>
             </div>`;
 
         // Table rows
