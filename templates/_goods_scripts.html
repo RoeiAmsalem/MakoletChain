@@ -224,6 +224,7 @@ function renderGoals(data) {
     loading.hidden = true;
     if (!data.suppliers.length) { wrap.hidden = true; summary.hidden = true; empty.hidden = false; return; }
     empty.hidden = true; wrap.hidden = false; summary.hidden = false;
+    document.getElementById('goal-search-wrap').hidden = false;
 
     // Summary strip — budgeted-only totals (same numbers as the bottom row).
     document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
@@ -265,7 +266,30 @@ function renderGoals(data) {
     const fr = document.getElementById('goal-foot-remaining');
     fr.textContent = ils0(data.totals.remaining);
     fr.className = 'num ' + remCls(data.totals.remaining);
+
+    applyGoalSearch();   // re-apply any active search term to the fresh rows
 }
+
+// Findability filter: substring match (case-insensitive) on the supplier name,
+// over the SAME <tr> rows that render as desktop table rows AND mobile cards, so
+// one filter covers both. Empty term → show all. Totals/strip are untouched.
+function applyGoalSearch() {
+    const inp = document.getElementById('goal-search');
+    if (!inp) return;
+    const q = (inp.value || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#goal-tbody tr').forEach(tr => {
+        const name = (tr.getAttribute('data-supplier') || '').toLowerCase();
+        const match = !q || name.indexOf(q) >= 0;
+        tr.style.display = match ? '' : 'none';
+        if (match) shown++;
+    });
+    const hint = document.getElementById('goal-search-empty');
+    if (hint) hint.hidden = !(q && shown === 0);
+}
+document.addEventListener('input', e => {
+    if (e.target && e.target.id === 'goal-search') applyGoalSearch();
+});
 
 // Strip ₪ / commas / spaces → plain number (or '' when blank). The budget POST
 // contract still receives a plain number.

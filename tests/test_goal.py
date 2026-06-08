@@ -229,3 +229,27 @@ def test_order_pace_is_all_suppliers(db, monkeypatch):
     # א proj 930 + ב proj 1550 + ג/ד/ה 0 = 2480
     assert t['order_pace'] == 2480.0
     assert t['order_pace'] > t['spent']   # 2480 > 300 — unbudgeted ב lifts the pace
+
+
+def test_merges_whitespace_supplier_variants(db, monkeypatch):
+    """Root-cause fix: a trailing-newline variant of a supplier merges into ONE
+    row (summed mtd_spend, budget carried) instead of appearing twice. Σ mtd
+    still reconciles to the /goods pre-VAT MTD."""
+    _freeze(monkeypatch, 10)
+    # A dirty variant 'סופר א\n' of the budgeted supplier 'סופר א' (mtd 300).
+    db.execute(
+        "INSERT INTO goods_documents (branch_id, doc_date, supplier, ref_number, "
+        "amount, total_without_vat, doc_type) VALUES (?, ?, ?, ?, ?, ?, 3)",
+        (BRANCH, MONTH + '-04', 'סופר א\n', 'A3', 58.5, 50.0))
+    db.commit()
+    data = _goal_data(BRANCH, db)
+    names = [s['supplier_name'] for s in data['suppliers']]
+    assert names.count('סופר א') == 1            # one row, not two
+    assert 'סופר א\n' not in names               # the dirty variant is gone
+    s = _by_name(data)
+    assert s['סופר א']['mtd_spend'] == 350.0      # 300 + 50 merged
+    assert s['סופר א']['budget'] == 1000.0        # budget carried onto the merged row
+    assert s['סופר א']['remaining'] == 650.0
+    sum_mtd = round(sum(x['mtd_spend'] for x in data['suppliers']), 2)
+    goods_total = _goods_doc_context(BRANCH, MONTH, db)['total_before_vat']
+    assert sum_mtd == goods_total == 850.0        # reconciliation Δ0

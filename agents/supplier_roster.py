@@ -22,6 +22,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from utils.text import clean_supplier_name
+
 log = logging.getLogger(__name__)
 
 IL_TZ = ZoneInfo('Asia/Jerusalem')
@@ -53,7 +55,7 @@ def prior_two_month_suppliers(conn, branch_id: int,
     franchise = ''
     if frow is not None:
         franchise = (frow[0] if not hasattr(frow, 'keys') else frow['franchise_supplier']) or ''
-    franchise = franchise.strip()
+    franchise = clean_supplier_name(franchise)
 
     # Direct goods query — deliberately NOT floor-guarded (see module docstring).
     rows = conn.execute(
@@ -66,8 +68,7 @@ def prior_two_month_suppliers(conn, branch_id: int,
     names = []
     seen = set()
     for r in rows:
-        s = (r[0] if not hasattr(r, 'keys') else r['supplier']) or ''
-        s = s.strip()
+        s = clean_supplier_name(r[0] if not hasattr(r, 'keys') else r['supplier'])
         if not s or s == '—':
             continue
         if franchise and s == franchise:        # locked franchise supplier

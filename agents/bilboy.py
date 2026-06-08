@@ -20,6 +20,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import requests
 
 from utils.notify import notify
+from utils.text import clean_supplier_name
 
 
 def _friendly_bilboy_error(e: Exception) -> str:
@@ -283,7 +284,11 @@ def run_bilboy(branch_id: int) -> dict:
                 skip_type += 1
                 continue
 
-            supplier = doc.get('supplierName') or ''
+            # Normalize at write time so goods_documents never stores the
+            # trailing-\n / stray-whitespace variants BilBoy sometimes returns
+            # (the root cause of the budget duplicate-supplier bug). Only the
+            # stored string is cleaned — dedup/franchise/status logic unchanged.
+            supplier = clean_supplier_name(doc.get('supplierName'))
             if franchise_supplier and franchise_supplier in supplier:
                 skip_franchise += 1
                 continue

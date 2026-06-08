@@ -1232,14 +1232,33 @@ def _goal_data(branch_id, db):
     else:
         cur_groups = _goods_doc_context(branch_id, month, db)['groups']
 
+    # Group EVERYTHING by the cleaned supplier name (belt-and-suspenders on top
+    # of the write-time + migration cleanup) so two raw whitespace variants of
+    # the same supplier merge into one row: mtd_spend is SUMMED, the budget is
+    # carried, and supplier_budgets matches by the same cleaned key. Total stays
+    # identical (just regrouped) so reconciliation to /goods is unchanged.
+    from utils.text import clean_supplier_name
+
     # pre-VAT MTD spend per supplier (reconciles to /goods total_before_vat).
-    cur_spend = {g['supplier']: g['total_before_vat'] for g in cur_groups}
+    cur_spend = {}
+    for g in cur_groups:
+        k = clean_supplier_name(g['supplier'])
+        if not k:
+            continue
+        cur_spend[k] = round(cur_spend.get(k, 0.0) + g['total_before_vat'], 2)
 
     budget_rows = db.execute(
         "SELECT supplier_name, monthly_budget FROM supplier_budgets "
         "WHERE branch_id = ?", (branch_id,)
     ).fetchall()
-    budgets = {r['supplier_name']: r['monthly_budget'] for r in budget_rows}
+    budgets = {}
+    for r in budget_rows:
+        k = clean_supplier_name(r['supplier_name'])
+        if not k:
+            continue
+        # If dirty variants left two budget rows, carry the larger (a supplier
+        # has one budget; this never under-reports the manager's intent).
+        budgets[k] = max(budgets.get(k, 0.0), r['monthly_budget'] or 0.0)
 
     # Full roster (supplier_roster, migration 029) — built monthly from the
     # prior 2 months of BilBoy goods (floor-IGNORING, franchise-excluded) so a
@@ -1251,7 +1270,8 @@ def _goal_data(branch_id, db):
         "SELECT supplier_name FROM supplier_roster WHERE branch_id = ?",
         (branch_id,)
     ).fetchall()
-    roster_names = {r['supplier_name'] for r in roster_rows}
+    roster_names = {clean_supplier_name(r['supplier_name']) for r in roster_rows}
+    roster_names.discard('')
 
     # Self-heal: the supplier_roster table is populated only by the monthly
     # (1st-of-month) build, so a branch not yet built — a new chain store, or
@@ -1269,6 +1289,7 @@ def _goal_data(branch_id, db):
 
     roster = roster_names | set(cur_spend) | set(budgets)
     roster.discard('—')
+    roster.discard('')
     roster.discard(None)
 
     suppliers = []

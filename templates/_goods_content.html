@@ -204,6 +204,13 @@
         </div>
         <div class="goal-overpace" id="goal-overpace"></div>
     </div>
+    <!-- Findability search — filters the supplier list by substring (brand or
+         legal name). Client-side, instant; does NOT affect the totals strip. -->
+    <div id="goal-search-wrap" hidden>
+        <input type="text" id="goal-search" class="goal-search" autocomplete="off"
+               placeholder="חיפוש ספק…" aria-label="חיפוש ספק">
+        <div id="goal-search-empty" class="goal-search-empty" hidden>אין תוצאות</div>
+    </div>
     <div id="goal-table-wrap" style="overflow-x:auto" hidden>
         <table class="data-table goal-table" id="goal-table">
             <thead>
