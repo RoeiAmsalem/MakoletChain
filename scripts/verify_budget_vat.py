@@ -68,9 +68,12 @@ for branch in (9018, 9015):
         print(f"   {nm} | {lpc} | {s['mtd_spend']} | {m1} | "
               f"{s['budget']} | {s['remaining']} | {bm} | {m2}")
 
-    # an exempt/produce-style supplier: incl-VAT ≈ pre-VAT (no ~18% jump).
-    exempt = [nm for nm in incl if pre.get(nm) and abs(incl[nm] - pre[nm]) < 0.02]
-    if exempt:
-        nm = exempt[0]
-        print(f"  exempt/0-VAT example: {nm} incl={incl[nm]} pre={pre[nm]} "
-              f"(unchanged — no VAT to add)")
+    # produce/exempt example: the supplier with incl-VAT closest to pre-VAT
+    # (ratio ~1.0 = VAT-exempt, spend did NOT jump ~18%).
+    ratios = sorted(((round(incl[nm] / pre[nm], 4), nm) for nm in incl if pre.get(nm)),
+                    key=lambda x: x[0])
+    if ratios:
+        r, nm = ratios[0]
+        kind = 'exempt — no VAT jump' if r < 1.02 else f'carries VAT (~{(r-1)*100:.0f}%)'
+        print(f"  lowest VAT-ratio supplier: {nm} incl={incl[nm]} pre={pre[nm]} "
+              f"ratio={r} ({kind})")
