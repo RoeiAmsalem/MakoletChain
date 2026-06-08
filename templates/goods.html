@@ -138,6 +138,21 @@
     .goal-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-bottom: 0.6rem; }
     .goal-overpace { font-size: 0.82rem; color: #fca5a5; font-weight: 600; margin-bottom: 1rem; min-height: 1.1rem; }
     .goal-overpace.ok { color: #86efac; }
+    /* Supplier findability search (filters rows + cards; not the totals). */
+    #goal-search-wrap { margin-bottom: 0.7rem; }
+    .goal-search {
+        width: 100%; box-sizing: border-box; background: #0f172a; color: #e2e8f0;
+        border: 1px solid #334155; border-radius: 8px; padding: 0.55rem 0.8rem;
+        font-size: 0.95rem; font-family: inherit; direction: rtl; text-align: right;
+        outline: none;
+    }
+    .goal-search:focus { border-color: #3b82f6; }
+    .goal-search::placeholder { color: #64748b; }
+    .goal-search-empty { font-size: 0.85rem; color: #94a3b8; padding: 0.6rem 0.2rem; }
+    @media (max-width: 768px) {
+        /* 44px tap height + 16px font stops iOS zoom-on-focus. */
+        .goal-search { min-height: 44px; font-size: 16px; }
+    }
     /* Cohesive colored summary tiles, matching the /goods KPI family. Source
        order: 1=סה"כ תקציב, 2=סה"כ הוצאה, 3=יתרה (headline), 4=קצב הזמנות.
          • יתרה   — green/red/neutral headline (--profit/--loss gradient via JS).
@@ -481,6 +496,13 @@
         </div>
         <div class="goal-overpace" id="goal-overpace"></div>
     </div>
+    <!-- Findability search — filters the supplier list by substring (brand or
+         legal name). Client-side, instant; does NOT affect the totals strip. -->
+    <div id="goal-search-wrap" hidden>
+        <input type="text" id="goal-search" class="goal-search" autocomplete="off"
+               placeholder="חיפוש ספק…" aria-label="חיפוש ספק">
+        <div id="goal-search-empty" class="goal-search-empty" hidden>אין תוצאות</div>
+    </div>
     <div id="goal-table-wrap" style="overflow-x:auto" hidden>
         <table class="data-table goal-table" id="goal-table">
             <thead>
@@ -760,6 +782,7 @@ function renderGoals(data) {
     loading.hidden = true;
     if (!data.suppliers.length) { wrap.hidden = true; summary.hidden = true; empty.hidden = false; return; }
     empty.hidden = true; wrap.hidden = false; summary.hidden = false;
+    document.getElementById('goal-search-wrap').hidden = false;
 
     // Summary strip — budgeted-only totals (same numbers as the bottom row).
     document.getElementById('goal-tot-budget').textContent = ils0(data.totals.budget);
@@ -801,7 +824,30 @@ function renderGoals(data) {
     const fr = document.getElementById('goal-foot-remaining');
     fr.textContent = ils0(data.totals.remaining);
     fr.className = 'num ' + remCls(data.totals.remaining);
+
+    applyGoalSearch();   // re-apply any active search term to the fresh rows
 }
+
+// Findability filter: substring match (case-insensitive) on the supplier name,
+// over the SAME <tr> rows that render as desktop table rows AND mobile cards, so
+// one filter covers both. Empty term → show all. Totals/strip are untouched.
+function applyGoalSearch() {
+    const inp = document.getElementById('goal-search');
+    if (!inp) return;
+    const q = (inp.value || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#goal-tbody tr').forEach(tr => {
+        const name = (tr.getAttribute('data-supplier') || '').toLowerCase();
+        const match = !q || name.indexOf(q) >= 0;
+        tr.style.display = match ? '' : 'none';
+        if (match) shown++;
+    });
+    const hint = document.getElementById('goal-search-empty');
+    if (hint) hint.hidden = !(q && shown === 0);
+}
+document.addEventListener('input', e => {
+    if (e.target && e.target.id === 'goal-search') applyGoalSearch();
+});
 
 // Strip ₪ / commas / spaces → plain number (or '' when blank). The budget POST
 // contract still receives a plain number.
