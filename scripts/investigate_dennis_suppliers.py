@@ -126,9 +126,27 @@ def tier1(c, branches, older, newer, current):
     except sqlite3.OperationalError:
         pass
 
+    # Current-month spenders, keyed by the RAW goods supplier string (exactly how
+    # _goal_data's cur_spend is keyed — newline and all).
+    june = defaultdict(set)
+    for r in c.execute(
+            "SELECT DISTINCT branch_id, supplier FROM goods_documents "
+            "WHERE strftime('%Y-%m', doc_date)=? AND supplier IS NOT NULL "
+            "AND TRIM(supplier) NOT IN ('','—')", (current,)):
+        june[r['branch_id']].add(r['supplier'])
+
     bname = {b['id']: b['name'] for b in branches}
     franchise = {b['id']: (b['franchise_supplier'] or '').strip() for b in branches}
     valid = set(bname)
+
+    # Reconstruct the ACTUAL budget list per branch the way _goal_data does:
+    # supplier_roster ∪ current-month spenders ∪ budgeted. Store the normalized
+    # cores so a Dennis name "is in the list" iff its core matches a member's core
+    # (this is what Dennis actually sees, immune to the newline mismatch).
+    blist_norm = {}
+    for bid in valid:
+        members = roster.get(bid, set()) | june.get(bid, set()) | budgeted.get(bid, set())
+        blist_norm[bid] = {norm(m) for m in members}
 
     # Index normalized supplier-name → list of aggregate rows.
     agg = []
@@ -175,40 +193,46 @@ def tier1(c, branches, older, newer, current):
             docs = sum(a['docs'] for a in recs)
             amt = sum(a['amt'] for a in recs)
             mx = max(a['mx'] for a in recs)
-            names = {a['supplier'] for a in recs}
-            in_roster = bool(names & roster.get(bid, set()))
-            in_cur = any(a['mxmonth'] == current for a in recs)
-            in_bud = bool(names & budgeted.get(bid, set()))
-            in_list = in_roster or in_cur or in_bud
+            # in_list = does ANY matched core appear in this branch's real budget
+            # list (roster ∪ current ∪ budgeted, normalized)?
+            rec_cores = {a['ncore'] for a in recs}
+            in_list = bool(rec_cores & blist_norm.get(bid, set()))
             is_fr = any(is_franchise(a['supplier'], franchise.get(bid, '')) for a in recs)
             star = '  ← DENNIS' if bid in DENNIS_BRANCHES else ''
             label = f"{bid} {bname.get(bid, '?')[:18]}"
             print(f"   {label:<26} {docs:>5} {amt:>11,.0f} {str(mx):<11} "
                   f"{('YES' if in_list else 'no'):<9} {'YES' if is_fr else '-'}{star}")
 
+        # FINDABILITY: the budget list sorts alphabetically by first real letter.
+        # If a stored name's first letter ≠ the brand's first letter (e.g.
+        # 'דילר בי.אמ.די פורמולה' sorts under ד, not פ), Dennis can't find it.
+        typed_brand = typed.split(' / ')[0].split(' (')[0].strip()
+        def first_letter(s):
+            return (s or '').lstrip(_STRIP)[:1]
+        misfiled = [s for s in spellings
+                    if first_letter(s) and first_letter(typed_brand)
+                    and first_letter(s) != first_letter(typed_brand)]
+
         # spelling-variant flag vs what Dennis typed
-        typed_core = norm(typed.split(' / ')[0].split(' (')[0])
+        typed_core = norm(typed_brand)
         is_variant = all(typed_core not in norm(s) and norm(s) not in typed_core
                          for s in spellings)
         notes = []
         if is_variant:
-            notes.append('VARIANT (stored spelling ≠ typed)')
-        # Dennis-store specific verdict
+            notes.append('VARIANT (stored name ≠ typed)')
+        if misfiled:
+            notes.append(f"MISFILED — sorts under {first_letter(misfiled[0])!r} not "
+                         f"{first_letter(typed_brand)!r}")
+        # Dennis-store specific verdict, using the reconstructed budget list.
         d_recs = [a for a in matches if a['branch'] in DENNIS_BRANCHES]
         if d_recs:
-            d_in_list = False
-            for bid in DENNIS_BRANCHES:
-                recs = by_store.get(bid, [])
-                if not recs:
-                    continue
-                names = {a['supplier'] for a in recs}
-                if (names & roster.get(bid, set())) or (names & budgeted.get(bid, set())) \
-                        or any(a['mxmonth'] == current for a in recs):
-                    d_in_list = True
-            if not d_in_list:
-                notes.append("present in Dennis's store(s) but NOT in his budget list")
+            d_in_list = any(
+                {a['ncore'] for a in by_store.get(bid, [])} & blist_norm.get(bid, set())
+                for bid in DENNIS_BRANCHES)
+            notes.append("IN Dennis's budget list" if d_in_list
+                         else "in Dennis's store but NOT in his budget list")
         else:
-            notes.append("ABSENT from Dennis's own stores (only other branches)")
+            notes.append("ABSENT from Dennis's stores (other branches only)")
 
         print(f"   ⇒ bucket: {bucket}" + (f"   [{'; '.join(notes)}]" if notes else ''))
         summary.append((typed, bucket, '; '.join(notes) or 'in list'))
@@ -221,63 +245,91 @@ def tier1(c, branches, older, newer, current):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TIER 2  — dedup collisions
+# TIER 2  — dedup collisions (the REAL budget-list duplicates) + dirty names
 # ─────────────────────────────────────────────────────────────────────────────
 def tier2(c, branches, older, newer, current):
-    list_window = {older, newer, current}
     bname = {b['id']: b['name'] for b in branches}
     valid = set(bname)
 
-    # name → set(raw spellings) per branch, restricted to names that are in the
-    # budget list (roster window or current month) so we count REAL budget rows.
-    rows = c.execute(
-        "SELECT branch_id, supplier, strftime('%Y-%m', doc_date) m "
-        "FROM goods_documents "
-        "WHERE supplier IS NOT NULL AND TRIM(supplier) NOT IN ('','—')").fetchall()
-    bynorm = defaultdict(lambda: defaultdict(set))   # branch -> ncore -> {raw}
-    for r in rows:
-        if r['branch_id'] not in valid or r['m'] not in list_window:
-            continue
-        bynorm[r['branch_id']][norm(r['supplier'])].add(r['supplier'])
-
     print("\n" + "=" * 78)
-    print("TIER 2 — name-dedup collisions (same supplier under >1 spelling, "
-          "in-list window)")
+    print("TIER 2 — name-dedup collisions in the REAL budget list "
+          "(supplier_roster ∪ current-month ∪ budgeted)")
     print("=" * 78)
 
+    # ── 2a. Whitespace-dirty supplier names in goods_documents (the root cause).
+    # SQLite TRIM() strips spaces only — NOT \n / \r / \t. So a BilBoy name with a
+    # trailing newline survives TRIM, but supplier_roster's Python .strip() removes
+    # it → roster name ≠ goods/current-spend name → they never merge.
+    dirty = c.execute(
+        "SELECT branch_id, supplier, COUNT(*) d, MAX(doc_date) mx "
+        "FROM goods_documents WHERE supplier IS NOT NULL "
+        "AND supplier <> TRIM(supplier, char(10)||char(13)||char(9)||' ') "
+        "GROUP BY branch_id, supplier ORDER BY supplier").fetchall()
+    print(f"\n● 2a. whitespace-dirty supplier names (trailing/leading \\n \\r \\t): "
+          f"{len(dirty)} (branch,name) rows")
+    dirty_cores = defaultdict(set)
+    for r in dirty:
+        dirty_cores[norm(r['supplier'])].add(r['branch_id'])
+    for core, bids in sorted(dirty_cores.items()):
+        sample = c.execute(
+            "SELECT DISTINCT supplier FROM goods_documents WHERE supplier LIKE ? "
+            "LIMIT 1", ('%' + core[:6] + '%',)).fetchone()
+        raw = sample['supplier'] if sample else core
+        print(f"   {raw!r:<42} in {len(bids)} branch(es): {sorted(bids)}")
+
+    # ── 2b. Reconstruct each branch's budget list exactly as _goal_data does and
+    # find normalized cores that map to >1 distinct displayed string (= duplicate
+    # rows the manager sees). This catches roster(clean) vs current-spend(newline).
+    roster = defaultdict(set)
+    for r in c.execute("SELECT branch_id, supplier_name FROM supplier_roster"):
+        roster[r['branch_id']].add(r['supplier_name'])
+    june = defaultdict(set)
+    for r in c.execute(
+            "SELECT DISTINCT branch_id, supplier FROM goods_documents "
+            "WHERE strftime('%Y-%m', doc_date)=? AND supplier IS NOT NULL "
+            "AND TRIM(supplier) NOT IN ('','—')", (current,)):
+        june[r['branch_id']].add(r['supplier'])
+    budgeted = defaultdict(set)
+    try:
+        for r in c.execute("SELECT branch_id, supplier_name FROM supplier_budgets"):
+            budgeted[r['branch_id']].add(r['supplier_name'])
+    except sqlite3.OperationalError:
+        pass
+
     chain_dupes = 0
-    collision_rows = []
-    for bid in sorted(bynorm):
-        for ncore, raws in bynorm[bid].items():
+    collisions = []                                   # (branch, core, [raw members])
+    for bid in valid:
+        members = (roster.get(bid, set()) | june.get(bid, set())
+                   | budgeted.get(bid, set()))
+        members.discard('—')
+        members.discard(None)
+        bycore = defaultdict(set)
+        for m in members:
+            bycore[norm(m)].add(m)
+        for core, raws in bycore.items():
             if len(raws) > 1:
                 chain_dupes += len(raws) - 1
-                collision_rows.append((bid, sorted(raws)))
+                collisions.append((bid, core, sorted(raws)))
 
-    # מרינה in 9018 first
-    print("\n● מרינה / 9018 focus:")
-    marina_9018 = [(bid, raws) for bid, raws in collision_rows
-                   if bid == 9018 and any('מרינה' in norm(x) for x in raws)]
-    marina_any = c.execute(
-        "SELECT branch_id, supplier, COUNT(*) d, MAX(doc_date) mx "
-        "FROM goods_documents WHERE branch_id=9018 AND supplier LIKE '%מרינה%' "
-        "GROUP BY supplier").fetchall()
-    if marina_any:
-        for r in marina_any:
-            print(f"   9018  {r['supplier']!r:<40} docs={r['d']} latest={r['mx']}")
-        distinct = {norm(r['supplier']) for r in marina_any}
-        print(f"   → {len(marina_any)} stored spelling(s) collapse to "
-              f"{len(distinct)} supplier(s) → "
-              f"{'DUPLICATE rows in budget list' if len(marina_any) > 1 else 'single row'}")
-    else:
-        print("   no מרינה rows in 9018 goods_documents.")
+    # מרינה / 9018 focus
+    print("\n● 2b. מרינה / 9018 focus (budget-list reconstruction):")
+    m_members = {'roster': [x for x in roster.get(9018, set()) if 'מרינה' in x],
+                 'current(June)': [x for x in june.get(9018, set()) if 'מרינה' in x],
+                 'budgeted': [x for x in budgeted.get(9018, set()) if 'מרינה' in x]}
+    for src, lst in m_members.items():
+        for x in lst:
+            print(f"   {src:<14} → {x!r}")
+    n_marina = len({m for lst in m_members.values() for m in lst})
+    print(f"   → 9018 budget list shows מרינה as {n_marina} distinct string(s) "
+          f"→ {'DUPLICATE (Dennis is right)' if n_marina > 1 else 'single row'}")
 
-    print(f"\n● All collisions (branch: spellings that collapse to one supplier):")
-    if not collision_rows:
-        print("   none in the in-list window.")
-    for bid, raws in sorted(collision_rows):
-        print(f"   {bid} {bname.get(bid,'?')[:16]:<16} {raws}")
+    print(f"\n● 2b. all budget-list collisions (branch: core → displayed strings):")
+    if not collisions:
+        print("   none.")
+    for bid, core, raws in sorted(collisions):
+        print(f"   {bid} {bname.get(bid,'?')[:14]:<14} {raws}")
 
-    print(f"\n   chain-wide duplicate budget rows (Σ extra spellings) = {chain_dupes}")
+    print(f"\n   chain-wide duplicate budget rows (Σ extra strings) = {chain_dupes}")
     return chain_dupes
 
 
