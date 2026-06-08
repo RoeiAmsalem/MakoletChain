@@ -15,7 +15,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import app as app_module
 from app import app
 
-CASES = [(9018, '2026-06'), (9015, '2026-06'), (9018, '2026-05'), (9015, '2026-05')]
+# 9018/9015 = current month (partial). 126/127 have no visibility floor, so a
+# completed past month (May/April) is the days==days_in_month → pace==total case.
+CASES = [(9018, '2026-06'), (9015, '2026-06'),
+         (127, '2026-05'), (126, '2026-05'), (127, '2026-04')]
 
 
 def _seed(client, branch_id):
