@@ -2,7 +2,11 @@
 {% block title %}הכנסות - קופה שקופה{% endblock %}
 {% block head %}
 <style>
-    .sales-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+    .sales-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1rem; margin-bottom: 1.25rem; }
+    /* Desktop: 5 tiles in one balanced row (1+1+2+1+1). The קצב הכנסות forecast
+       spans 2 of 6 columns so it stays prominent without an empty bar. On mobile
+       the 2-col media query below makes span-2 a clean full-width row (untouched). */
+    .sales-kpis .kpi-card--forecast { grid-column: span 2; }
     .btn-pdf {
         font-size: 0.78rem; font-weight: 600; padding: 0.25rem 0.6rem;
         background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
@@ -295,7 +299,7 @@ async function loadSales() {
                 <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">ממוצע ליום</span></div>
                 <span class="kpi-value" style="color:#93c5fd">${formatMoney(d.avg)}</span>
             </div>
-            <div class="kpi-card" style="grid-column:1/-1;background:linear-gradient(135deg,#312e81,#1e1b4b);border-color:rgba(129,140,248,0.30)">
+            <div class="kpi-card kpi-card--forecast" style="background:linear-gradient(135deg,#312e81,#1e1b4b);border-color:rgba(129,140,248,0.30)">
                 <div class="kpi-header"><span class="kpi-icon">📅</span><span class="kpi-label">קצב הכנסות</span></div>
                 <span class="kpi-value" style="color:#c7d2fe">${d.pace != null ? formatMoney(d.pace) : '—'}</span>
                 <span style="font-size:0.8rem;color:rgba(241,245,249,0.5)">לפי ממוצע ${d.days} ימים</span>
