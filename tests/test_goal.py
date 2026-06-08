@@ -4,7 +4,8 @@ Actual-spending model: יתרה = תקציב − actual MTD spend (mtd_spend), N
 projected run-rate. Covers the remaining math, day-independence (no run-rate),
 the mtd=0 case, the exact-budget (remaining 0, neutral-color) case, that totals
 are budgeted-only, and that summing per-supplier mtd_spend reconciles to the
-trusted /goods pre-VAT MTD total for the same branch.
+chain's incl-VAT goods total (SUM(amount)) for the same branch. The budget
+feature is incl-VAT end to end (the stored `amount`); /goods stays pre-VAT.
 """
 import os
 import sys
@@ -82,31 +83,31 @@ def _by_name(data):
 
 
 def test_remaining_is_budget_minus_spent(db, monkeypatch):
-    """יתרה = תקציב − actual MTD spend (NOT pace). קצב is present per supplier
-    but must not affect remaining."""
+    """יתרה = תקציב − actual incl-VAT MTD spend (the stored `amount`, NOT
+    amount_before_vat; NOT pace). קצב is present but must not feed remaining."""
     _freeze(monkeypatch, 10)
     data = _goal_data(BRANCH, db)
     assert data['days_elapsed'] == 10
     assert data['days_in_month'] == 31
     s = _by_name(data)
-    # A: mtd 300, budget 1000 → remaining = 1000 - 300 = 700 (positive/green).
-    # projected (קצב) = 930 must NOT be what remaining is computed from.
-    assert s['סופר א']['mtd_spend'] == 300.0
-    assert s['סופר א']['projected'] == 930.0
-    assert s['סופר א']['remaining'] == 700.0
-    # B: mtd 500, no budget → remaining None
-    assert s['סופר ב']['mtd_spend'] == 500.0
+    # A: mtd 351 incl-VAT (117+234), budget 1000 → remaining 649.
+    # projected (קצב) = 1088.1 must NOT be what remaining is computed from.
+    assert s['סופר א']['mtd_spend'] == 351.0
+    assert s['סופר א']['projected'] == 1088.1
+    assert s['סופר א']['remaining'] == 649.0
+    # B: mtd 585 incl-VAT, no budget → remaining None
+    assert s['סופר ב']['mtd_spend'] == 585.0
     assert s['סופר ב']['remaining'] is None
 
 
 def test_projected_is_run_rate(db, monkeypatch):
     """קצב (projected) = mtd_spend × days_in_month / days_elapsed — informational
-    pace, surfaced per supplier, NOT summed into totals."""
+    pace (incl-VAT), surfaced per supplier, NOT summed into totals."""
     _freeze(monkeypatch, 10)  # day 10 of 31
     data = _goal_data(BRANCH, db)
     s = _by_name(data)
-    assert s['סופר א']['projected'] == 930.0    # 300 * 31 / 10
-    assert s['סופר ב']['projected'] == 1550.0   # 500 * 31 / 10
+    assert s['סופר א']['projected'] == 1088.1   # 351 * 31 / 10
+    assert s['סופר ב']['projected'] == 1813.5   # 585 * 31 / 10
     assert s['סופר ג']['projected'] == 0.0      # mtd 0
     assert 'projected' not in data['totals']    # informational — never a total
 
@@ -118,11 +119,11 @@ def test_remaining_is_day_independent_but_projected_is_not(db, monkeypatch):
     d1 = _by_name(_goal_data(BRANCH, db))
     _freeze(monkeypatch, 28)
     d28 = _by_name(_goal_data(BRANCH, db))
-    # יתרה / spend: day-independent
-    assert d1['סופר א']['mtd_spend'] == d28['סופר א']['mtd_spend'] == 300.0
-    assert d1['סופר א']['remaining'] == d28['סופר א']['remaining'] == 700.0
+    # יתרה / spend: day-independent (incl-VAT)
+    assert d1['סופר א']['mtd_spend'] == d28['סופר א']['mtd_spend'] == 351.0
+    assert d1['סופר א']['remaining'] == d28['סופר א']['remaining'] == 649.0
     # קצב: day-dependent run-rate (day 1 → ×31, day 28 lower multiplier)
-    assert d1['סופר א']['projected'] == 300.0 * 31         # 9300
+    assert d1['סופר א']['projected'] == 351.0 * 31         # 10881
     assert d28['סופר א']['projected'] > d28['סופר א']['mtd_spend']
     assert d1['סופר א']['projected'] != d28['סופר א']['projected']
 
@@ -146,39 +147,39 @@ def test_exact_budget_gives_zero_remaining(db, monkeypatch):
     case the per-row + strip color rule must render without green or red."""
     _freeze(monkeypatch, 10)
     db.execute("INSERT OR REPLACE INTO supplier_budgets "
-               "(branch_id, supplier_name, monthly_budget) VALUES (?, 'סופר ב', 500)",
+               "(branch_id, supplier_name, monthly_budget) VALUES (?, 'סופר ב', 585)",
                (BRANCH,))
     db.commit()
     s = _by_name(_goal_data(BRANCH, db))
-    assert s['סופר ב']['mtd_spend'] == 500.0
-    assert s['סופר ב']['remaining'] == 0.0
+    assert s['סופר ב']['mtd_spend'] == 585.0     # incl-VAT
+    assert s['סופר ב']['remaining'] == 0.0       # budget 585 == spend 585
 
 
 def test_reconciles_to_goods_total(db, monkeypatch):
-    """Σ per-supplier mtd_spend == the /goods pre-VAT MTD total for the branch."""
+    """Σ per-supplier incl-VAT mtd_spend == Σ incl-VAT goods (SUM(amount))."""
     _freeze(monkeypatch, 10)
     data = _goal_data(BRANCH, db)
     sum_mtd = round(sum(s['mtd_spend'] for s in data['suppliers']), 2)
-    goods_total = _goods_doc_context(BRANCH, MONTH, db)['total_before_vat']
-    assert sum_mtd == goods_total == 800.0  # 100 + 200 + 500
+    goods_total = _goods_doc_context(BRANCH, MONTH, db)['total']  # incl-VAT
+    assert sum_mtd == goods_total == 936.0  # 117 + 234 + 585
 
 
 def test_totals_summed_over_budgeted_only(db, monkeypatch):
-    """All three totals share one basis: budgeted suppliers only. Budgets are
-    set on א (1000, spent 300) and ד (800, spent 0). ב is unbudgeted (spent 500)
-    and must NOT inflate Σ הוצאה / Σ יתרה."""
+    """All three totals share one basis: budgeted suppliers only (incl-VAT).
+    Budgets are set on א (1000, spent 351) and ד (800, spent 0). ב is unbudgeted
+    (spent 585) and must NOT inflate Σ הוצאה / Σ יתרה."""
     _freeze(monkeypatch, 10)  # day 10 of 31
     data = _goal_data(BRANCH, db)
     t = data['totals']
     assert t['budget'] == 1800.0                 # 1000 + 800
-    assert t['spent'] == 300.0                   # 300 + 0 — excludes ב's 500
-    assert t['remaining'] == 1500.0              # 1800 - 300
+    assert t['spent'] == 351.0                   # 351 + 0 — excludes ב's 585
+    assert t['remaining'] == 1449.0              # 1800 - 351
     # קצב הזמנות is store-wide (all suppliers), kept SEPARATE from the
     # budgeted-only trio — but it is a total, surfaced under order_pace.
     assert 'order_pace' in t
     # ב is unbudgeted: its per-row הוצאה still shows but is excluded from totals.
     s = _by_name(data)
-    assert s['סופר ב']['budget'] is None and s['סופר ב']['mtd_spend'] == 500.0
+    assert s['סופר ב']['budget'] is None and s['סופר ב']['mtd_spend'] == 585.0
 
 
 def test_page_list_unions_roster(db, monkeypatch):
@@ -226,17 +227,17 @@ def test_order_pace_is_all_suppliers(db, monkeypatch):
     budgeted-only spend when big suppliers are unbudgeted (ב here)."""
     _freeze(monkeypatch, 10)  # day 10 of 31
     t = _goal_data(BRANCH, db)['totals']
-    # א proj 930 + ב proj 1550 + ג/ד/ה 0 = 2480
-    assert t['order_pace'] == 2480.0
-    assert t['order_pace'] > t['spent']   # 2480 > 300 — unbudgeted ב lifts the pace
+    # incl-VAT: א proj 1088.1 + ב proj 1813.5 + ג/ד/ה 0 = 2901.6
+    assert t['order_pace'] == 2901.6
+    assert t['order_pace'] > t['spent']   # 2901.6 > 351 — unbudgeted ב lifts the pace
 
 
 def test_merges_whitespace_supplier_variants(db, monkeypatch):
     """Root-cause fix: a trailing-newline variant of a supplier merges into ONE
-    row (summed mtd_spend, budget carried) instead of appearing twice. Σ mtd
-    still reconciles to the /goods pre-VAT MTD."""
+    row (summed incl-VAT mtd_spend, budget carried) instead of appearing twice.
+    Σ mtd still reconciles to Σ incl-VAT goods (SUM(amount))."""
     _freeze(monkeypatch, 10)
-    # A dirty variant 'סופר א\n' of the budgeted supplier 'סופר א' (mtd 300).
+    # A dirty variant 'סופר א\n' of the budgeted supplier 'סופר א' (amount 58.5).
     db.execute(
         "INSERT INTO goods_documents (branch_id, doc_date, supplier, ref_number, "
         "amount, total_without_vat, doc_type) VALUES (?, ?, ?, ?, ?, ?, 3)",
@@ -247,9 +248,9 @@ def test_merges_whitespace_supplier_variants(db, monkeypatch):
     assert names.count('סופר א') == 1            # one row, not two
     assert 'סופר א\n' not in names               # the dirty variant is gone
     s = _by_name(data)
-    assert s['סופר א']['mtd_spend'] == 350.0      # 300 + 50 merged
+    assert s['סופר א']['mtd_spend'] == 409.5      # 351 + 58.5 merged (incl-VAT)
     assert s['סופר א']['budget'] == 1000.0        # budget carried onto the merged row
-    assert s['סופר א']['remaining'] == 650.0
+    assert s['סופר א']['remaining'] == 590.5
     sum_mtd = round(sum(x['mtd_spend'] for x in data['suppliers']), 2)
-    goods_total = _goods_doc_context(BRANCH, MONTH, db)['total_before_vat']
-    assert sum_mtd == goods_total == 850.0        # reconciliation Δ0
+    goods_total = _goods_doc_context(BRANCH, MONTH, db)['total']  # incl-VAT
+    assert sum_mtd == goods_total == 994.5        # reconciliation Δ0

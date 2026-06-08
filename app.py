@@ -1215,9 +1215,12 @@ def _goal_data(branch_id, db):
     Supplier roster = suppliers with goods this month OR last month, UNION
     suppliers that have a saved budget (so the full roster shows early in the
     month and budgeted-but-unordered suppliers still appear). mtd_spend is the
-    actual pre-VAT goods total from /goods's own aggregation (the "הוצאה"
-    value); remaining (יתרה) = budget − mtd_spend. projected (קצב) is the
-    informational run-rate mtd_spend × days_in_month / days_elapsed."""
+    actual incl-VAT goods total from /goods's own aggregation — the stored
+    `amount` (what the manager pays), the "הוצאה" value; remaining (יתרה) =
+    budget − mtd_spend. projected (קצב) is the informational run-rate
+    mtd_spend × days_in_month / days_elapsed. The budget feature is incl-VAT
+    end to end so the תקציב + "לפי ספק" views read identically; /goods itself
+    stays pre-VAT and is untouched."""
     now = _now_il()
     month = now.strftime('%Y-%m')
     days_in_month = calendar.monthrange(now.year, now.month)[1]
@@ -1239,13 +1242,17 @@ def _goal_data(branch_id, db):
     # identical (just regrouped) so reconciliation to /goods is unchanged.
     from utils.text import clean_supplier_name
 
-    # pre-VAT MTD spend per supplier (reconciles to /goods total_before_vat).
+    # incl-VAT MTD spend per supplier — the stored `amount` (what the manager
+    # pays), NOT amount_before_vat. Single base for the whole budget feature so
+    # the תקציב view and the "לפי ספק" annotation (which reuses this remaining)
+    # agree to the cent. Reconciles to Σ incl-VAT goods (SUM(amount)). Use the
+    # column directly — no /1.17 VAT derivation.
     cur_spend = {}
     for g in cur_groups:
         k = clean_supplier_name(g['supplier'])
         if not k:
             continue
-        cur_spend[k] = round(cur_spend.get(k, 0.0) + g['total_before_vat'], 2)
+        cur_spend[k] = round(cur_spend.get(k, 0.0) + g['total'], 2)
 
     budget_rows = db.execute(
         "SELECT supplier_name, monthly_budget FROM supplier_budgets "
