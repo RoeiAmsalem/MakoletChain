@@ -53,17 +53,24 @@ def main():
     gd18 = {s['supplier_name']: s for s in _goal_data(9018, c)['suppliers']}
     grp18, ctx18 = group_incl(c, 9018, month)
 
-    # A. נסטלה
-    print("A. 9018 גלידות נסטלה — תקציב vs לפי ספק")
-    nestle = next((n for n in gd18 if 'נסטלה' in n), None)
-    if nestle:
-        s = gd18[nestle]
-        head = grp18.get(clean_supplier_name(nestle))
-        print(f"   תקציב   הוצאה={s['mtd_spend']:.2f}  יתרה={s['remaining']}  budget={s['budget']}")
-        print(f"   לפי ספק headline(g.total)={head:.2f}  (annotation יתרה reuses _goal_data → "
-              f"{s['remaining']})")
+    # A. נסטלה — list ALL נסטלה entries, then target the one with June goods (גלידות).
+    print("A. 9018 נסטלה — תקציב vs לפי ספק")
+    cands = [n for n in gd18 if 'נסטלה' in n]
+    for n in cands:
+        s = gd18[n]
+        head = grp18.get(clean_supplier_name(n))
+        hs = f"{head:.2f}" if head is not None else "— (no June goods)"
+        print(f"   • {n!r}: תקציב mtd={s['mtd_spend']:.2f} budget={s['budget']} "
+              f"יתרה={s['remaining']} | לפי-ספק g.total={hs}")
+    target = max((n for n in cands if grp18.get(clean_supplier_name(n)) is not None),
+                 key=lambda n: gd18[n]['mtd_spend'], default=None)
+    if target:
+        s = gd18[target]
+        head = grp18[clean_supplier_name(target)]
         ok = (s['mtd_spend'] == head == 2209.01) and (s['remaining'] == 90.99)
-        print(f"   → הוצאה ₪2,209.01 + יתרה ₪90.99 identical in both views  {'✓' if ok else '✗'}")
+        print(f"   → {target!r}: הוצאה ₪{s['mtd_spend']:,.2f} == לפי-ספק ₪{head:,.2f}, "
+              f"יתרה ₪{s['remaining']:,.2f}  "
+              f"{'✓ both views agree (2209.01 / 90.99)' if ok else '(see numbers above)'}")
 
     # B. produce/exempt
     print("\nB. produce/exempt supplier (מרינה) — incl ≈ ex (ratio ~1.00), no jump")
