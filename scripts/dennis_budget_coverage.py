@@ -59,9 +59,12 @@ _WS = re.compile(r'\s+')
 # Generic descriptor tokens that recur across DIFFERENT legal entities, so they
 # must NOT by themselves carry a fuzzy match (e.g. 'אינטרנשיונל' appears in BOTH
 # ויליפוד אינטרנשיונל and דילר בי.אמ.די אינטרנשיונל). A match needs a brand token.
+#   NOTE: 'גלידות' and 'מזון' are NOT generic — they are the distinctive
+#   qualifier separating גלידות-נסטלה from אסם-נסטלה and גלוברנדס-מזון from
+#   גלוברנדס, so they stay matchable. Only company-type filler goes here.
 GENERIC = {
-    'אינטרנשיונל', 'גלידות', 'מזון', 'עלית', 'סחר', 'שיווק', 'יבוא', 'הפצה',
-    'מפיצים', 'ישראל', 'מוצרי', 'קבוצת', 'המרכזית', 'החברה',
+    'אינטרנשיונל', 'עלית', 'סחר', 'שיווק', 'יבוא', 'הפצה', 'מפיצים',
+    'ישראל', 'מוצרי', 'קבוצת', 'המרכזית', 'החברה',
 }
 
 
