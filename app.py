@@ -3739,8 +3739,9 @@ def api_sales():
     # Visibility floor: a below-floor month shows no sales for this branch.
     if _month_below_floor(branch_id, month, db):
         return jsonify({
-            'sales': [], 'total': 0, 'avg': 0, 'highest': 0, 'lowest': 0,
-            'days': 0, 'avg_daily_txn': 0, 'avg_txn_value': 0,
+            'sales': [], 'total': 0, 'avg': 0, 'pace': None,
+            'days': 0, 'days_in_month': None,
+            'avg_daily_txn': 0, 'avg_txn_value': 0,
         })
     rows = db.execute(
         "SELECT date, amount, transactions, source, fetched_at FROM daily_sales "
@@ -3754,8 +3755,16 @@ def api_sales():
     total = sum(s['amount'] for s in sales)
     days = len(sales)
     avg = round(total / days, 2) if days else 0
-    highest = max((s['amount'] for s in sales), default=0)
-    lowest = min((s['amount'] for s in sales), default=0)
+
+    # קצב הכנסות (projected month finish) = the SAME ממוצע ליום shown × the
+    # calendar days in the SELECTED month, so it's self-consistent with the
+    # avg tile beside it. None when there's no data (never divide by zero).
+    try:
+        y, mo = month.split('-')
+        days_in_month = calendar.monthrange(int(y), int(mo))[1]
+    except (ValueError, AttributeError):
+        days_in_month = None
+    pace = round(avg * days_in_month) if (days and days_in_month) else None
 
     # Per-row average per transaction
     for s in sales:
@@ -3779,9 +3788,9 @@ def api_sales():
         'sales': sales,
         'total': total,
         'avg': avg,
-        'highest': highest,
-        'lowest': lowest,
+        'pace': pace,
         'days': days,
+        'days_in_month': days_in_month,
         'avg_daily_txn': avg_daily_txn,
         'avg_txn_value': avg_txn_value,
     })
