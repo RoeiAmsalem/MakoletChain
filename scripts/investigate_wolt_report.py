@@ -151,20 +151,47 @@ def main():
     print(f"A. GET /reports?branch={disc_aviv} — locate 'דוח כרטיסי סועד מקוצר'")
     print("=" * 80)
     st, body = get_json(f'{BASE}/reports?branch={disc_aviv}', token)
-    reps = body if isinstance(body, list) else (
-        body.get('reports') or body.get('data') or [] if isinstance(body, dict) else [])
+    print(f"  [raw /reports JSON, first 1600 chars]:")
+    print("  " + json.dumps(body, ensure_ascii=False)[:1600])
+    print()
+
+    # /reports is a nested tree: categories → child reports. Walk it, collect
+    # every (id, name) leaf, and locate the diner-cards report.
+    flat = []
+
+    def walk(node, depth=0):
+        if isinstance(node, dict):
+            rid = node.get('id') if 'id' in node else node.get('reportId')
+            nm = node.get('name') or node.get('reportName') or node.get('title') or ''
+            if nm:
+                flat.append((depth, rid, nm))
+            for key in ('children', 'reports', 'items', 'subReports', 'sub', 'data'):
+                if key in node:
+                    walk(node[key], depth + 1)
+            for v in node.values():
+                if isinstance(v, (list, dict)) and v is not node:
+                    walk(v, depth + 1)
+        elif isinstance(node, list):
+            for it in node:
+                walk(it, depth)
+
+    walk(body)
+    seen = set()
     report_id = None
-    for r in reps:
-        rid = r.get('id') or r.get('reportId')
-        nm = r.get('name') or r.get('reportName') or r.get('title') or ''
+    for depth, rid, nm in flat:
+        sig = (rid, nm)
+        if sig in seen:
+            continue
+        seen.add(sig)
         mark = ''
-        if 'כרטיסי סועד' in nm or ('סועד' in nm and 'כרטיס' in nm):
-            mark = '   <<< DINER-CARDS'
+        if 'סועד' in nm or 'כרטיסי סועד' in nm or 'דיינר' in nm:
+            mark = '   <<< DINER-CARDS candidate'
             if report_id is None or 'מקוצר' in nm:
                 report_id = rid
-        print(f"   id={rid!s:<6} {nm}{mark}")
+        print(f"   {'  ' * depth}id={rid!s:<6} {nm}{mark}")
     if report_id is None:
-        print("\n  !! no report named ~'כרטיסי סועד' found — dumping all names above.")
+        print("\n  !! no report name contains 'סועד' — full tree printed above; "
+              "inspect for the diner-cards report.")
         c.close()
         return
     print(f"\n  → diner-cards report id = {report_id}")
