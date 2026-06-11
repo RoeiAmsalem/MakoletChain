@@ -4,16 +4,20 @@ Calls /api/summary through the Flask test client with an admin session —
 the exact code path the tile uses (including today's-live income handling) —
 and prints gross ₪ + %, plus the operating profit for comparison.
 
-Usage: venv/bin/python scripts/probe_gross_tile.py [branch_id ...]
-Defaults to 9018 9015, current month.
+Usage: venv/bin/python scripts/probe_gross_tile.py [--json] [branch_id ...]
+Defaults to 9018 9015, current month. --json prints the raw /api/summary
+response per branch instead of the one-line summary.
 """
+import json
 import sys
 
 from app import app, get_db
 
 
 def main():
-    branch_ids = [int(a) for a in sys.argv[1:]] or [9018, 9015]
+    argv = sys.argv[1:]
+    as_json = '--json' in argv
+    branch_ids = [int(a) for a in argv if a != '--json'] or [9018, 9015]
     with app.test_client() as client:
         for bid in branch_ids:
             with client.session_transaction() as s:
@@ -28,6 +32,10 @@ def main():
                 print(f"[{bid}] HTTP {resp.status_code}")
                 continue
             d = resp.get_json()
+            if as_json:
+                print(json.dumps({'branch_id': bid, 'summary': d},
+                                 ensure_ascii=False))
+                continue
             with app.app_context():
                 name = get_db().execute(
                     'SELECT name FROM branches WHERE id=?', (bid,)
