@@ -376,4 +376,8 @@ function annotateSupplierBudgets() {
         .catch(() => {});  // annotation is non-critical — never break the doc list
 }
 annotateSupplierBudgets();
+
+// Deep-link: /goods#goals (used by the multi-branch section headers) lands
+// straight on the תקציב view instead of the default מסמכים list.
+if (location.hash === '#goals') switchGoodsView('goals');
 </script>

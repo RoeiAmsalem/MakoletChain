@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}תקציב — כל הסניפים שלי - קופה שקופה{% endblock %}
+
+{# Server-rendered, READ-ONLY multi-branch תקציב view for managers with 2+
+   branches. Each section repeats the single-branch תקציב rendering (same
+   markup/classes as _goods_content.html so _goods_styles.html applies as-is)
+   from that branch's _goal_data payload. Budget cells are plain text — no
+   inputs, no saving; tapping a section header switches the session to that
+   branch's editable single-branch view (/goods?branch_id=N#goals). #}
+
+{% macro ils0(v) %}₪ {{ '{:,.0f}'.format(v) }}{% endmacro %}
+{% macro remcls(r) %}{{ '' if r is none else ('pos' if r > 0 else ('neg' if r < 0 else '')) }}{% endmacro %}
+
+{% block head %}
+{% include '_goods_styles.html' %}
+<style>
+    /* Combined strip: 3 tiles (תקציב / הוצאה / יתרה headline). Inherits the
+       .goal-kpis nth-child palette: 1=indigo, 2=blue, 3=headline via class. */
+    .goal-kpis.gm-combined { grid-template-columns: repeat(3, 1fr); }
+    @media (max-width: 768px) {
+        /* headline goes full-width (existing .goal-kpi-headline rule); the two
+           quiet tiles fill a 2-up row beneath. */
+        .goal-kpis.gm-combined { grid-template-columns: repeat(2, 1fr); }
+    }
+    .gm-combined-card { margin-bottom: 1rem; }
+    /* Per-branch section header — sticky while its section scrolls; the whole
+       header is the tap target into the branch's editable view (≥44px). */
+    .gm-section { margin-bottom: 1.25rem; }
+    .gm-section-head {
+        position: sticky; top: 0; z-index: 5;
+        background: #0d1526; margin: -0.5rem -0.5rem 0.6rem; padding: 0.3rem 0.5rem;
+        border-bottom: 1px solid #1e293b;
+    }
+    .gm-section-head a {
+        display: flex; align-items: center; gap: 0.5rem; min-height: 44px;
+        color: #fff; text-decoration: none; font-size: 1.05rem; font-weight: 700;
+        touch-action: manipulation;
+    }
+    .gm-section-head .gm-chevron { color: #64748b; font-weight: 700; }
+    .gm-section-head a:hover .gm-chevron { color: #93c5fd; }
+    .gm-section-head .gm-hint { margin-inline-start: auto; font-size: 0.72rem; color: #64748b; font-weight: 500; }
+    .gm-day-line { font-size: 0.8rem; color: #94a3b8; }
+    .gm-empty { color: #94a3b8; font-size: 0.9rem; padding: 0.8rem 0.2rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- ── Combined strip — Σ over the manager's branches, budgeted-suppliers-only,
+     same basis as each per-branch strip (== the sum of the sections). ── -->
+<section class="card gm-combined-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.85rem;flex-wrap:wrap;gap:0.4rem">
+        <h2 class="section-title" style="margin-bottom:0">תקציב — כל הסניפים שלי</h2>
+        <span class="gm-day-line">יום {{ sections[0].days_elapsed if sections else '' }} מתוך {{ sections[0].days_in_month if sections else '' }}</span>
+    </div>
+    <div class="goal-kpis gm-combined">
+        <div class="kpi-card goal-kpi-quiet">
+            <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">סה"כ&nbsp;תקציב</span></div>
+            <span class="kpi-value">{{ ils0(combined.budget) }}</span>
+        </div>
+        <div class="kpi-card goal-kpi-quiet">
+            <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">סה"כ&nbsp;הוצאה</span></div>
+            <span class="kpi-value">{{ ils0(combined.spent) }}</span>
+        </div>
+        {% set crc = remcls(combined.remaining) | trim %}
+        <div class="kpi-card goal-kpi-headline {{ 'kpi-card--profit' if crc == 'pos' else ('kpi-card--loss' if crc == 'neg' else '') }}">
+            <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
+            <span class="kpi-value {{ 'profit' if crc == 'pos' else ('loss' if crc == 'neg' else '') }}">{{ ils0(combined.remaining) }}</span>
+        </div>
+    </div>
+    <!-- One search over ALL sections (rows + mobile cards; totals untouched). -->
+    <div id="goal-search-wrap">
+        <input type="text" id="goal-search" class="goal-search" autocomplete="off"
+               placeholder="חיפוש ספק בכל הסניפים…" aria-label="חיפוש ספק">
+        <div id="goal-search-empty" class="goal-search-empty" hidden>אין תוצאות</div>
+    </div>
+</section>
+
+<!-- ── One section per branch — the single-branch תקציב rendering, read-only ── -->
+{% for sec in sections %}
+<section class="card gm-section" id="gm-branch-{{ sec.branch_id }}">
+    <div class="gm-section-head">
+        <a href="/goods?branch_id={{ sec.branch_id }}#goals" aria-label="מעבר לסניף {{ sec.branch_name }}">
+            <span class="gm-chevron">‹</span>
+            <span>{{ sec.branch_name }}</span>
+            <span class="gm-hint">לעריכה — הקש</span>
+        </a>
+    </div>
+    {% if not sec.suppliers %}
+    <div class="gm-empty">אין ספקים לחודש זה — ספקים יופיעו אוטומטית מנתוני הסחורה (BilBoy)</div>
+    {% else %}
+    <div class="goal-kpis">
+        <div class="kpi-card goal-kpi-quiet">
+            <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">סה"כ&nbsp;תקציב</span></div>
+            <span class="kpi-value">{{ ils0(sec.totals.budget) }}</span>
+        </div>
+        <div class="kpi-card goal-kpi-quiet">
+            <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">סה"כ&nbsp;הוצאה</span></div>
+            <span class="kpi-value">{{ ils0(sec.totals.spent) }}</span>
+        </div>
+        {% set rc = remcls(sec.totals.remaining) | trim %}
+        <div class="kpi-card goal-kpi-headline {{ 'kpi-card--profit' if rc == 'pos' else ('kpi-card--loss' if rc == 'neg' else '') }}">
+            <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
+            <span class="kpi-value {{ 'profit' if rc == 'pos' else ('loss' if rc == 'neg' else '') }}">{{ ils0(sec.totals.remaining) }}</span>
+        </div>
+        <div class="kpi-card goal-kpi-quiet goal-kpi-pace">
+            <div class="kpi-header"><span class="kpi-icon">🛒</span><span class="kpi-label">קצב&nbsp;הזמנות</span></div>
+            <span class="kpi-value">{{ ils0(sec.totals.order_pace) }}</span>
+        </div>
+    </div>
+    <div class="goal-overpace {{ 'ok' if sec.over_count == 0 else '' }}">{{ sec.over_count }} ספקים חורגים מהתקציב</div>
+    <div style="overflow-x:auto">
+        <table class="data-table goal-table">
+            <thead>
+                <tr>
+                    <th>ספק</th>
+                    <th class="num">תקציב</th>
+                    <th class="num">הוצאה</th>
+                    <th class="num">קצב</th>
+                    <th class="num">יתרה</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in sec.suppliers %}
+                {% set src = remcls(s.remaining) | trim %}
+                <tr class="{{ 'goal-under' if src == 'pos' else ('goal-over' if src == 'neg' else '') }}" data-supplier="{{ s.supplier_name }}">
+                    <td>{{ s.supplier_name }}</td>
+                    <td class="num">{% if s.budget is none %}<span class="muted">—</span>{% else %}{{ ils0(s.budget) }}{% endif %}</td>
+                    <td class="num goal-spend">{{ ils0(s.mtd_spend) }}</td>
+                    <td class="num goal-pace">{{ ils0(s.projected) }}</td>
+                    <td class="num goal-rem {{ src }}">{% if s.remaining is none %}<span class="muted">—</span>{% else %}{{ ils0(s.remaining) }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td>סה"כ</td>
+                    <td class="num">{{ ils0(sec.totals.budget) }}</td>
+                    <td class="num">{{ ils0(sec.totals.spent) }}</td>
+                    <td class="num goal-foot-pace">{{ ils0(sec.totals.order_pace) }}</td>
+                    {% set frc = remcls(sec.totals.remaining) | trim %}
+                    <td class="num {{ frc }}">{{ ils0(sec.totals.remaining) }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+    {% endif %}
+</section>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// One search box filters supplier rows across ALL branch sections at once
+// (same substring rule as the single-branch view; totals are untouched).
+(function () {
+    const inp = document.getElementById('goal-search');
+    if (!inp) return;
+    inp.addEventListener('input', function () {
+        const q = (inp.value || '').trim().toLowerCase();
+        let shown = 0;
+        document.querySelectorAll('.gm-section tbody tr[data-supplier]').forEach(tr => {
+            const match = !q || (tr.getAttribute('data-supplier') || '').toLowerCase().indexOf(q) >= 0;
+            tr.style.display = match ? '' : 'none';
+            if (match) shown++;
+        });
+        document.getElementById('goal-search-empty').hidden = !(q && shown === 0);
+    });
+})();
+</script>
+{% endblock %}

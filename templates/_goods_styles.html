@@ -155,16 +155,16 @@
        color rule: יתרה > 0 → green, < 0 → red, == 0 / no budget → no tint. The
        יתרה VALUE stays colored via .pos/.neg; this is the row background cue.
        Desktop: tint the cells (a <tr> background can be hidden by cell bg). */
-    #goal-table tbody tr.goal-under td { background: rgba(34,197,94,0.07); }
-    #goal-table tbody tr.goal-over  td { background: rgba(239,68,68,0.07); }
+    .goal-table tbody tr.goal-under td { background: rgba(34,197,94,0.07); }
+    .goal-table tbody tr.goal-over  td { background: rgba(239,68,68,0.07); }
     /* Phone (iPhone 13): the desktop 5-col table becomes a stack of supplier
        CARDS. Name on its own line, then the four metrics — תקציב (input) ·
        הוצאה · קצב · יתרה — in a clean 2×2 labeled grid so all read at phone
        width with no clipping and no horizontal scroll. */
     @media (max-width: 768px) {
-        #goal-table, #goal-table tbody { display: block; }
-        #goal-table thead, #goal-table tfoot { display: none; }
-        #goal-table tbody tr {
+        .goal-table, .goal-table tbody { display: block; }
+        .goal-table thead, .goal-table tfoot { display: none; }
+        .goal-table tbody tr {
             display: grid;
             grid-template-columns: 1fr 1fr; gap: 0.55rem 0.7rem; align-items: start;
             border: 1px solid #334155; border-radius: 12px;
@@ -173,47 +173,47 @@
         }
         /* Card-edge tint: colored start accent + faint wash (cells are transparent
            on mobile, so the tr background shows). */
-        #goal-table tbody tr.goal-under {
+        .goal-table tbody tr.goal-under {
             background: rgba(34,197,94,0.08) !important;
             border-color: rgba(34,197,94,0.45);
             border-inline-start: 3px solid rgba(34,197,94,0.85);
         }
-        #goal-table tbody tr.goal-over {
+        .goal-table tbody tr.goal-over {
             background: rgba(239,68,68,0.08) !important;
             border-color: rgba(239,68,68,0.45);
             border-inline-start: 3px solid rgba(239,68,68,0.85);
         }
-        #goal-table tbody td {
+        .goal-table tbody td {
             display: block; border: none !important; padding: 0 !important;
             background: transparent !important;
         }
-        #goal-table tbody td:nth-child(1) {   /* supplier name — own line, full width */
+        .goal-table tbody td:nth-child(1) {   /* supplier name — own line, full width */
             grid-column: 1 / -1; font-weight: 700; color: #fff; font-size: 1rem;
             white-space: normal; line-height: 1.3; margin-bottom: 0.1rem;
         }
         /* label above each field; values right-aligned to sit under the label */
-        #goal-table tbody td.num { text-align: right; }
-        #goal-table tbody td.num::before {
+        .goal-table tbody td.num { text-align: right; }
+        .goal-table tbody td.num::before {
             display: block; color: #94a3b8; font-weight: 500;
             font-size: 0.72rem; margin-bottom: 0.3rem; white-space: nowrap;
         }
-        #goal-table tbody td:nth-child(2)::before { content: 'תקציב'; }
-        #goal-table tbody td.goal-spend::before  { content: 'הוצאה'; }
-        #goal-table tbody td.goal-pace::before   { content: 'קצב'; }
-        #goal-table tbody td.goal-rem::before    { content: 'יתרה'; }
-        #goal-table tbody td.goal-spend {
+        .goal-table tbody td:nth-child(2)::before { content: 'תקציב'; }
+        .goal-table tbody td.goal-spend::before  { content: 'הוצאה'; }
+        .goal-table tbody td.goal-pace::before   { content: 'קצב'; }
+        .goal-table tbody td.goal-rem::before    { content: 'יתרה'; }
+        .goal-table tbody td.goal-spend {
             color: #e2e8f0; font-size: 1rem; font-variant-numeric: tabular-nums;
         }
-        #goal-table tbody td.goal-pace {
+        .goal-table tbody td.goal-pace {
             color: #94a3b8; font-size: 1rem; font-variant-numeric: tabular-nums;
         }
-        #goal-table tbody td.goal-rem {
+        .goal-table tbody td.goal-rem {
             font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums;
         }
         /* neutral (יתרה == 0 / unbudgeted "—") only — must NOT outrank .pos/.neg */
-        #goal-table tbody td.goal-rem:not(.pos):not(.neg) { color: #e2e8f0; }
+        .goal-table tbody td.goal-rem:not(.pos):not(.neg) { color: #e2e8f0; }
         /* input fills its column so it stays a comfortable, easy-to-edit field */
-        #goal-table tbody td .goal-budget-input { width: 100%; }
+        .goal-table tbody td .goal-budget-input { width: 100%; }
     }
     /* Budget context line under a supplier in the מסמכים "לפי ספק" list. */
     .sg-budget { flex: 0 0 100%; font-size: 0.78rem; color: #94a3b8; font-weight: 500; margin-top: 0.3rem; direction: rtl; }
@@ -231,7 +231,7 @@
        numeric headers were right-aligned while their cells (תקציב input / הוצאה /
        יתרה) are left-aligned — the header sat to the right of its values. Match
        the headers to the cells so each header sits directly above its column. */
-    #goal-table thead th.num { text-align: left; }
+    .goal-table thead th.num { text-align: left; }
     .pos { color: #86efac; font-weight: 600; }
     .neg { color: #fca5a5; font-weight: 600; }
     .muted { color: #64748b; }

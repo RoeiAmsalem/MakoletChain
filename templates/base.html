@@ -154,10 +154,17 @@
 
 <script>
 const CURRENT_BRANCH_ID = {{ branch_id | tojson }};
+// "כל הסניפים שלי" — managers (non-admin/ceo) with 2+ assigned branches get an
+// extra selector entry that opens the read-only multi-branch /goods תקציב view.
+// Admin/ceo and single-branch selectors are unchanged.
+const SHOW_ALL_MY_BRANCHES = {{ (session.get('user_role') not in ('admin', 'ceo') and (session.get('user_branches') or [])|length > 1) | tojson }};
+const GOODS_MULTI_MODE = {{ multi_mode | default(false) | tojson }};
 
 async function switchBranch(branchId) {
     if (!branchId) return;
+    if (branchId === '__all__') { window.location.href = '/goods?multi=1'; return; }
     const url = new URL(window.location.href);
+    url.searchParams.delete('multi');   // picking a branch leaves multi mode
     url.searchParams.set('branch_id', branchId);
     window.location.href = url.toString();
 }
@@ -175,6 +182,13 @@ async function loadBranchSwitcher() {
         if (b.id == CURRENT_BRANCH_ID) opt.selected = true;
         sel.appendChild(opt);
     });
+    if (SHOW_ALL_MY_BRANCHES) {
+        const opt = document.createElement('option');
+        opt.value = '__all__';
+        opt.textContent = 'כל הסניפים שלי';
+        if (GOODS_MULTI_MODE) opt.selected = true;   // wins over the branch match above
+        sel.appendChild(opt);
+    }
 }
 loadBranchSwitcher();
 

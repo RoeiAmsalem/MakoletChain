@@ -1091,9 +1091,55 @@ def _goods_doc_context(branch_id, month, db):
     }
 
 
+def _goods_multi():
+    """Read-only multi-branch תקציב view — "כל הסניפים שלי".
+
+    For managers with 2+ assigned branches only (admin/ceo keep their normal
+    selector; single-branch users have nothing to combine — both are
+    redirected back to /goods). One section per assigned branch, each the
+    exact _goal_data payload the single-branch תקציב view renders (no calc
+    fork), plus a combined strip summing the budgeted-only totals across the
+    manager's branches. No budget editing here — saves stay on the
+    single-branch session flow."""
+    role = session.get('user_role')
+    user_branches = session.get('user_branches', [])
+    if role in ROLES_ALL_BRANCHES or len(user_branches) < 2:
+        return redirect(url_for('goods'))
+    ctx = _page_context('goods')
+    db = get_db()
+    sections = []
+    for b in _list_visible_branches(session.get('user_id'), role):
+        data = _goal_data(b['id'], db)
+        data['branch_id'] = b['id']
+        data['branch_name'] = b['name']
+        data['over_count'] = sum(
+            1 for s in data['suppliers']
+            if s['remaining'] is not None and s['remaining'] < 0)
+        sections.append(data)
+    # Combined strip == the sum of the sections by construction (same
+    # budgeted-only totals _goal_data already computed per branch).
+    combined_budget = round(sum(s['totals']['budget'] for s in sections), 2)
+    combined_spent = round(sum(s['totals']['spent'] for s in sections), 2)
+    ctx.update({
+        'sections': sections,
+        'combined': {
+            'budget': combined_budget,
+            'spent': combined_spent,
+            'remaining': round(combined_budget - combined_spent, 2),
+        },
+        'multi_mode': True,
+    })
+    return render_template('goods_multi.html', **ctx)
+
+
 @app.route('/goods')
 @login_required
 def goods():
+    # "כל הסניפים שלי" from the branch selector → read-only multi-branch
+    # תקציב mode (managers with 2+ branches; everyone else is bounced back).
+    if request.args.get('multi') == '1':
+        return _goods_multi()
+
     ctx = _page_context('goods')
 
     view = request.args.get('view')
