@@ -9,7 +9,10 @@ from datetime import date
 
 VAT = 1.17
 DB = "db/makolet_chain.db"
-MONTH = date.today().strftime("%Y-%m")
+# current month + previous month (previous = last full month, for timing sanity)
+_t = date.today()
+_prev = (_t.replace(day=1) - __import__("datetime").timedelta(days=1))
+MONTHS = [_t.strftime("%Y-%m"), _prev.strftime("%Y-%m")]
 
 con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
@@ -24,36 +27,26 @@ print(f"goods ex-VAT basis: {goods_exvat_expr}  (total_without_vat present: {has
 for bid in (9018, 9015):
     name = con.execute("SELECT name FROM branches WHERE id=?", (bid,)).fetchone()
     name = name["name"] if name else "?"
+    print(f"\n[{bid}] {name}")
+    for MONTH in MONTHS:
+        income_incl = con.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
+            "WHERE branch_id=? AND strftime('%Y-%m', date)=?", (bid, MONTH)
+        ).fetchone()[0]
 
-    income_incl = con.execute(
-        "SELECT COALESCE(SUM(amount),0) FROM daily_sales "
-        "WHERE branch_id=? AND strftime('%Y-%m', date)=?", (bid, MONTH)
-    ).fetchone()[0]
+        goods_exvat = con.execute(
+            f"SELECT COALESCE(SUM({goods_exvat_expr}),0) "
+            "FROM goods_documents "
+            "WHERE branch_id=? AND strftime('%Y-%m', doc_date)=?", (bid, MONTH)
+        ).fetchone()[0]
 
-    goods_incl = con.execute(
-        "SELECT COALESCE(SUM(amount),0) FROM goods_documents "
-        "WHERE branch_id=? AND strftime('%Y-%m', doc_date)=?", (bid, MONTH)
-    ).fetchone()[0]
-
-    goods_exvat = con.execute(
-        f"SELECT COALESCE(SUM({goods_exvat_expr}),0) "
-        "FROM goods_documents "
-        "WHERE branch_id=? AND strftime('%Y-%m', doc_date)=?", (bid, MONTH)
-    ).fetchone()[0]
-
-    income_exvat = income_incl / VAT
-    gross = income_exvat - goods_exvat
-    pct = (gross / income_exvat * 100) if income_exvat > 0 else None
-
-    print(f"\n[{bid}] {name}  ({MONTH})")
-    print(f"  income incl-VAT : {income_incl:,.0f}")
-    print(f"  income ex-VAT   : {income_exvat:,.0f}")
-    print(f"  goods  incl-VAT : {goods_incl:,.0f}")
-    print(f"  goods  ex-VAT   : {goods_exvat:,.0f}")
-    if pct is None:
-        print("  gross           : —  (no revenue)")
-    else:
-        print(f"  GROSS ₪         : {gross:,.0f}")
-        print(f"  GROSS %         : {pct:.1f}%")
+        income_exvat = income_incl / VAT
+        if income_exvat > 0 and goods_exvat > 0:
+            gross = income_exvat - goods_exvat
+            pct = gross / income_exvat * 100
+            print(f"  {MONTH}: rev ex-VAT {income_exvat:>9,.0f} | goods ex-VAT "
+                  f"{goods_exvat:>9,.0f} | GROSS {gross:>8,.0f}  ({pct:.1f}%)")
+        else:
+            print(f"  {MONTH}: —  (missing revenue or goods)")
 
 con.close()
