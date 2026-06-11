@@ -501,7 +501,8 @@ async function loadSummary() {
 let plMode = 'full';
 let lastSummary = null;
 // Profit tile metric: 'operating' (תפעולי — revenue − goods − fixed − salary,
-// the existing calc, default) or 'gross' (גולמי — ex-VAT revenue − ex-VAT goods).
+// the existing calc, default) or 'gross' (גולמי — incl-VAT revenue − incl-VAT goods,
+// same basis as the operating view).
 let profitView = 'operating';
 let pqBadgeShouldShow = false;
 
@@ -582,7 +583,7 @@ function renderPLMode() {
     // gross is a period total (not pro-rated), so the עד היום note only applies
     // to the operating view.
     document.getElementById('profit-month-sub').textContent = isGross
-        ? 'הכנסה − סחורה (ללא מע״מ)'
+        ? 'הכנסה − סחורה'
         : (isMtd ? 'עד היום · ' : '') + 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
     // Operating keeps its original rule (bar only when income>0); gross shows
     // the bar whenever a value exists.
