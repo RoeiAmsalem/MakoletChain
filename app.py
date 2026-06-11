@@ -1621,6 +1621,18 @@ def api_summary():
     profit = income - goods - fixed - salary
     profit_mtd = income - goods - fixed_mtd - salary
 
+    # רווח גולמי (gross) — revenue − goods (COGS) on a CONSISTENT incl-VAT basis,
+    # the same basis as רווח תפעולי and the revenue tile: daily_sales.amount and
+    # goods_documents.amount as-is, no /1.17 derivation. VAT-exempt goods
+    # (produce) carry no VAT either way, so an ex-VAT derivation over-strips
+    # them and fakes a low margin. gross is null when either side is missing.
+    if income > 0 and goods > 0:
+        gross = round(income - goods, 2)
+        gross_pct = round(gross / income * 100, 1)
+    else:
+        gross = None
+        gross_pct = None
+
     live = None
     cancellation_total = 0
     discount_total = 0
@@ -1688,6 +1700,11 @@ def api_summary():
         'salary_source': salary_data['source'],
         'salary_label': salary_data['label'],
         'profit': profit,
+        # רווח גולמי (gross) — incl-VAT revenue − incl-VAT goods, same basis as
+        # the operating view and the revenue tile. null when either side is
+        # missing (frontend shows "—"). Independent of the עד היום mode.
+        'gross': gross,
+        'gross_pct': gross_pct,
         # "עד היום" (month-to-date) mode — pro-rated fixed + recomputed profit.
         'fixed_mtd': fixed_mtd,
         'fixed_only_mtd': fixed_only_mtd,
