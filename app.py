@@ -3765,7 +3765,7 @@ def api_sales():
         return jsonify({
             'sales': [], 'total': 0, 'avg': 0, 'pace': None,
             'days': 0, 'days_in_month': None,
-            'avg_daily_txn': 0, 'avg_txn_value': 0,
+            'avg_daily_txn': 0, 'avg_txn_value': 0, 'wolt': None,
         })
     rows = db.execute(
         "SELECT date, amount, transactions, source, fetched_at FROM daily_sales "
@@ -3808,6 +3808,19 @@ def api_sales():
         pdf_path = os.path.join(pdf_dir, f"z_{s['date']}.pdf")
         s['has_pdf'] = os.path.isfile(pdf_path)
 
+    # Wolt tender slice (report 203, incl-VAT — same basis as daily_sales).
+    # Wolt is INSIDE total: a slice, never added to it. null unless the branch
+    # actually has Wolt revenue this month → the tile only renders then.
+    wolt = None
+    wolt_row = db.execute(
+        "SELECT amount FROM wolt_sales WHERE branch_id = ? AND year_month = ?",
+        (branch_id, month)).fetchone()
+    if wolt_row and (wolt_row['amount'] or 0) > 0 and total > 0:
+        wolt = {
+            'amount': round(wolt_row['amount'], 2),
+            'pct': round(wolt_row['amount'] / total * 100, 1),
+        }
+
     return jsonify({
         'sales': sales,
         'total': total,
@@ -3817,6 +3830,7 @@ def api_sales():
         'days_in_month': days_in_month,
         'avg_daily_txn': avg_daily_txn,
         'avg_txn_value': avg_txn_value,
+        'wolt': wolt,
     })
 
 

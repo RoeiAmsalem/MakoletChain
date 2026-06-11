@@ -7,6 +7,17 @@
        spans 2 of 6 columns so it stays prominent without an empty bar. On mobile
        the 2-col media query below makes span-2 a clean full-width row (untouched). */
     .sales-kpis .kpi-card--forecast { grid-column: span 2; }
+    /* Wolt tender tile — rendered only when the branch has Wolt revenue this
+       month (.has-wolt set from JS). Desktop with Wolt: 6 equal tiles in one
+       row — קצב הכנסות drops to one column, Wolt takes the 6th. Without
+       Wolt: today's 1+1+2+1+1 layout untouched. */
+    .kpi-card--wolt {
+        background: linear-gradient(135deg, #164e63, #0c3a4d);
+        border-color: rgba(34, 211, 238, 0.3);
+    }
+    @media (min-width: 769px) {
+        .sales-kpis.has-wolt .kpi-card--forecast { grid-column: auto; }
+    }
     .btn-pdf {
         font-size: 0.78rem; font-weight: 600; padding: 0.25rem 0.6rem;
         background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
@@ -142,6 +153,9 @@
     .pdf-nav span { color: #94a3b8; font-size: 0.85rem; }
     @media (max-width: 768px) {
         .sales-kpis { grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        /* Wolt on mobile: one more stacked full-width card at the end of the
+           2-col flow (avoids a lone half-width card in the last row). */
+        .sales-kpis.has-wolt .kpi-card--wolt { grid-column: 1 / -1; }
         .sales-kpis .kpi-card { padding: 0.75rem !important; }
         .sales-kpis .kpi-value { font-size: 1.15rem !important; }
         .sales-kpis .kpi-label { font-size: 0.7rem !important; }
@@ -288,7 +302,16 @@ async function loadSales() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
 
-        // KPI cards
+        // KPI cards. Wolt is a tender slice INSIDE the total (never added to
+        // it) — its tile renders only when this branch+month has Wolt revenue,
+        // and .has-wolt reflows the desktop row to 6 equal tiles.
+        const woltCard = d.wolt ? `
+            <div class="kpi-card kpi-card--wolt">
+                <div class="kpi-header"><span class="kpi-icon">🛵</span><span class="kpi-label">הכנסות Wolt</span></div>
+                <span class="kpi-value" style="color:#67e8f9">${formatMoney(d.wolt.amount)}</span>
+                <span style="font-size:0.8rem;color:rgba(241,245,249,0.5)">${d.wolt.pct}% מסה"כ</span>
+            </div>` : '';
+        kpis.classList.toggle('has-wolt', !!d.wolt);
         kpis.innerHTML = `
             <div class="kpi-card kpi-card--income">
                 <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">סה"כ הכנסות</span></div>
@@ -311,7 +334,7 @@ async function loadSales() {
             <div class="kpi-card" style="background:linear-gradient(135deg,#78350f,#5c280c);border-color:rgba(251,191,36,0.30)">
                 <div class="kpi-header"><span class="kpi-icon">🧾</span><span class="kpi-label">ממוצע עסקאות יומי</span></div>
                 <span class="kpi-value" style="color:#fcd34d">${d.avg_daily_txn} עסקאות/יום</span>
-            </div>`;
+            </div>${woltCard}`;
 
         // Table rows
         if (!d.sales.length) {
