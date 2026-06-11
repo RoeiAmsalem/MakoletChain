@@ -1,5 +1,19 @@
 <style>
     .sales-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+    /* קצב הכנסות (pace/forecast) — spans the full KPI row, same as its old
+       inline grid-column:1/-1. */
+    .sales-kpis .kpi-pace { grid-column: 1 / -1; }
+    /* Wolt tender tile — rendered only when the branch has Wolt revenue this
+       month. Desktop with Wolt: 6 equal tiles in one row (pace drops to one
+       column, Wolt takes the 6th). Without Wolt: layout untouched. */
+    .kpi-card--wolt {
+        background: linear-gradient(135deg, #164e63, #0c3a4d);
+        border-color: rgba(34, 211, 238, 0.3);
+    }
+    @media (min-width: 769px) {
+        .sales-kpis.has-wolt { grid-template-columns: repeat(6, 1fr); }
+        .sales-kpis.has-wolt .kpi-pace { grid-column: auto; }
+    }
     .btn-pdf {
         font-size: 0.78rem; font-weight: 600; padding: 0.25rem 0.6rem;
         background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4);
@@ -146,6 +160,9 @@
         .pdf-modal-body img { width: 100%; height: auto; }
         .pdf-nav button { min-height: 44px; min-width: 44px; padding: 0.5rem 1rem; touch-action: manipulation; }
         .pdf-modal-close { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+        /* Wolt on mobile: one more stacked full-width card at the end of the
+           2-col flow (avoids a lone half-width card in the last row). */
+        .sales-kpis.has-wolt .kpi-card--wolt { grid-column: 1 / -1; }
         .dept-priority-grid { grid-template-columns: 1fr; gap: 0.5rem; }
         .dept-rest-grid { grid-template-columns: 1fr; gap: 0.3rem; }
         .dept-panel { padding: 0.75rem 0.85rem 0.9rem; }

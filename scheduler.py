@@ -275,6 +275,18 @@ def run_aviv_report_all(include_previous_month: bool = False):
     log.info("=== Aviv employer-report run complete: %d/%d ok ===",
              ok, len(results))
 
+    # Wolt monthly revenue (report 203, tender slice of total revenue) —
+    # piggybacks this cadence. Every run full-overwrites the CURRENT month and
+    # re-fetches the PREVIOUS month. Never allowed to fail the hours pull.
+    try:
+        from agents.wolt_sales import run_all_branches as run_wolt
+        wolt_results = run_wolt()
+        wok = sum(1 for r in wolt_results if r.get('ok'))
+        log.info("=== Wolt 203 pull complete: %d/%d ok ===",
+                 wok, len(wolt_results))
+    except Exception:
+        log.exception("Wolt 203 pull failed")
+
 
 def run_aviv_report_current():
     run_aviv_report_all(include_previous_month=False)

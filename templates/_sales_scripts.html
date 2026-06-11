@@ -20,7 +20,16 @@ async function loadSales() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const d = await res.json();
 
-        // KPI cards
+        // KPI cards. Wolt is a tender slice INSIDE the total (never added to
+        // it) — its tile renders only when this branch+month has Wolt revenue,
+        // and .has-wolt reflows the desktop row to 6 equal tiles.
+        const woltCard = d.wolt ? `
+            <div class="kpi-card kpi-card--wolt">
+                <div class="kpi-header"><span class="kpi-icon">🛵</span><span class="kpi-label">הכנסות Wolt</span></div>
+                <span class="kpi-value" style="color:#67e8f9">${formatMoney(d.wolt.amount)}</span>
+                <span style="font-size:0.8rem;color:rgba(241,245,249,0.5)">${d.wolt.pct}% מסה"כ</span>
+            </div>` : '';
+        kpis.classList.toggle('has-wolt', !!d.wolt);
         kpis.innerHTML = `
             <div class="kpi-card kpi-card--income">
                 <div class="kpi-header"><span class="kpi-icon">📈</span><span class="kpi-label">סה"כ הכנסות</span></div>
@@ -31,7 +40,7 @@ async function loadSales() {
                 <div class="kpi-header"><span class="kpi-icon">📊</span><span class="kpi-label">ממוצע ליום</span></div>
                 <span class="kpi-value" style="color:#93c5fd">${formatMoney(d.avg)}</span>
             </div>
-            <div class="kpi-card" style="grid-column:1/-1;background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
+            <div class="kpi-card kpi-pace" style="background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
                 <div class="kpi-header"><span class="kpi-icon">📅</span><span class="kpi-label">קצב הכנסות</span></div>
                 <span class="kpi-value" style="color:#93c5fd">${d.pace != null ? formatMoney(d.pace) : '—'}</span>
                 <span style="font-size:0.8rem;color:rgba(241,245,249,0.5)">לפי ממוצע ${d.days} ימים</span>
@@ -43,7 +52,7 @@ async function loadSales() {
             <div class="kpi-card" style="background:linear-gradient(135deg,#064e3b,#065f46);border-color:rgba(34,197,94,0.25)">
                 <div class="kpi-header"><span class="kpi-icon">🧾</span><span class="kpi-label">ממוצע עסקאות יומי</span></div>
                 <span class="kpi-value" style="color:#86efac">${d.avg_daily_txn} עסקאות/יום</span>
-            </div>`;
+            </div>${woltCard}`;
 
         // Table rows
         if (!d.sales.length) {
