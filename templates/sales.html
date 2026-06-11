@@ -16,6 +16,9 @@
         border-color: rgba(34, 211, 238, 0.3);
     }
     @media (min-width: 769px) {
+        /* minmax(0,1fr): plain 1fr is minmax(auto,1fr), which lets wide
+           content stretch its column — the 6 tiles must be truly equal. */
+        .sales-kpis.has-wolt { grid-template-columns: repeat(6, minmax(0, 1fr)); }
         .sales-kpis.has-wolt .kpi-card--forecast { grid-column: auto; }
     }
     .btn-pdf {
