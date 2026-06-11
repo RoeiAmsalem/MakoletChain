@@ -43,12 +43,9 @@ try:
         shoot(pg, 9001, '/tmp/wolt_9001_desktop.png')
         shoot(pg, 126, '/tmp/wolt_126_desktop.png')
 
-        m = b.new_page(viewport={'width': 390, 'height': 844})
-        # session cookies are per-context; reuse pg's context instead
-        m.close()
-        pgm = pg.context.new_page()
-        pgm.set_viewport_size({'width': 390, 'height': 844})
-        shoot(pgm, 9001, '/tmp/wolt_9001_mobile.png')
+        # Mobile: resize the same logged-in page (cookies are per-context).
+        pg.set_viewport_size({'width': 390, 'height': 844})
+        shoot(pg, 9001, '/tmp/wolt_9001_mobile.png')
         b.close()
 finally:
     conn = sqlite3.connect(DB)
