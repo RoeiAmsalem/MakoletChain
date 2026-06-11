@@ -117,7 +117,9 @@ try:
         # admin: selector unchanged (no "כל הסניפים שלי")
         page2 = browser.new_page(viewport={'width': 1100, 'height': 900})
         login(page2, 'makoletdashboard@gmail.com')
-        page2.wait_for_selector('#branch-select option', timeout=15000)
+        # options of a closed <select> are never "visible" — wait on count
+        page2.wait_for_function(
+            'document.querySelectorAll("#branch-select option").length > 0', timeout=15000)
         admin_opts = page2.eval_on_selector_all('#branch-select option', 'os => os.map(o => o.value)')
         note('admin selector has NO __all__ entry', '__all__' not in admin_opts,
              f"{len(admin_opts)} options")
