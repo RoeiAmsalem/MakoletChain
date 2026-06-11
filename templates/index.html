@@ -34,6 +34,10 @@
         margin-inline-start: 6px; vertical-align: middle; font-weight: 600;
     }
 
+    /* רווח tile גולמי⇄תפעולי switch — full-width segmented control */
+    .seg-control--profit { justify-content: center; }
+    .seg-control--profit .seg-btn { flex: 1; padding: 7px 10px; font-size: 0.82rem; }
+
     /* Profit quality badge */
     .profit-quality-badge {
         display: inline-block; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
@@ -78,6 +82,7 @@
         .kpi-sub { font-size: 0.72rem !important; }
         #profit-pct-badge { font-size: 0.8rem !important; }
         #profit-month-sub { font-size: 0.75rem !important; }
+        .seg-control--profit .seg-btn { min-height: 44px; }
 
         /* Hourly section — dominate mobile view */
         #hourly-section { padding: 1rem 0.5rem !important; margin: 0 -0.5rem 1rem -0.5rem !important; }
@@ -164,6 +169,10 @@ async function setViewMode(mode) {
             <span class="kpi-label" id="profit-label">רווח</span>
         </div>
         <span class="kpi-value" id="profit-value">₪ 0.00</span>
+        <div id="profit-view-toggle" class="seg-control seg-control--profit" role="tablist" style="width:100%; margin-top:6px;">
+            <button type="button" id="profit-view-op" class="seg-btn active" role="tab" onclick="setProfitView('operating')">תפעולי</button>
+            <button type="button" id="profit-view-gross" class="seg-btn" role="tab" onclick="setProfitView('gross')">גולמי</button>
+        </div>
         <div id="profit-bar-wrap" style="display:none; width:100%; margin-top:6px;">
           <div id="profit-pct-badge" style="width:100%; text-align:center; padding:5px 0; border-radius:8px; background:#22c55e; font-size:0.9rem; font-weight:700; color:#052e16;">
             <span id="profit-pct-label">ריווחיות: 0%</span>
@@ -453,22 +462,25 @@ async function loadSummary() {
             strip.style.borderColor = 'rgba(239,68,68,0.3)';
         }
 
-        // Profit quality badge
+        // Profit quality badge — only meaningful for the operating view (it
+        // flags missing/estimated electricity, a fixed cost). renderPLMode()
+        // hides it in the gross view and restores it from pqBadgeShouldShow.
         const pqBadge = document.getElementById('profit-quality-badge');
         if (elecSource === 'estimate') {
             const tip = 'החודש מבוסס על הערכת חשמל על בסיס ' + (elec.estimate_basis || '') + '. ייעודכן אוטומטית כשהחשבונית תגיע.';
             pqBadge.className = 'profit-quality-badge profit-quality-badge--estimate';
             pqBadge.textContent = 'כולל חשמל משוער';
             pqBadge.setAttribute('data-tooltip', tip);
-            pqBadge.style.display = 'inline-block';
+            pqBadgeShouldShow = true;
         } else if (elecSource === 'none') {
             pqBadge.className = 'profit-quality-badge profit-quality-badge--missing';
             pqBadge.textContent = 'חלקי — ללא חשמל';
             pqBadge.setAttribute('data-tooltip', 'חשבון החשמל עדיין לא מוגדר. הרווח אינו כולל עלות חשמל.');
-            pqBadge.style.display = 'inline-block';
+            pqBadgeShouldShow = true;
         } else {
-            pqBadge.style.display = 'none';
+            pqBadgeShouldShow = false;
         }
+        renderPLMode();
 
         // Show live income subtitle
         const liveSub = document.getElementById('income-live-sub');
@@ -488,9 +500,20 @@ async function loadSummary() {
 // and רווח tiles change; income/goods/salary are identical in both modes.
 let plMode = 'full';
 let lastSummary = null;
+// Profit tile metric: 'operating' (תפעולי — revenue − goods − fixed − salary,
+// the existing calc, default) or 'gross' (גולמי — ex-VAT revenue − ex-VAT goods).
+let profitView = 'operating';
+let pqBadgeShouldShow = false;
 
 function setPLMode(mode) {
     plMode = mode;
+    renderPLMode();
+}
+
+function setProfitView(view) {
+    profitView = view;
+    document.getElementById('profit-view-op').classList.toggle('active', view === 'operating');
+    document.getElementById('profit-view-gross').classList.toggle('active', view === 'gross');
     renderPLMode();
 }
 
@@ -515,11 +538,30 @@ function renderPLMode() {
         elecSub.textContent = '';
     }
 
-    // Profit tile color
-    document.getElementById('profit-value').textContent = formatMoney(profit);
+    // Profit tile — switch between תפעולי (operating, above) and גולמי (gross).
+    // Gross is null when revenue or goods is missing → show "—", no pct bar.
+    const isGross = profitView === 'gross';
+    const grossVal = (typeof d.gross === 'number') ? d.gross : null;
+    let dispValue, dispPct, hasValue;
+    if (isGross) {
+        hasValue = grossVal !== null;
+        dispValue = grossVal;
+        dispPct = (typeof d.gross_pct === 'number') ? d.gross_pct : null;
+    } else {
+        hasValue = true;
+        dispValue = profit;
+        dispPct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
+    }
+
+    document.getElementById('profit-label').textContent = isGross ? 'רווח גולמי' : 'רווח';
+
     const profitTile = document.getElementById('profit-tile');
     const profitValue = document.getElementById('profit-value');
-    if (profit >= 0) {
+    profitValue.textContent = hasValue ? formatMoney(dispValue) : '—';
+    if (!hasValue) {
+        profitTile.className = 'kpi-card kpi-card--neutral';
+        profitValue.className = 'kpi-value';
+    } else if (dispValue >= 0) {
         profitTile.className = 'kpi-card kpi-card--profit';
         profitValue.className = 'kpi-value profit';
     } else {
@@ -528,17 +570,28 @@ function renderPLMode() {
     }
 
     // Profitability pill
-    const pct = income > 0 ? parseFloat(((profit / income) * 100).toFixed(1)) : 0;
-    document.getElementById('profit-pct-label').textContent = 'ריווחיות: ' + pct + '%';
+    const pct = dispPct === null ? 0 : dispPct;
+    document.getElementById('profit-pct-label').textContent =
+        (isGross ? 'רווחיות גולמית: ' : 'ריווחיות: ') + pct + '%';
     const badge = document.getElementById('profit-pct-badge');
     badge.style.background = pct >= 0 ? '#22c55e' : '#ef4444';
     badge.style.color = pct >= 0 ? '#052e16' : '#fff';
     const today = new Date();
     const daysInMonth = new Date(today.getFullYear(), today.getMonth()+1, 0).getDate();
     const dayOfMonth = today.getDate();
-    document.getElementById('profit-month-sub').textContent =
-        (isMtd ? 'עד היום · ' : '') + 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
-    document.getElementById('profit-bar-wrap').style.display = income > 0 ? 'block' : 'none';
+    // gross is a period total (not pro-rated), so the עד היום note only applies
+    // to the operating view.
+    document.getElementById('profit-month-sub').textContent = isGross
+        ? 'הכנסה − סחורה (ללא מע״מ)'
+        : (isMtd ? 'עד היום · ' : '') + 'יום ' + dayOfMonth + ' מתוך ' + daysInMonth;
+    // Operating keeps its original rule (bar only when income>0); gross shows
+    // the bar whenever a value exists.
+    const showBar = isGross ? hasValue : (income > 0);
+    document.getElementById('profit-bar-wrap').style.display = showBar ? 'block' : 'none';
+
+    // Quality badge (electricity) is operating-only — hide it in gross view.
+    const pqb = document.getElementById('profit-quality-badge');
+    if (pqb) pqb.style.display = (!isGross && pqBadgeShouldShow) ? 'inline-block' : 'none';
 
     // Subtle "עד היום" marker on the fixed-expenses tile.
     const fixedMarker = document.getElementById('fixed-mtd-marker');

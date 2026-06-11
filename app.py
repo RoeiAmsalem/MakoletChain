@@ -1751,6 +1751,26 @@ def api_summary():
     profit = income - goods - fixed - salary
     profit_mtd = income - goods - fixed_mtd - salary
 
+    # רווח גולמי (gross) — revenue − goods (COGS) on a CONSISTENT ex-VAT basis.
+    # daily_sales.amount is incl-VAT → divide by 1.17 (17%, the same divisor the
+    # /goods page uses for its ex-VAT fallback). Goods ex-VAT prefers BilBoy's
+    # authoritative pre-VAT total (migration 024), else the /1.17 derivation.
+    # Mixing pre-VAT goods with incl-VAT revenue would inflate the margin, so we
+    # bring revenue to ex-VAT too. gross is null when either side is missing.
+    income_ex_vat = income / 1.17
+    goods_ex_vat = db.execute(
+        "SELECT COALESCE(SUM(COALESCE(total_without_vat, amount/1.17)), 0) "
+        "FROM goods_documents "
+        "WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ?",
+        (branch_id, month)
+    ).fetchone()[0]
+    if income_ex_vat > 0 and goods_ex_vat > 0:
+        gross = round(income_ex_vat - goods_ex_vat, 2)
+        gross_pct = round(gross / income_ex_vat * 100, 1)
+    else:
+        gross = None
+        gross_pct = None
+
     live = None
     cancellation_total = 0
     discount_total = 0
@@ -1818,6 +1838,12 @@ def api_summary():
         'salary_source': salary_data['source'],
         'salary_label': salary_data['label'],
         'profit': profit,
+        # רווח גולמי (gross) — ex-VAT revenue − ex-VAT goods. null when either
+        # side is missing (frontend shows "—"). Independent of the עד היום mode.
+        'gross': gross,
+        'gross_pct': gross_pct,
+        'income_ex_vat': round(income_ex_vat, 2),
+        'goods_ex_vat': round(goods_ex_vat, 2),
         # "עד היום" (month-to-date) mode — pro-rated fixed + recomputed profit.
         'fixed_mtd': fixed_mtd,
         'fixed_only_mtd': fixed_only_mtd,
