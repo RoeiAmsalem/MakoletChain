@@ -124,6 +124,21 @@ check('9015 persisted to (9015, sup)', read_budget(B15, sup15) == V15,
 check('9015 save did NOT leak to (9018, sup)', read_budget(B18, sup15) == base_9018_sup15,
       f"db={read_budget(B18, sup15)} want={base_9018_sup15}")
 
+# ── 3b. single-branch /goods view cross-confirm: /api/goal/data?branch_id=N is
+#    the exact payload the single-branch goals tab renders. Each budget set from
+#    the combined page must show under its OWN branch's single view. ──
+def view_budget(branch_id, supplier):
+    js = client.get(f'/api/goal/data?branch_id={branch_id}').get_json() or {}
+    for s in js.get('suppliers', []):
+        if s['supplier_name'] == supplier:
+            return s['budget']
+    return 'MISSING'
+
+check('9018 single-view shows the budget set from combined', view_budget(B18, sup18) == V18,
+      f"view={view_budget(B18, sup18)} want={V18}")
+check('9015 single-view shows the budget set from combined', view_budget(B15, sup15) == V15,
+      f"view={view_budget(B15, sup15)} want={V15}")
+
 # ── 4. negative: forge a non-owned branch_id → rejected, no write ──
 r = post_budget(client, NOT_OWNED, sup18, 999999.0)
 check('forged write to non-owned branch 126 → 403', r.status_code == 403, f"status={r.status_code}")
