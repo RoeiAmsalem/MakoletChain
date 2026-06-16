@@ -299,7 +299,10 @@
     /* ── סניף בודד | כל הסניפים sub-toggle (2+-branch managers only, under תקציב).
        Reuses the seg-control look so it reads as a child of the מסמכים/תקציב
        control; sits just beneath it. ── */
-    #goods-budget-scope { display: flex; justify-content: center; margin: -0.4rem 0 1rem; }
+    /* Only lay out (display:flex) when shown — an id-specificity display rule
+       would otherwise outrank the UA [hidden]{display:none}, leaking the toggle
+       onto the מסמכים view. The :not([hidden]) guard lets `hidden` win again. */
+    #goods-budget-scope:not([hidden]) { display: flex; justify-content: center; margin: -0.4rem 0 1rem; }
     @media (max-width: 768px) {
         #goods-budget-scope-toggle { width: 100%; max-width: 360px; }
         #goods-budget-scope-toggle .seg-btn { flex: 1; min-height: 44px; padding: 10px 16px; font-size: 0.95rem; }
