@@ -1,12 +1,15 @@
 {% extends "base.html" %}
 {% block title %}תקציב — כל הסניפים שלי - קופה שקופה{% endblock %}
 
-{# Server-rendered, READ-ONLY multi-branch תקציב view for managers with 2+
+{# Server-rendered, EDITABLE multi-branch תקציב view for managers with 2+
    branches. Each section repeats the single-branch תקציב rendering (same
    markup/classes as _goods_content.html so _goods_styles.html applies as-is)
-   from that branch's _goal_data payload. Budget cells are plain text — no
-   inputs, no saving; tapping a section header switches the session to that
-   branch's editable single-branch view (/goods?branch_id=N#goals). #}
+   from that branch's _goal_data payload, with inline budget inputs. Editing a
+   budget posts {branch_id, supplier_name, monthly_budget} for THAT section's
+   branch — the save is explicit per branch and ownership-checked server-side
+   (never the session branch), so a manager sets budgets for BOTH stores on
+   one page with no branch-switching. After a save only that section's tiles +
+   the edited row + the combined top strip refresh (no reload). #}
 
 {% macro ils0(v) %}₪ {{ '{:,.0f}'.format(v) }}{% endmacro %}
 {% macro remcls(r) %}{{ '' if r is none else ('pos' if r > 0 else ('neg' if r < 0 else '')) }}{% endmacro %}
@@ -24,7 +27,7 @@
     }
     .gm-combined-card { margin-bottom: 1rem; }
     /* Per-branch section header — sticky while its section scrolls; the whole
-       header is the tap target into the branch's editable view (≥44px). */
+       header is the tap target into the branch's full docs view (≥44px). */
     .gm-section { margin-bottom: 1.25rem; }
     .gm-section-head {
         position: sticky; top: 0; z-index: 5;
@@ -47,7 +50,8 @@
 {% block content %}
 
 <!-- ── Combined strip — Σ over the manager's branches, budgeted-suppliers-only,
-     same basis as each per-branch strip (== the sum of the sections). ── -->
+     same basis as each per-branch strip (== the sum of the sections). Refreshed
+     client-side after each edit by summing the live section totals. ── -->
 <section class="card gm-combined-card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.85rem;flex-wrap:wrap;gap:0.4rem">
         <h2 class="section-title" style="margin-bottom:0">תקציב — כל הסניפים שלי</h2>
@@ -56,16 +60,16 @@
     <div class="goal-kpis gm-combined">
         <div class="kpi-card goal-kpi-quiet">
             <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">סה"כ&nbsp;תקציב</span></div>
-            <span class="kpi-value">{{ ils0(combined.budget) }}</span>
+            <span class="kpi-value" id="gm-combined-budget">{{ ils0(combined.budget) }}</span>
         </div>
         <div class="kpi-card goal-kpi-quiet">
             <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">סה"כ&nbsp;הוצאה</span></div>
-            <span class="kpi-value">{{ ils0(combined.spent) }}</span>
+            <span class="kpi-value" id="gm-combined-spent">{{ ils0(combined.spent) }}</span>
         </div>
         {% set crc = remcls(combined.remaining) | trim %}
-        <div class="kpi-card goal-kpi-headline {{ 'kpi-card--profit' if crc == 'pos' else ('kpi-card--loss' if crc == 'neg' else '') }}">
+        <div class="kpi-card goal-kpi-headline {{ 'kpi-card--profit' if crc == 'pos' else ('kpi-card--loss' if crc == 'neg' else '') }}" id="gm-combined-remaining-card">
             <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
-            <span class="kpi-value {{ 'profit' if crc == 'pos' else ('loss' if crc == 'neg' else '') }}">{{ ils0(combined.remaining) }}</span>
+            <span class="kpi-value {{ 'profit' if crc == 'pos' else ('loss' if crc == 'neg' else '') }}" id="gm-combined-remaining">{{ ils0(combined.remaining) }}</span>
         </div>
     </div>
     <!-- One search over ALL sections (rows + mobile cards; totals untouched). -->
@@ -76,14 +80,19 @@
     </div>
 </section>
 
-<!-- ── One section per branch — the single-branch תקציב rendering, read-only ── -->
+<!-- ── One section per branch — the single-branch תקציב rendering, editable.
+     data-branch-id rides each section so every budget input posts to its own
+     store; data-budget/data-spent hold the live section totals the combined
+     strip sums after each save. ── -->
 {% for sec in sections %}
-<section class="card gm-section" id="gm-branch-{{ sec.branch_id }}">
+<section class="card gm-section" id="gm-branch-{{ sec.branch_id }}"
+         data-branch-id="{{ sec.branch_id }}"
+         data-budget="{{ sec.totals.budget }}" data-spent="{{ sec.totals.spent }}">
     <div class="gm-section-head">
-        <a href="/goods?branch_id={{ sec.branch_id }}#goals" aria-label="מעבר לסניף {{ sec.branch_name }}">
+        <a href="/goods?branch_id={{ sec.branch_id }}" aria-label="מעבר למסמכי הסניף {{ sec.branch_name }}">
             <span class="gm-chevron">‹</span>
             <span>{{ sec.branch_name }}</span>
-            <span class="gm-hint">לעריכה — הקש</span>
+            <span class="gm-hint">למסמכים ›</span>
         </a>
     </div>
     {% if not sec.suppliers %}
@@ -92,20 +101,20 @@
     <div class="goal-kpis">
         <div class="kpi-card goal-kpi-quiet">
             <div class="kpi-header"><span class="kpi-icon">🎯</span><span class="kpi-label">סה"כ&nbsp;תקציב</span></div>
-            <span class="kpi-value">{{ ils0(sec.totals.budget) }}</span>
+            <span class="kpi-value gm-tot-budget">{{ ils0(sec.totals.budget) }}</span>
         </div>
         <div class="kpi-card goal-kpi-quiet">
             <div class="kpi-header"><span class="kpi-icon">💳</span><span class="kpi-label">סה"כ&nbsp;הוצאה</span></div>
-            <span class="kpi-value">{{ ils0(sec.totals.spent) }}</span>
+            <span class="kpi-value gm-tot-spent">{{ ils0(sec.totals.spent) }}</span>
         </div>
         {% set rc = remcls(sec.totals.remaining) | trim %}
-        <div class="kpi-card goal-kpi-headline {{ 'kpi-card--profit' if rc == 'pos' else ('kpi-card--loss' if rc == 'neg' else '') }}">
+        <div class="kpi-card goal-kpi-headline gm-tot-remaining-card {{ 'kpi-card--profit' if rc == 'pos' else ('kpi-card--loss' if rc == 'neg' else '') }}">
             <div class="kpi-header"><span class="kpi-icon">💰</span><span class="kpi-label">יתרה</span></div>
-            <span class="kpi-value {{ 'profit' if rc == 'pos' else ('loss' if rc == 'neg' else '') }}">{{ ils0(sec.totals.remaining) }}</span>
+            <span class="kpi-value gm-tot-remaining {{ 'profit' if rc == 'pos' else ('loss' if rc == 'neg' else '') }}">{{ ils0(sec.totals.remaining) }}</span>
         </div>
         <div class="kpi-card goal-kpi-quiet goal-kpi-pace">
             <div class="kpi-header"><span class="kpi-icon">🛒</span><span class="kpi-label">קצב&nbsp;הזמנות</span></div>
-            <span class="kpi-value">{{ ils0(sec.totals.order_pace) }}</span>
+            <span class="kpi-value gm-tot-orderpace">{{ ils0(sec.totals.order_pace) }}</span>
         </div>
     </div>
     <div class="goal-overpace {{ 'ok' if sec.over_count == 0 else '' }}">{{ sec.over_count }} ספקים חורגים מהתקציב</div>
@@ -125,7 +134,9 @@
                 {% set src = remcls(s.remaining) | trim %}
                 <tr class="{{ 'goal-under' if src == 'pos' else ('goal-over' if src == 'neg' else '') }}" data-supplier="{{ s.supplier_name }}">
                     <td>{{ s.supplier_name }}</td>
-                    <td class="num">{% if s.budget is none %}<span class="muted">—</span>{% else %}{{ ils0(s.budget) }}{% endif %}</td>
+                    <td class="num"><input type="text" inputmode="decimal" class="goal-budget-input"
+                            value="{% if s.budget is not none %}{{ ils0(s.budget) }}{% endif %}"
+                            placeholder="הוסף תקציב" aria-label="תקציב חודשי"></td>
                     <td class="num goal-spend">{{ ils0(s.mtd_spend) }}</td>
                     <td class="num goal-pace">{{ ils0(s.projected) }}</td>
                     <td class="num goal-rem {{ src }}">{% if s.remaining is none %}<span class="muted">—</span>{% else %}{{ ils0(s.remaining) }}{% endif %}</td>
@@ -135,11 +146,11 @@
             <tfoot>
                 <tr>
                     <td>סה"כ</td>
-                    <td class="num">{{ ils0(sec.totals.budget) }}</td>
-                    <td class="num">{{ ils0(sec.totals.spent) }}</td>
+                    <td class="num gm-foot-budget">{{ ils0(sec.totals.budget) }}</td>
+                    <td class="num gm-foot-spent">{{ ils0(sec.totals.spent) }}</td>
                     <td class="num goal-foot-pace">{{ ils0(sec.totals.order_pace) }}</td>
                     {% set frc = remcls(sec.totals.remaining) | trim %}
-                    <td class="num {{ frc }}">{{ ils0(sec.totals.remaining) }}</td>
+                    <td class="num gm-foot-remaining {{ frc }}">{{ ils0(sec.totals.remaining) }}</td>
                 </tr>
             </tfoot>
         </table>
@@ -152,20 +163,130 @@
 
 {% block scripts %}
 <script>
-// One search box filters supplier rows across ALL branch sections at once
-// (same substring rule as the single-branch view; totals are untouched).
 (function () {
+    const ils0 = n => '₪ ' + Math.round(n).toLocaleString('en-US');
+    // יתרה color rule: >0 green (.pos), <0 red (.neg), ==0/null neutral.
+    function remCls(r) { if (r === null || r === undefined) return ''; return r > 0 ? 'pos' : (r < 0 ? 'neg' : ''); }
+    // Strip ₪ / commas / spaces → plain number (or '' when blank).
+    function parseBudget(str) { const n = parseFloat(String(str).replace(/[^\d.]/g, '')); return isNaN(n) ? '' : n; }
+    function fmtRem(r) { return (r === null || r === undefined) ? '<span class="muted">—</span>' : ils0(r); }
+
+    // ── One search box filters supplier rows across ALL sections at once
+    //    (same substring rule as the single-branch view; totals untouched). ──
     const inp = document.getElementById('goal-search');
-    if (!inp) return;
-    inp.addEventListener('input', function () {
-        const q = (inp.value || '').trim().toLowerCase();
-        let shown = 0;
-        document.querySelectorAll('.gm-section tbody tr[data-supplier]').forEach(tr => {
-            const match = !q || (tr.getAttribute('data-supplier') || '').toLowerCase().indexOf(q) >= 0;
-            tr.style.display = match ? '' : 'none';
-            if (match) shown++;
+    if (inp) {
+        inp.addEventListener('input', function () {
+            const q = (inp.value || '').trim().toLowerCase();
+            let shown = 0;
+            document.querySelectorAll('.gm-section tbody tr[data-supplier]').forEach(tr => {
+                const match = !q || (tr.getAttribute('data-supplier') || '').toLowerCase().indexOf(q) >= 0;
+                tr.style.display = match ? '' : 'none';
+                if (match) shown++;
+            });
+            const empty = document.getElementById('goal-search-empty');
+            if (empty) empty.hidden = !(q && shown === 0);
         });
-        document.getElementById('goal-search-empty').hidden = !(q && shown === 0);
+    }
+
+    // ── Combined top strip = Σ of the live per-section totals (data-budget /
+    //    data-spent on each .gm-section, refreshed in place after each save). ──
+    function recomputeCombined() {
+        let b = 0, s = 0;
+        document.querySelectorAll('.gm-section[data-branch-id]').forEach(sec => {
+            b += parseFloat(sec.dataset.budget || '0');
+            s += parseFloat(sec.dataset.spent || '0');
+        });
+        b = Math.round(b * 100) / 100; s = Math.round(s * 100) / 100;
+        const rem = Math.round((b - s) * 100) / 100, rc = remCls(rem);
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('gm-combined-budget', ils0(b));
+        set('gm-combined-spent', ils0(s));
+        const remEl = document.getElementById('gm-combined-remaining');
+        if (remEl) { remEl.textContent = ils0(rem); remEl.className = 'kpi-value ' + (rc === 'pos' ? 'profit' : (rc === 'neg' ? 'loss' : '')); }
+        const card = document.getElementById('gm-combined-remaining-card');
+        if (card) card.className = 'kpi-card goal-kpi-headline ' + (rc === 'pos' ? 'kpi-card--profit' : (rc === 'neg' ? 'kpi-card--loss' : ''));
+    }
+
+    // Refresh ONLY this section (tiles strip + over-count + foot + every row)
+    // from the branch's fresh _goal_data payload, then recompute the combined
+    // strip. No full reload; search filter + any other edit are preserved.
+    function refreshSection(branchId, data) {
+        const sec = document.getElementById('gm-branch-' + branchId);
+        if (!sec) return;
+        const q = sel => sec.querySelector(sel);
+        const tb = q('.gm-tot-budget'); if (tb) tb.textContent = ils0(data.totals.budget);
+        const ts = q('.gm-tot-spent'); if (ts) ts.textContent = ils0(data.totals.spent);
+        const op = q('.gm-tot-orderpace'); if (op) op.textContent = ils0(data.totals.order_pace);
+        const rc = remCls(data.totals.remaining);
+        const trem = q('.gm-tot-remaining');
+        if (trem) { trem.textContent = ils0(data.totals.remaining); trem.className = 'kpi-value gm-tot-remaining ' + (rc === 'pos' ? 'profit' : (rc === 'neg' ? 'loss' : '')); }
+        const card = q('.gm-tot-remaining-card');
+        if (card) card.className = 'kpi-card goal-kpi-headline gm-tot-remaining-card ' + (rc === 'pos' ? 'kpi-card--profit' : (rc === 'neg' ? 'kpi-card--loss' : ''));
+        const over = data.suppliers.filter(s => s.remaining !== null && s.remaining < 0).length;
+        const ov = q('.goal-overpace');
+        if (ov) { ov.textContent = over + ' ספקים חורגים מהתקציב'; ov.classList.toggle('ok', over === 0); }
+        const fb = q('.gm-foot-budget'); if (fb) fb.textContent = ils0(data.totals.budget);
+        const fs = q('.gm-foot-spent'); if (fs) fs.textContent = ils0(data.totals.spent);
+        const fp = q('.goal-foot-pace'); if (fp) fp.textContent = ils0(data.totals.order_pace);
+        const fr = q('.gm-foot-remaining'); if (fr) { fr.textContent = ils0(data.totals.remaining); fr.className = 'num gm-foot-remaining ' + remCls(data.totals.remaining); }
+
+        const byName = {}; data.suppliers.forEach(s => byName[s.supplier_name] = s);
+        sec.querySelectorAll('tbody tr[data-supplier]').forEach(tr => {
+            const s = byName[tr.dataset.supplier];
+            if (!s) return;
+            const r = remCls(s.remaining);
+            tr.className = r === 'pos' ? 'goal-under' : (r === 'neg' ? 'goal-over' : '');
+            const bi = tr.querySelector('.goal-budget-input');
+            if (bi && document.activeElement !== bi) bi.value = s.budget === null ? '' : ils0(s.budget);
+            const sp = tr.querySelector('.goal-spend'); if (sp) sp.textContent = ils0(s.mtd_spend);
+            const pc = tr.querySelector('.goal-pace'); if (pc) pc.textContent = ils0(s.projected);
+            const rm = tr.querySelector('.goal-rem'); if (rm) { rm.className = 'num goal-rem ' + r; rm.innerHTML = fmtRem(s.remaining); }
+        });
+
+        sec.dataset.budget = data.totals.budget;
+        sec.dataset.spent = data.totals.spent;
+        recomputeCombined();
+    }
+
+    async function saveBudget(branchId, supplier, value, inputEl) {
+        inputEl.classList.add('saving');
+        try {
+            const res = await fetch('/api/goal/budget', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                // EXPLICIT per-section branch_id — never the session branch.
+                body: JSON.stringify({ branch_id: branchId, supplier_name: supplier, monthly_budget: parseBudget(value) }),
+            });
+            if (!res.ok) throw new Error('save failed');
+            const data = await res.json();
+            inputEl.classList.remove('saving');
+            refreshSection(data.branch_id || branchId, data);
+            inputEl.classList.add('saved'); setTimeout(() => inputEl.classList.remove('saved'), 1200);
+        } catch (e) {
+            inputEl.classList.remove('saving');
+            alert('שמירת התקציב נכשלה, נסה שוב');
+        }
+    }
+
+    // Budget edits are scoped to inputs INSIDE a section, so we always read the
+    // owning branch from the section — there is no session-branch fallback here.
+    document.addEventListener('change', e => {
+        const t = e.target;
+        if (!t.classList || !t.classList.contains('goal-budget-input')) return;
+        const sec = t.closest('.gm-section'), tr = t.closest('tr');
+        if (sec && tr) saveBudget(parseInt(sec.dataset.branchId, 10), tr.dataset.supplier, t.value, t);
+    });
+    // Focus → plain number for typing; blur → reformat ₪ + commas.
+    document.addEventListener('focusin', e => {
+        const t = e.target;
+        if (!t.classList || !t.classList.contains('goal-budget-input')) return;
+        t.value = parseBudget(t.value) || '';
+    });
+    document.addEventListener('focusout', e => {
+        const t = e.target;
+        if (!t.classList || !t.classList.contains('goal-budget-input')) return;
+        const n = parseBudget(t.value);
+        t.value = (n && n > 0) ? ils0(n) : '';
     });
 })();
 </script>

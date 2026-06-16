@@ -1,7 +1,7 @@
-"""Verify the multi-branch /goods תקציב view (read-only, managers with 2+ branches).
+"""Verify the multi-branch /goods תקציב view (editable, managers with 2+ branches).
 
 1. Render check: simulate a 2-branch manager session, GET /goods?multi=1,
-   assert 200 + combined strip + one section per branch.
+   assert 200 + combined strip + one section per branch + inline budget inputs.
 2. Reconciliation per section: Σ mtd_spend over that branch's _goal_data
    suppliers == the same branch's /goods incl-VAT MTD total (the
    _goods_doc_context aggregation the budget feature reconciles to) — Δ 0.00.
@@ -87,10 +87,15 @@ check('combined strip present', 'תקציב — כל הסניפים שלי' in h
 for bid in BRANCH_IDS:
     check(f"section for branch {bid}", f'id="gm-branch-{bid}"' in html,
           'section rendered' if f'id="gm-branch-{bid}"' in html else 'section MISSING')
-# class= match only — the included stylesheet legitimately names the class.
-no_inputs = 'class="goal-budget-input' not in html
-check('read-only (no budget inputs)', no_inputs,
-      'no inputs' if no_inputs else 'INPUT FOUND')
+# Editable: each section carries inline budget inputs (one per supplier row).
+n_inputs = html.count('class="goal-budget-input')
+check('editable (budget inputs present)', n_inputs > 0,
+      f'{n_inputs} inputs')
+# Each section rides its own branch_id so edits post to the right store.
+for bid in BRANCH_IDS:
+    has = f'data-branch-id="{bid}"' in html
+    check(f"section {bid} carries data-branch-id", has,
+          'present' if has else 'MISSING')
 
 # Combined strip == sum of sections (compare rendered numbers)
 fmt = lambda v: '₪ {:,.0f}'.format(v)

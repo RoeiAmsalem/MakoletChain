@@ -181,6 +181,9 @@ let _goalsLoaded = false;
 // /api/goal/data is current-month pace — annotations only make sense when the
 // month picker is on the current month.
 const GOODS_IS_CURRENT_MONTH = {{ (selected_month == current_month) | tojson }};
+// The budget save is EXPLICIT per branch — the single-branch view sends the
+// store it is showing so the endpoint never falls back to the session branch.
+const GOODS_BRANCH_ID = {{ branch_id | tojson }};
 
 function switchGoodsView(view) {
     const isGoals = view === 'goals';
@@ -304,7 +307,7 @@ async function saveBudget(supplier, value, inputEl) {
         const res = await fetch('/api/goal/budget', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ supplier_name: supplier, monthly_budget: parseBudget(value) }),
+            body: JSON.stringify({ branch_id: GOODS_BRANCH_ID, supplier_name: supplier, monthly_budget: parseBudget(value) }),
         });
         if (!res.ok) throw new Error('save failed');
         renderGoals(await res.json());
