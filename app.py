@@ -536,6 +536,20 @@ def _get_branch_id():
     return get_branch_id()
 
 
+def _can_write_branch(branch_id):
+    """True iff the session user may WRITE to branch_id.
+
+    admin/ceo → any branch; manager → only branches in their user_branches.
+    Mirrors the read-side ownership rule in get_branch_id() so a manager can
+    never write to a branch they don't own (the combined "כל הסניפים" budget
+    view sends an explicit branch_id per edit and must be guarded)."""
+    if not branch_id:
+        return False
+    if session.get('user_role') in ROLES_ALL_BRANCHES:
+        return True
+    return branch_id in (session.get('user_branches') or [])
+
+
 def _branch_name(branch_id):
     db = get_db()
     row = db.execute('SELECT name FROM branches WHERE id = ?', (branch_id,)).fetchone()
@@ -874,6 +888,35 @@ def sales():
     return render_template('sales.html', **ctx)
 
 
+def _goods_multi_sections(db):
+    """Sections + combined strip for the editable "כל הסניפים" תקציב view.
+
+    One section per branch the manager owns, each the EXACT _goal_data payload
+    the single-branch תקציב view renders (no calc fork) — just tagged with the
+    branch id/name and an over-budget count. The combined strip is the sum of
+    the per-section budgeted-only totals by construction. Used only when a
+    manager with 2+ assigned branches is on the goods page; admin/ceo and
+    single-branch managers never reach it (the toggle isn't rendered for them).
+    """
+    sections = []
+    for b in _list_visible_branches(session.get('user_id'), session.get('user_role')):
+        data = _goal_data(b['id'], db)
+        data['branch_id'] = b['id']
+        data['branch_name'] = b['name']
+        data['over_count'] = sum(
+            1 for s in data['suppliers']
+            if s['remaining'] is not None and s['remaining'] < 0)
+        sections.append(data)
+    combined_budget = round(sum(s['totals']['budget'] for s in sections), 2)
+    combined_spent = round(sum(s['totals']['spent'] for s in sections), 2)
+    combined = {
+        'budget': combined_budget,
+        'spent': combined_spent,
+        'remaining': round(combined_budget - combined_spent, 2),
+    }
+    return sections, combined
+
+
 @app.route('/goods')
 @login_required
 def goods():
@@ -934,6 +977,24 @@ def goods():
         'returns_total': returns_total,
         'count': count,
     })
+
+    # In-page "כל הסניפים" toggle on the תקציב view — only for managers with 2+
+    # assigned branches (admin/ceo keep their normal selector; single-branch
+    # managers have nothing to combine). The combined editable view + its
+    # per-section ownership-checked save are gated entirely on this flag, so the
+    # מסמכים view and the single-branch תקציב view are untouched for everyone else.
+    role = session.get('user_role')
+    user_branches = session.get('user_branches') or []
+    show_multi_toggle = role not in ROLES_ALL_BRANCHES and len(user_branches) >= 2
+    if show_multi_toggle:
+        multi_sections, multi_combined = _goods_multi_sections(db)
+        ctx.update({
+            'show_multi_toggle': True,
+            'multi_sections': multi_sections,
+            'multi_combined': multi_combined,
+        })
+    else:
+        ctx['show_multi_toggle'] = False
     return render_template('goods.html', **ctx)
 
 
@@ -1235,10 +1296,25 @@ def api_goal_data():
 @app.route('/api/goal/budget', methods=['POST'])
 @login_required
 def api_goal_budget():
-    branch_id = get_branch_id()
+    data = request.get_json(silent=True) or {}
+    # Budget saves are EXPLICIT per branch. The combined "כל הסניפים" view edits
+    # two stores on one page, so the target branch must travel with each edit —
+    # writing to the session branch would land the edit on the wrong store. A
+    # manager must never write to a branch they don't own.
+    raw_bid = data.get('branch_id')
+    if raw_bid not in (None, ''):
+        try:
+            branch_id = int(raw_bid)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'invalid_branch'}), 400
+        if not _can_write_branch(branch_id):
+            return jsonify({'error': 'forbidden_branch'}), 403
+    else:
+        # Back-compat: no explicit branch_id → session branch (still bounded by
+        # get_branch_id's own user_branches check).
+        branch_id = get_branch_id()
     if not branch_id:
         return jsonify({'error': 'no_branch'}), 400
-    data = request.get_json(silent=True) or {}
     supplier = (data.get('supplier_name') or '').strip()
     if not supplier:
         return jsonify({'error': 'missing_supplier'}), 400
@@ -1263,7 +1339,9 @@ def api_goal_budget():
             "  monthly_budget = excluded.monthly_budget, updated_at = datetime('now')",
             (branch_id, supplier, budget))
     db.commit()
-    return jsonify({'ok': True, **_goal_data(branch_id, db)})
+    # Echo branch_id so the combined view knows which section's tiles/row to
+    # refresh (each section posts + refreshes its own branch independently).
+    return jsonify({'ok': True, 'branch_id': branch_id, **_goal_data(branch_id, db)})
 
 
 @app.route('/employees')
