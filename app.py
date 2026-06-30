@@ -5321,7 +5321,7 @@ def admin_billing():
                            managers=managers,
                            sumit_connected=sumit.is_connected(),
                            payment_base_url=SUMIT_PAYMENT_URL,
-                           month_display=month,
+                           billing_month=month,
                            **_page_context('admin'))
 
 
