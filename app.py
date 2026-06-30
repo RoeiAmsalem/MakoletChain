@@ -5195,6 +5195,181 @@ def admin_users():
                            **_page_context('admin'))
 
 
+# ── SUMIT Billing (stage 1: READ-ONLY, per-manager) ──────────────────────
+# One ₪179 charge per MANAGER. manager_billing.sumit_tag = str(user_id) — the
+# value we set as the SUMIT customer ExternalIdentifier via each manager's
+# payment link (?customerexternalidentifier=<user_id>). Toggling active / editing
+# the fee writes to manager_billing ONLY — never to SUMIT. Nobody is billed until
+# Roei toggles them on (active defaults to 0).
+
+# Base SUMIT payment-page URL for the ₪179 product. Override via the
+# SUMIT_PAYMENT_URL env var once the real product page exists; the per-manager
+# link appends the confirmed customerexternalidentifier param.
+SUMIT_PAYMENT_URL = os.environ.get('SUMIT_PAYMENT_URL',
+                                   'https://app.sumit.co.il/checkout/')
+
+
+def _manager_payment_link(user_id):
+    base = SUMIT_PAYMENT_URL
+    sep = '&' if '?' in base else '?'
+    return f"{base}{sep}customerexternalidentifier={user_id}"
+
+
+def _ensure_manager_billing_rows(db):
+    """One manager_billing row per active manager, created OFF (active=0).
+    sumit_tag = str(user_id) — unique per manager. Idempotent: INSERT OR IGNORE
+    never flips an existing row's active flag or fee."""
+    for row in db.execute(
+            "SELECT id FROM users WHERE role='manager' AND active=1").fetchall():
+        db.execute(
+            "INSERT OR IGNORE INTO manager_billing (user_id, sumit_tag, fee, active) "
+            "VALUES (?,?,179,0)", (row['id'], str(row['id'])))
+    db.commit()
+
+
+def _run_billing_sync(db):
+    """READ-ONLY vs SUMIT. Pull this-month payments, map each to a manager via
+    payment.CustomerID -> customer.ExternalIdentifier == sumit_tag, and update
+    manager_billing.last_paid_date / last_status. Returns a summary dict.
+
+    Never creates/charges anything in SUMIT. On an empty account this simply
+    marks everyone 'unpaid' and returns paid_managers=0 — proving the join runs.
+    """
+    from utils import sumit
+    if not sumit.is_connected():
+        return {'connected': False, 'message': 'לא מחובר ל-SUMIT'}
+
+    month = _now_il().strftime('%Y-%m')
+    since = month + '-01'
+    try:
+        payments = sumit.list_payments(since)
+        customers = sumit.list_customers()
+    except sumit.SumitNotConnected:
+        return {'connected': False, 'message': 'לא מחובר ל-SUMIT'}
+    except Exception as e:
+        return {'connected': True, 'error': str(e)}
+
+    ext_by_customer = {c['id']: c['external_identifier'] for c in customers}
+    # tag -> most-recent valid payment date within the current calendar month
+    paid_by_tag = {}
+    payments_seen = 0
+    for p in payments:
+        if not p.get('ValidPayment'):
+            continue
+        payments_seen += 1
+        tag = ext_by_customer.get(p.get('CustomerID'))
+        if tag is None:
+            continue
+        pdate = (p.get('Date') or '')[:10]
+        if pdate[:7] != month:
+            continue
+        if tag not in paid_by_tag or pdate > paid_by_tag[tag]:
+            paid_by_tag[tag] = pdate
+
+    now_iso = _now_il().strftime('%Y-%m-%d %H:%M')
+    matched = 0
+    for row in db.execute(
+            "SELECT user_id, sumit_tag FROM manager_billing").fetchall():
+        tag = row['sumit_tag']
+        if tag in paid_by_tag:
+            db.execute(
+                "UPDATE manager_billing SET last_paid_date=?, last_status='paid', "
+                "updated_at=? WHERE user_id=?",
+                (paid_by_tag[tag], now_iso, row['user_id']))
+            matched += 1
+        else:
+            db.execute(
+                "UPDATE manager_billing SET last_status='unpaid', updated_at=? "
+                "WHERE user_id=?", (now_iso, row['user_id']))
+    db.commit()
+    return {'connected': True, 'payments_seen': payments_seen,
+            'paid_managers': matched, 'customers': len(customers)}
+
+
+@app.route('/admin/billing')
+@_admin_required
+def admin_billing():
+    from utils import sumit
+    db = get_db()
+    _ensure_manager_billing_rows(db)
+    month = _now_il().strftime('%Y-%m')
+
+    managers = []
+    for u in db.execute(
+            "SELECT id, name, email FROM users "
+            "WHERE role='manager' AND active=1 ORDER BY id").fetchall():
+        mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                        (u['id'],)).fetchone()
+        branches = db.execute(
+            "SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
+            "WHERE ub.user_id=? ORDER BY b.id", (u['id'],)).fetchall()
+        last_paid = mb['last_paid_date'] if mb else None
+        managers.append({
+            'user_id': u['id'],
+            'name': u['name'],
+            'email': u['email'],
+            'branch_names': ', '.join(b['name'] for b in branches) or '—',
+            'sumit_tag': mb['sumit_tag'] if mb else str(u['id']),
+            'fee': mb['fee'] if mb else 179,
+            'active': bool(mb['active']) if mb else False,
+            'paid_this_month': bool(last_paid and last_paid[:7] == month),
+            'last_paid_date': last_paid or '—',
+            'payment_link': _manager_payment_link(u['id']),
+        })
+
+    return render_template('admin_billing.html',
+                           managers=managers,
+                           sumit_connected=sumit.is_connected(),
+                           payment_base_url=SUMIT_PAYMENT_URL,
+                           month_display=month,
+                           **_page_context('admin'))
+
+
+@app.route('/api/admin/billing/<int:user_id>', methods=['POST'])
+@_admin_required
+def api_admin_billing_update(user_id):
+    """Update a manager's billing row (active toggle and/or fee). Writes to our
+    DB only — never to SUMIT."""
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    # ensure the row exists (manager may not have been materialised yet)
+    db.execute(
+        "INSERT OR IGNORE INTO manager_billing (user_id, sumit_tag, fee, active) "
+        "VALUES (?,?,179,0)", (user_id, str(user_id)))
+    updates, params = [], []
+    if 'active' in data:
+        updates.append('active=?')
+        params.append(1 if data.get('active') else 0)
+    if 'fee' in data:
+        try:
+            fee = float(data.get('fee'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'מחיר לא תקין'}), 400
+        if fee < 0:
+            return jsonify({'error': 'מחיר לא תקין'}), 400
+        updates.append('fee=?')
+        params.append(fee)
+    if not updates:
+        return jsonify({'ok': True})
+    updates.append("updated_at=?")
+    params.append(_now_il().strftime('%Y-%m-%d %H:%M'))
+    params.append(user_id)
+    db.execute("UPDATE manager_billing SET " + ', '.join(updates) +
+               " WHERE user_id=?", params)
+    db.commit()
+    row = db.execute("SELECT active, fee FROM manager_billing WHERE user_id=?",
+                     (user_id,)).fetchone()
+    return jsonify({'ok': True, 'active': bool(row['active']), 'fee': row['fee']})
+
+
+@app.route('/api/admin/billing/sync', methods=['POST'])
+@_admin_required
+def api_admin_billing_sync():
+    """Run the read-only SUMIT sync on demand (the 'רענן סטטוס' button)."""
+    db = get_db()
+    return jsonify(_run_billing_sync(db))
+
+
 @app.route('/admin/franchise-classifier')
 @_admin_required
 def admin_franchise_classifier():

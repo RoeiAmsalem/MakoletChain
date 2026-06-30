@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}חיוב מנהלים — קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    .admin-container { max-width:1200px; margin:0 auto; padding:1.5rem; }
+    .admin-header { margin-bottom:1.25rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+    .admin-header h1 { font-size:1.5rem; font-weight:700; margin:0; }
+    .admin-nav { display:flex; gap:0.5rem; margin-right:auto; }
+    .admin-nav a { font-size:0.82rem; padding:0.35rem 0.8rem; border-radius:6px; color:var(--text-secondary); text-decoration:none; border:1px solid var(--card-border); transition:all 0.15s; }
+    .admin-nav a:hover { background:rgba(255,255,255,0.06); color:white; }
+    .admin-nav a.active { background:var(--accent); color:white; border-color:var(--accent); }
+
+    .billing-bar { display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; }
+    .conn-badge { padding:0.3rem 0.8rem; border-radius:999px; font-size:0.8rem; font-weight:700; }
+    .conn-ok { background:rgba(34,197,94,0.18); color:#86efac; }
+    .conn-off { background:rgba(239,68,68,0.18); color:#fca5a5; }
+    .month-chip { font-size:0.8rem; color:var(--text-muted); }
+    .sync-btn { margin-right:auto; background:var(--accent); border:none; border-radius:6px; padding:0.45rem 0.95rem; color:white; font-size:0.85rem; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity 0.15s; }
+    .sync-btn:hover { opacity:0.85; }
+    .sync-btn:disabled { opacity:0.5; cursor:not-allowed; }
+
+    .billing-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+    table.billing { width:100%; border-collapse:collapse; font-size:0.88rem; }
+    table.billing th, table.billing td { padding:0.7rem 0.85rem; text-align:right; border-bottom:1px solid var(--card-border); }
+    table.billing th { font-size:0.76rem; font-weight:700; color:var(--text-muted); background:rgba(255,255,255,0.03); }
+    table.billing tr:last-child td { border-bottom:none; }
+    table.billing tr.inactive { opacity:0.55; }
+    .mgr-name { font-weight:700; color:var(--text-primary); }
+    .mgr-email { font-size:0.74rem; color:var(--text-muted); direction:ltr; display:block; }
+    .branch-cell { color:var(--text-secondary); font-size:0.82rem; }
+    .fee-input { width:78px; background:rgba(255,255,255,0.05); border:1px solid var(--card-border); border-radius:6px; padding:0.3rem 0.5rem; color:var(--text-primary); font-size:0.85rem; font-family:inherit; text-align:left; }
+    .toggle-btn { background:rgba(255,255,255,0.06); border:1px solid var(--card-border); border-radius:6px; padding:0.3rem 0.75rem; color:var(--text-secondary); font-size:0.78rem; font-weight:600; cursor:pointer; font-family:inherit; transition:all 0.15s; white-space:nowrap; }
+    .toggle-btn.on { border-color:rgba(34,197,94,0.4); color:#86efac; background:rgba(34,197,94,0.12); }
+    .toggle-btn:hover { background:rgba(255,255,255,0.1); color:white; }
+    .paid-yes { color:#86efac; font-weight:700; font-size:1rem; }
+    .paid-no { color:var(--text-muted); }
+    .link-btn { background:none; border:1px solid var(--card-border); border-radius:6px; padding:0.3rem 0.7rem; color:var(--text-secondary); font-size:0.76rem; font-weight:600; cursor:pointer; font-family:inherit; transition:all 0.15s; white-space:nowrap; }
+    .link-btn:hover { background:rgba(255,255,255,0.08); color:white; }
+    .link-btn[hidden] { display:none; }
+    .note { font-size:0.78rem; color:var(--text-muted); margin-top:0.9rem; line-height:1.6; }
+    .note code { direction:ltr; background:rgba(255,255,255,0.06); padding:1px 6px; border-radius:4px; font-size:0.72rem; }
+    @media (max-width: 768px) {
+        .admin-container { padding:0.75rem; }
+        .admin-header { flex-direction:column; align-items:flex-start; }
+        .admin-nav { margin-right:0; }
+        table.billing { font-size:0.8rem; }
+        table.billing th, table.billing td { padding:0.5rem 0.4rem; }
+        .mgr-email { display:none; }
+        .fee-input { width:64px; font-size:16px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="admin-container">
+    <div class="admin-header">
+        <h1>חיוב מנהלים</h1>
+        <div class="admin-nav">
+            <a href="/admin/branches">סניפים</a>
+            <a href="/admin/users">משתמשים</a>
+            <a href="/admin/billing" class="active">חיוב</a>
+            <a href="/admin/analytics">ניתוח שימוש</a>
+        </div>
+    </div>
+
+    <div class="billing-bar">
+        {% if sumit_connected %}
+        <span class="conn-badge conn-ok">מחובר ל-SUMIT</span>
+        {% else %}
+        <span class="conn-badge conn-off">לא מחובר ל-SUMIT</span>
+        {% endif %}
+        <span class="month-chip">חודש נוכחי: {{ month_display }}</span>
+        <button class="sync-btn" id="sync-btn" onclick="runSync()">רענן סטטוס</button>
+    </div>
+
+    <div class="billing-card">
+        <table class="billing">
+            <thead>
+                <tr>
+                    <th>מנהל</th>
+                    <th>סניף</th>
+                    <th>מחיר (₪)</th>
+                    <th>חיוב פעיל?</th>
+                    <th>שילם החודש?</th>
+                    <th>תשלום אחרון</th>
+                    <th>קישור תשלום</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for m in managers %}
+                <tr id="row-{{ m.user_id }}" class="{{ '' if m.active else 'inactive' }}">
+                    <td>
+                        <span class="mgr-name">{{ m.name }}</span>
+                        <span class="mgr-email">{{ m.email }}</span>
+                    </td>
+                    <td class="branch-cell">{{ m.branch_names }}</td>
+                    <td>
+                        <input class="fee-input" type="number" min="0" step="1"
+                               value="{{ m.fee }}"
+                               onchange="setFee({{ m.user_id }}, this)">
+                    </td>
+                    <td>
+                        <button class="toggle-btn {{ 'on' if m.active else '' }}"
+                                id="toggle-{{ m.user_id }}"
+                                onclick="toggleActive({{ m.user_id }})">
+                            {{ 'פעיל' if m.active else 'כבוי' }}
+                        </button>
+                    </td>
+                    <td id="paid-{{ m.user_id }}">
+                        {% if m.paid_this_month %}<span class="paid-yes">✅</span>{% else %}<span class="paid-no">—</span>{% endif %}
+                    </td>
+                    <td class="branch-cell">{{ m.last_paid_date }}</td>
+                    <td>
+                        <button class="link-btn" id="link-{{ m.user_id }}"
+                                data-link="{{ m.payment_link }}"
+                                {{ '' if m.active else 'hidden' }}
+                                onclick="copyLink({{ m.user_id }})">העתק קישור תשלום</button>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="note">
+        חיוב לכל מנהל בנפרד (₪179). התג של כל מנהל הוא <code>user_id</code>, שמוגדר ב-SUMIT כ-
+        <code>customerexternalidentifier</code> בקישור התשלום. שינוי "חיוב פעיל?" ומחיר נשמרים אצלנו בלבד — לא נשלח דבר ל-SUMIT.
+        <br>
+        כתובת בסיס לדף התשלום: <code>{{ payment_base_url }}</code>
+        — יש להחליף ל-URL של מוצר ה-₪179 האמיתי ב-SUMIT (משתנה סביבה <code>SUMIT_PAYMENT_URL</code>).
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function postBilling(userId, body) {
+    const resp = await fetch(`/api/admin/billing/${userId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+    });
+    if (resp.status === 401) { window.location.href = '/login'; return null; }
+    return resp;
+}
+
+async function toggleActive(userId) {
+    const btn = document.getElementById(`toggle-${userId}`);
+    const turningOn = !btn.classList.contains('on');
+    const resp = await postBilling(userId, {active: turningOn});
+    if (!resp) return;
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        await mkAlert({type: 'danger', title: 'שגיאה', message: err.error || 'שגיאה לא צפויה'});
+        return;
+    }
+    const data = await resp.json();
+    btn.classList.toggle('on', data.active);
+    btn.textContent = data.active ? 'פעיל' : 'כבוי';
+    document.getElementById(`row-${userId}`).classList.toggle('inactive', !data.active);
+    const link = document.getElementById(`link-${userId}`);
+    if (link) link.hidden = !data.active;
+}
+
+async function setFee(userId, input) {
+    const fee = parseFloat(input.value);
+    if (isNaN(fee) || fee < 0) {
+        await mkAlert({type: 'warning', title: 'מחיר לא תקין', message: 'יש להזין מספר חיובי'});
+        return;
+    }
+    const resp = await postBilling(userId, {fee});
+    if (!resp) return;
+    if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        await mkAlert({type: 'danger', title: 'שגיאה', message: err.error || 'שגיאה לא צפויה'});
+        return;
+    }
+}
+
+async function copyLink(userId) {
+    const link = document.getElementById(`link-${userId}`).dataset.link;
+    try {
+        await navigator.clipboard.writeText(link);
+        await mkAlert({type: 'success', title: 'הועתק', message: link});
+    } catch (e) {
+        // Fallback for clipboard-blocked contexts: show the link to copy manually.
+        await mkAlert({type: 'info', title: 'קישור תשלום', message: link});
+    }
+}
+
+async function runSync() {
+    const btn = document.getElementById('sync-btn');
+    btn.disabled = true;
+    btn.textContent = 'מסנכרן...';
+    try {
+        const resp = await fetch('/api/admin/billing/sync', {method: 'POST'});
+        if (resp.status === 401) { window.location.href = '/login'; return; }
+        const data = await resp.json();
+        if (data.connected === false) {
+            await mkAlert({type: 'warning', title: 'לא מחובר ל-SUMIT',
+                           message: data.message || 'חסרים פרטי התחברות ל-SUMIT'});
+            return;
+        }
+        if (data.error) {
+            await mkAlert({type: 'danger', title: 'שגיאת סנכרון', message: data.error});
+            return;
+        }
+        await mkAlert({type: 'success', title: 'סנכרון הושלם',
+                       message: `נבדקו ${data.payments_seen} תשלומים · ${data.paid_managers} מנהלים שילמו החודש`});
+        location.reload();
+    } catch (e) {
+        await mkAlert({type: 'danger', title: 'שגיאה', message: e.message});
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'רענן סטטוס';
+    }
+}
+</script>
+{% endblock %}
