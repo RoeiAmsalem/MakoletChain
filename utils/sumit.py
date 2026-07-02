@@ -31,6 +31,8 @@ _READ_ONLY_ENDPOINTS = {
     "/crm/schema/listfolders/",         # discover the customers folder
     "/crm/data/listentities/",          # list customer entities
     "/crm/data/getentity/",             # read one customer (full props)
+    "/accounting/documents/list/",      # list issued documents (receipts)
+    "/accounting/documents/getdetails/",  # one document incl. embedded customer
 }
 # Secondary tripwire: reject anything that smells like a write even if it were
 # ever added to the allowlist above by accident.
@@ -114,6 +116,29 @@ def list_payments(since):
     if data.get("Status") != 0:
         raise RuntimeError(data.get("UserErrorMessage") or "payments list failed")
     return ((data.get("Data") or {}).get("Payments")) or []
+
+
+def list_documents(since):
+    """List issued documents (receipts/invoices) from `since` (YYYY-MM-DD) to
+    today. Read-only. Returns the raw SUMIT document dicts (DocumentID,
+    DocumentNumber, Date, DocumentValue, CustomerID, CustomerName,
+    ExternalReference, ...)."""
+    from datetime import datetime, timezone
+    to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    data = _post("/accounting/documents/list/", DateFrom=since, DateTo=to,
+                 IncludeDrafts=False)
+    if data.get("Status") != 0:
+        raise RuntimeError(data.get("UserErrorMessage") or "documents list failed")
+    return ((data.get("Data") or {}).get("Documents")) or []
+
+
+def get_document(document_id):
+    """One document's full detail, incl. the embedded Customer object
+    (Name / EmailAddress / ExternalIdentifier). Read-only."""
+    data = _post("/accounting/documents/getdetails/", DocumentID=document_id)
+    if data.get("Status") != 0:
+        raise RuntimeError(data.get("UserErrorMessage") or "document detail failed")
+    return (data.get("Data") or {}).get("Document") or {}
 
 
 def _customers_folder_id():
