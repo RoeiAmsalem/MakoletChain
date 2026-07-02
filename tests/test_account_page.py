@@ -172,6 +172,48 @@ def test_contact_hrefs_exact(client, monkeypatch):
     assert 'href="mailto:KupaShkufa@gmail.com"' in html
 
 
+def test_payment_return_banner_with_doc_number(client, monkeypatch):
+    _login(client, 'unpaid@test.com')
+    html = client.get(
+        '/account?OG-PaymentID=abc123&OG-PaymentType=CreditCard'
+        '&OG-DocumentNumber=40002').data.decode('utf-8')
+    assert 'התשלום התקבל' in html
+    assert "קבלה מס' 40002" in html
+
+
+def test_payment_return_banner_without_doc_number(client, monkeypatch):
+    _login(client, 'unpaid@test.com')
+    html = client.get('/account?OG-PaymentID=abc123').data.decode('utf-8')
+    assert 'התשלום התקבל' in html
+    assert "קבלה מס'" not in html
+    assert 'קבלה נשלחה למייל' in html
+
+
+def test_no_return_params_no_banner(client, monkeypatch):
+    html = _get_account(client, 'unpaid@test.com', monkeypatch)
+    assert 'התשלום התקבל' not in html
+
+
+def test_return_params_are_escaped(client, monkeypatch):
+    _login(client, 'unpaid@test.com')
+    html = client.get('/account', query_string={
+        'OG-PaymentID': 'x', 'OG-DocumentNumber': '<script>alert(1)</script>',
+    }).data.decode('utf-8')
+    assert '<script>alert(1)' not in html
+    assert '&lt;script&gt;' in html
+
+
+def test_return_params_never_flip_state(client, monkeypatch):
+    # inactive-in-DB manager returning with params: banner shows (sync lag UX)
+    # but the subscription state stays exactly as the DB says.
+    _login(client, 'inactive@test.com')
+    html = client.get(
+        '/account?OG-PaymentID=abc&OG-DocumentNumber=40002').data.decode('utf-8')
+    assert 'התשלום התקבל' in html
+    assert 'המנוי אינו פעיל' in html
+    assert 'המנוי פעיל ✓' not in html
+
+
 def test_nav_shows_account_link_for_manager_and_admin(client, monkeypatch):
     for email in ('norow@test.com', 'admin@test.com'):
         html = _get_account(client, email, monkeypatch)

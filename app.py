@@ -1525,8 +1525,18 @@ def account():
     bst = _billing_state(user_id, session.get('user_role'),
                          session.get('user_email'), db)
 
+    # SUMIT post-payment return (the redirect target configured in SUMIT's
+    # page settings points back here with OG-* query params). DISPLAY-ONLY:
+    # never proof of payment and never mutates state — paid/unpaid still comes
+    # exclusively from the sync. Jinja autoescaping handles the untrusted
+    # values; length-capped here as well.
+    og_payment_id = (request.args.get('OG-PaymentID') or '')[:64]
+    og_doc_number = (request.args.get('OG-DocumentNumber') or '')[:32]
+
     return render_template(
         'account.html',
+        payment_return=bool(og_payment_id),
+        payment_doc_number=og_doc_number,
         billing_locked=(bst['state'] == 'locked'),
         billing_active=billing_active,
         paid_this_month=paid_this_month,
