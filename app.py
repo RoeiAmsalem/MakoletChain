@@ -5297,13 +5297,43 @@ def _run_billing_sync(db):
     since = month + '-01'
     try:
         payments = sumit.list_payments(since)
-        customers = sumit.list_customers()
+        documents = sumit.list_documents(since)
     except sumit.SumitNotConnected:
         return {'connected': False, 'message': 'לא מחובר ל-SUMIT'}
     except Exception as e:
         return {'connected': True, 'error': str(e)}
 
-    ext_by_customer = {c['id']: c['external_identifier'] for c in customers}
+    # Payment → tag join goes through the RECEIPT DOCUMENT: the CRM entity
+    # read returns null properties (proven with the live ₪1 test, 2026-07-02),
+    # but every payment's CustomerID matches its receipt's embedded
+    # Customer.ID, which reliably carries the ExternalIdentifier we put on the
+    # payment link. Document details are fetched lazily, once per paying
+    # customer, so the extra reads scale with actual payers.
+    doc_by_customer = {}
+    for d in documents:
+        cid = d.get('CustomerID')
+        if cid is not None and cid not in doc_by_customer:
+            doc_by_customer[cid] = d.get('DocumentID')
+
+    ext_by_customer = {}
+
+    def _tag_for_customer(cid):
+        if cid in ext_by_customer:
+            return ext_by_customer[cid]
+        tag = None
+        doc_id = doc_by_customer.get(cid)
+        if doc_id is not None:
+            try:
+                doc = sumit.get_document(doc_id)
+            except Exception:
+                doc = {}
+            cust = doc.get('Customer') if isinstance(doc.get('Customer'), dict) else {}
+            # join condition: the receipt really belongs to this payer
+            if cust.get('ID') == cid:
+                tag = cust.get('ExternalIdentifier')
+        ext_by_customer[cid] = tag
+        return tag
+
     # tag -> most-recent valid payment date within the current calendar month
     paid_by_tag = {}
     payments_seen = 0
@@ -5311,11 +5341,11 @@ def _run_billing_sync(db):
         if not p.get('ValidPayment'):
             continue
         payments_seen += 1
-        tag = ext_by_customer.get(p.get('CustomerID'))
-        if tag is None:
-            continue
         pdate = (p.get('Date') or '')[:10]
         if pdate[:7] != month:
+            continue
+        tag = _tag_for_customer(p.get('CustomerID'))
+        if tag is None:
             continue
         if tag not in paid_by_tag or pdate > paid_by_tag[tag]:
             paid_by_tag[tag] = pdate
@@ -5337,7 +5367,7 @@ def _run_billing_sync(db):
                 "WHERE user_id=?", (now_iso, row['user_id']))
     db.commit()
     return {'connected': True, 'payments_seen': payments_seen,
-            'paid_managers': matched, 'customers': len(customers)}
+            'paid_managers': matched, 'customers': len(ext_by_customer)}
 
 
 # ── Billing paywall (stage 2) ─────────────────────────────────

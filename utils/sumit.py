@@ -110,8 +110,11 @@ def list_payments(since):
     Returns the raw SUMIT payment dicts (ID, CustomerID, Date, Amount,
     ValidPayment, Status, ...). Raises SumitNotConnected if creds missing.
     """
-    from datetime import datetime, timezone
-    to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from datetime import datetime, timedelta, timezone
+    # SUMIT treats Date_To as a midnight cutoff; payments carry real
+    # timestamps, so SAME-DAY payments fall after it and vanish (proven with
+    # the live ₪1 test, 2026-07-02). Send tomorrow so today is included.
+    to = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
     data = _post("/billing/payments/list/", Date_From=since, Date_To=to, StartIndex=0)
     if data.get("Status") != 0:
         raise RuntimeError(data.get("UserErrorMessage") or "payments list failed")
@@ -123,8 +126,10 @@ def list_documents(since):
     today. Read-only. Returns the raw SUMIT document dicts (DocumentID,
     DocumentNumber, Date, DocumentValue, CustomerID, CustomerName,
     ExternalReference, ...)."""
-    from datetime import datetime, timezone
-    to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from datetime import datetime, timedelta, timezone
+    # Same midnight-cutoff guard as list_payments (document dates are
+    # midnight-stamped so today usually works, but don't rely on it).
+    to = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
     data = _post("/accounting/documents/list/", DateFrom=since, DateTo=to,
                  IncludeDrafts=False)
     if data.get("Status") != 0:
