@@ -26,20 +26,14 @@ for p in sorted(payments, key=lambda x: str(x.get('Date'))):
     print(f"  ID={p.get('ID')} CustomerID={p.get('CustomerID')} "
           f"Amount={p.get('Amount')} Date={p.get('Date')} Valid={p.get('ValidPayment')}")
 
-print('\n── 2. payment → document → tag (right-manager check) ──')
+print('\n── 2. ALL documents → embedded customer tag (right-manager check) ──')
 docs = sumit.list_documents(month_start)
-doc_by_customer = {}
-for d in docs:
-    cid = d.get('CustomerID')
-    if cid is not None and cid not in doc_by_customer:
-        doc_by_customer[cid] = d
-for cid, d in doc_by_customer.items():
+for d in sorted(docs, key=lambda x: x.get('DocumentNumber') or 0):
     detail = sumit.get_document(d.get('DocumentID'))
     cust = detail.get('Customer') if isinstance(detail.get('Customer'), dict) else {}
-    print(f"  CustomerID={cid} → doc №{d.get('DocumentNumber')} "
-          f"(id {d.get('DocumentID')}, ₪{d.get('DocumentValue')}) → "
-          f"Customer.ID={cust.get('ID')} Name={cust.get('Name')!r} "
-          f"Email={cust.get('EmailAddress')!r} "
+    print(f"  doc №{d.get('DocumentNumber')} (₪{d.get('DocumentValue')}, "
+          f"CustomerID={d.get('CustomerID')}) → Customer.ID={cust.get('ID')} "
+          f"Name={cust.get('Name')!r} Email={cust.get('EmailAddress')!r} "
           f"ExternalIdentifier={cust.get('ExternalIdentifier')!r}")
 
 print('\n── 3+4. manager_billing uid 29 (new) and 26 (must be untouched) ──')
