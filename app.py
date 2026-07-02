@@ -1522,8 +1522,12 @@ def account():
         assert (f"customerexternalidentifier={quote(str(user_id), safe='')}"
                 in payment_link)
 
+    bst = _billing_state(user_id, session.get('user_role'),
+                         session.get('user_email'), db)
+
     return render_template(
         'account.html',
+        billing_locked=(bst['state'] == 'locked'),
         billing_active=billing_active,
         paid_this_month=paid_this_month,
         last_paid_date=last_paid,
@@ -5336,6 +5340,137 @@ def _run_billing_sync(db):
             'paid_managers': matched, 'customers': len(customers)}
 
 
+# ── Billing paywall (stage 2) ─────────────────────────────────
+# Policy: billing starts BILLING_START_DATE. An ACTIVE-billed manager who has
+# not paid the current calendar month gets a warning banner for
+# BILLING_GRACE_DAYS days, then is locked to /account until a payment lands
+# (via the read-only SUMIT sync). admin/ceo/demo/active=0 are never affected.
+# FAIL-OPEN everywhere: a billing bug must never lock a paying customer out.
+
+BILLING_START_DATE = os.environ.get('BILLING_START_DATE', '2026-07-05')
+BILLING_GRACE_DAYS = int(os.environ.get('BILLING_GRACE_DAYS', '5') or 5)
+
+# Throttle for the fail-open brrr alert so a broken row can't spam on every
+# request of every user.
+_billing_failopen_last = {'ts': 0.0}
+
+
+def _billing_today():
+    """Today as an Israel-time calendar date. BILLING_FAKE_TODAY (staging /
+    testing only) overrides it so paywall states can be exercised without
+    editing real payment data."""
+    fake = os.environ.get('BILLING_FAKE_TODAY')
+    if fake:
+        try:
+            return date.fromisoformat(fake)
+        except ValueError:
+            pass
+    return _now_il().date()
+
+
+def _billing_fail_open(reason):
+    """Log + (throttled) notify. Callers return 'exempt' after this — the
+    paywall never locks anyone on bad/stale data."""
+    try:
+        app.logger.error(f'billing paywall fail-open: {reason}')
+    except Exception:
+        pass
+    now = time.time()
+    if now - _billing_failopen_last['ts'] > 3600:
+        _billing_failopen_last['ts'] = now
+        try:
+            from utils.notify import notify
+            notify('Billing paywall fail-open',
+                   f'Paywall treated a user as exempt: {str(reason)[:280]}')
+        except Exception:
+            pass
+
+
+def _billing_state(user_id, role, email, db=None):
+    """Paywall state for one user → {'state': exempt|ok|warning|locked, ...}.
+
+    warning adds days_unpaid + days_left (days until lock); locked adds
+    days_unpaid. exempt covers: admin/ceo, the demo account, no row/active=0,
+    today before BILLING_START_DATE, a row the sync/toggle has not touched
+    this month (stale — can't trust 'unpaid' across a month rollover), and
+    ANY exception (fail-open).
+
+    days_unpaid counts from max(BILLING_START_DATE, 1st of current month,
+    activated_at) — so grace restarts every month and a manager toggled on
+    mid-month is never instantly locked.
+    """
+    try:
+        if role in ROLES_ALL_BRANCHES:
+            return {'state': 'exempt'}
+        if (email or '').strip().lower() == DEMO_ACCOUNT_EMAIL:
+            return {'state': 'exempt'}
+        today = _billing_today()
+        start = date.fromisoformat(BILLING_START_DATE)
+        if today < start:
+            return {'state': 'exempt'}
+        db = db or get_db()
+        mb = db.execute(
+            "SELECT active, last_paid_date, last_status, activated_at, "
+            "updated_at FROM manager_billing WHERE user_id=?",
+            (user_id,)).fetchone()
+        if not mb or not mb['active']:
+            return {'state': 'exempt'}
+        month = today.strftime('%Y-%m')
+        if (mb['last_paid_date'] or '')[:7] == month:
+            return {'state': 'ok'}
+        # 'unpaid' is only trustworthy if the SUMIT sync (or the admin toggle)
+        # touched this row THIS month; otherwise the row predates the month
+        # rollover and nobody may be warned/locked on it.
+        if (mb['updated_at'] or '')[:7] != month:
+            _billing_fail_open(
+                f'user {user_id} unpaid but row not synced this month '
+                f'(updated_at={mb["updated_at"]!r})')
+            return {'state': 'exempt'}
+        anchor = max(start, today.replace(day=1))
+        if mb['activated_at']:
+            anchor = max(anchor, date.fromisoformat(mb['activated_at'][:10]))
+        if today < anchor:
+            return {'state': 'exempt'}
+        days_unpaid = (today - anchor).days + 1
+        if days_unpaid <= BILLING_GRACE_DAYS:
+            return {'state': 'warning', 'days_unpaid': days_unpaid,
+                    'days_left': BILLING_GRACE_DAYS - days_unpaid + 1}
+        return {'state': 'locked', 'days_unpaid': days_unpaid}
+    except Exception as e:
+        _billing_fail_open(f'user {user_id}: {e}')
+        return {'state': 'exempt'}
+
+
+# Paths a LOCKED manager may still reach: their account/pay page, auth flows,
+# static assets, and the sync endpoint that unlocks them after payment.
+_BILLING_EXEMPT_PATHS = ('/account', '/login', '/logout', '/forgot-password',
+                         '/reset-password', '/health', '/sw.js',
+                         '/api/admin/billing/sync')
+
+
+@app.before_request
+def _billing_paywall():
+    """THE single paywall chokepoint — runs on every request (pages + API).
+
+    warning → g.billing_warning, rendered as a dismissible banner by
+    base.html. locked → pages redirect to /account (which shows the lock
+    card); API/JSON callers get 402 payment_required instead of a redirect.
+    """
+    if 'user_id' not in session:
+        return
+    path = request.path
+    if path.startswith('/static/') or path in _BILLING_EXEMPT_PATHS:
+        return
+    st = _billing_state(session['user_id'], session.get('user_role'),
+                        session.get('user_email'))
+    if st['state'] == 'locked':
+        if path.startswith('/api/') or request.is_json:
+            return jsonify({'error': 'payment_required'}), 402
+        return redirect('/account')
+    if st['state'] == 'warning':
+        g.billing_warning = st
+
+
 @app.route('/admin/billing')
 @_admin_required
 def admin_billing():
@@ -5390,6 +5525,11 @@ def api_admin_billing_update(user_id):
     if 'active' in data:
         updates.append('active=?')
         params.append(1 if data.get('active') else 0)
+        if data.get('active'):
+            # Grace anchor for late joiners: the paywall's unpaid countdown
+            # starts at toggle-on, never before (see _billing_state).
+            updates.append('activated_at=?')
+            params.append(_billing_today().isoformat())
     if 'fee' in data:
         try:
             fee = float(data.get('fee'))
