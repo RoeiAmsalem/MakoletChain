@@ -18,7 +18,7 @@ if ROOT.startswith('/opt/makolet-chain') and 'staging' not in ROOT:
 sys.path.insert(0, ROOT)
 
 from werkzeug.security import generate_password_hash  # noqa: E402
-from app import app, get_db  # noqa: E402
+from app import app, get_db, _now_il  # noqa: E402
 
 ACTIVE_EMAIL = 'dennis-test@makoletchain.com'
 ACTIVE_PASSWORD = 'Dennis2026!'
@@ -36,9 +36,13 @@ with app.test_request_context():
     db.execute(
         "INSERT OR IGNORE INTO manager_billing (user_id, sumit_tag, fee, active) "
         "VALUES (?, ?, 179, 0)", (active_uid, str(active_uid)))
+    # updated_at stamped like a this-month sync run would — the paywall's
+    # staleness fail-open ignores 'unpaid' rows the sync hasn't touched this
+    # month, so a stale stamp would render dennis exempt instead of warned.
     db.execute(
         "UPDATE manager_billing SET active=1, last_status='unpaid', "
-        "last_paid_date=NULL WHERE user_id=?", (active_uid,))
+        "last_paid_date=NULL, updated_at=? WHERE user_id=?",
+        (_now_il().strftime('%Y-%m-%d %H:%M'), active_uid))
 
     db.execute(
         "DELETE FROM manager_billing WHERE user_id IN "
