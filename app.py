@@ -12,6 +12,7 @@ import time
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import resend
@@ -1487,6 +1488,51 @@ def employees():
 def fixed_expenses():
     ctx = _page_context('fixed')
     return render_template('fixed_expenses.html', **ctx)
+
+
+@app.route('/account')
+@login_required
+def account():
+    """Manager-facing account page (SUMIT billing stage 1): the logged-in
+    user's OWN subscription status from manager_billing + their personal
+    payment link. Read-only against both SUMIT and our DB — no row is created
+    here (a manager with no row simply renders as inactive).
+
+    The payment link is derived from session['user_id'] ONLY — never from a
+    URL param — so a user can never be handed another user's SUMIT tag."""
+    ctx = _page_context('account')
+    db = get_db()
+    user_id = session['user_id']
+    month = _now_il().strftime('%Y-%m')
+    mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                    (user_id,)).fetchone()
+
+    billing_active = bool(mb['active']) if mb else False
+    last_paid = mb['last_paid_date'] if mb else None
+    paid_this_month = bool(billing_active and last_paid and last_paid[:7] == month)
+    fee = mb['fee'] if mb and mb['fee'] is not None else 179
+    if fee == int(fee):
+        fee = int(fee)
+
+    payment_link = None
+    if billing_active and SUMIT_PAYMENT_URL_SET:
+        payment_link = _manager_payment_link(user_id)
+        # Server-side guarantee: the rendered link carries the session user's
+        # tag — nothing else could have been substituted upstream.
+        assert (f"customerexternalidentifier={quote(str(user_id), safe='')}"
+                in payment_link)
+
+    return render_template(
+        'account.html',
+        billing_active=billing_active,
+        paid_this_month=paid_this_month,
+        last_paid_date=last_paid,
+        fee=fee,
+        payment_link=payment_link,
+        payment_url_configured=SUMIT_PAYMENT_URL_SET,
+        admin_no_billing=(session.get('user_role') in ROLES_ALL_BRANCHES
+                          and mb is None),
+        **ctx)
 
 
 # ── Shared helpers ────────────────────────────────────────────
@@ -5207,12 +5253,16 @@ def admin_users():
 # link appends the confirmed customerexternalidentifier param.
 SUMIT_PAYMENT_URL = os.environ.get('SUMIT_PAYMENT_URL',
                                    'https://app.sumit.co.il/checkout/')
+# True only when the env var is explicitly set. The manager-facing /account
+# page hides its pay button behind this, so the placeholder default above is
+# never handed to a paying manager as a real checkout link.
+SUMIT_PAYMENT_URL_SET = bool(os.environ.get('SUMIT_PAYMENT_URL'))
 
 
 def _manager_payment_link(user_id):
     base = SUMIT_PAYMENT_URL
     sep = '&' if '?' in base else '?'
-    return f"{base}{sep}customerexternalidentifier={user_id}"
+    return f"{base}{sep}customerexternalidentifier={quote(str(user_id), safe='')}"
 
 
 def _ensure_manager_billing_rows(db):
