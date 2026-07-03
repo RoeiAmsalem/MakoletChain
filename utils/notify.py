@@ -79,7 +79,8 @@ def _dedup_ok(key: str) -> bool:
     return True
 
 
-def notify(title: str, message: str, critical: bool = False, dedup_key: str = None):
+def notify(title: str, message: str, critical: bool = False, dedup_key: str = None,
+           medium: bool = False):
     """Send a brrr push notification to Roei's phone.
 
     critical=False (default): if a batch is active, buffer for the end-of-run
@@ -87,12 +88,21 @@ def notify(title: str, message: str, critical: bool = False, dedup_key: str = No
     critical=True: page immediately, bypassing any active batch. If dedup_key is
         given, identical criticals within the cooldown window are suppressed
         (collapses a per-branch storm to one page).
+    medium=True: immediate standalone send at the MEDIUM tier — for operational
+        alerts whose urgency sits between info and critical (billing
+        locks-tomorrow, sync failed after retry). The one deliberate exception
+        to "severity derives from how the alert is sent": these are single-shot
+        alerts, not digests, but INFO would undersell them.
     """
     if critical:
         if not _dedup_ok(dedup_key):
             print(f"[brrr] critical deduped ({dedup_key}): {title}")
             return
         _send(_tag(SEV_URGENT, title), message)
+        return
+
+    if medium:
+        _send(_tag(SEV_MEDIUM, title), message)
         return
 
     if _batch is not None:

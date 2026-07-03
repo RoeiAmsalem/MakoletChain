@@ -47,6 +47,7 @@
             <li><a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a></li>
             <li><a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a></li>
             <li><a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a></li>
+            <li><a href="/account" class="{% if active_page == 'account' %}active{% endif %}">החשבון שלי</a></li>
             {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
             <li><a href="/network" class="{% if active_page == 'network' %}active{% endif %}">תצוגת רשת</a></li>
             {% endif %}
@@ -93,6 +94,7 @@
         <a href="/goods" class="{% if active_page == 'goods' %}active{% endif %}">סחורה</a>
         <a href="/fixed-expenses" class="{% if active_page == 'fixed' %}active{% endif %}">הוצאות קבועות</a>
         <a href="/employees" class="{% if active_page == 'employees' %}active{% endif %}">עובדים</a>
+        <a href="/account" class="{% if active_page == 'account' %}active{% endif %}">החשבון שלי</a>
         {% if session.get('user_role') in ('admin', 'ceo') or (session.get('user_branches') and session['user_branches']|length > 1) %}
         <a href="/network" class="{% if active_page == 'network' %}active{% endif %}">תצוגת רשת</a>
         {% endif %}
@@ -130,6 +132,23 @@
 </nav>
 
 <main class="main-content">
+    {% if g.billing_warning %}
+    <div id="billing-warning-banner" style="display:flex; align-items:center; gap:0.6rem; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.4); border-radius:8px; padding:0.55rem 0.9rem; margin-bottom:1rem; font-size:0.84rem; color:#fbbf24;">
+        <span style="flex:1;">
+            המנוי טרם שולם החודש — הגישה תיחסם
+            {% if g.billing_warning.days_left == 1 %}
+            מחר
+            {% else %}
+            בעוד {{ g.billing_warning.days_left }} ימים
+            {% endif %}
+            ·
+            <a href="/account" style="color:#fbbf24; font-weight:700; text-decoration:underline;">
+            לתשלום
+            </a>
+        </span>
+        <button onclick="this.parentElement.style.display='none'" aria-label="סגירה" style="background:none; border:none; color:#fbbf24; font-size:1rem; cursor:pointer; padding:0 4px; flex-shrink:0;">✕</button>
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
 </main>
 

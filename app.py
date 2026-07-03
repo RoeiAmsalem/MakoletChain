@@ -12,6 +12,7 @@ import time
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import resend
@@ -1356,6 +1357,81 @@ def employees():
 def fixed_expenses():
     ctx = _page_context('fixed')
     return render_template('fixed_expenses.html', **ctx)
+
+
+@app.route('/account')
+@login_required
+def account():
+    """Manager-facing account page (SUMIT billing stage 1): the logged-in
+    user's OWN subscription status from manager_billing + their personal
+    payment link. Read-only against both SUMIT and our DB — no row is created
+    here (a manager with no row simply renders as inactive).
+
+    The payment link is derived from session['user_id'] ONLY — never from a
+    URL param — so a user can never be handed another user's SUMIT tag."""
+    ctx = _page_context('account')
+    db = get_db()
+    user_id = session['user_id']
+    month = _now_il().strftime('%Y-%m')
+
+    # SUMIT post-payment return params (see below). Read early: they gate the
+    # layer-A sync-on-return.
+    og_payment_id = (request.args.get('OG-PaymentID') or '')[:64]
+    og_doc_number = (request.args.get('OG-DocumentNumber') or '')[:32]
+
+    mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                    (user_id,)).fetchone()
+
+    # Layer A: returning payer → run the read-only sync now so the page
+    # renders already-green. Skipped when already paid this month (nothing to
+    # flip) and rate-limited per user (OG params can be replayed; they never
+    # write state themselves — the sync remains the only writer).
+    sync_state = None
+    if (og_payment_id and mb and mb['active']
+            and (mb['last_paid_date'] or '')[:7] != month):
+        sync_state = _trigger_payment_sync(user_id)
+        if sync_state == 'done':
+            mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                            (user_id,)).fetchone()
+
+    billing_active = bool(mb['active']) if mb else False
+    last_paid = mb['last_paid_date'] if mb else None
+    paid_this_month = bool(billing_active and last_paid and last_paid[:7] == month)
+    fee = mb['fee'] if mb and mb['fee'] is not None else 179
+    if fee == int(fee):
+        fee = int(fee)
+
+    payment_link = None
+    if billing_active and SUMIT_PAYMENT_URL_SET:
+        payment_link = _manager_payment_link(user_id)
+        # Server-side guarantee: the rendered link carries the session user's
+        # tag — nothing else could have been substituted upstream.
+        assert (f"customerexternalidentifier={quote(str(user_id), safe='')}"
+                in payment_link)
+
+    bst = _billing_state(user_id, session.get('user_role'),
+                         session.get('user_email'), db)
+
+    # The OG-* params are DISPLAY-ONLY (the redirect target configured in
+    # SUMIT's page settings points back here with them): never proof of
+    # payment and never mutate state — paid/unpaid still comes exclusively
+    # from the sync. Jinja autoescaping handles the untrusted values;
+    # length-capped above as well.
+    return render_template(
+        'account.html',
+        payment_return=bool(og_payment_id),
+        payment_doc_number=og_doc_number,
+        sync_pending=(sync_state == 'pending'),
+        billing_locked=(bst['state'] == 'locked'),
+        billing_active=billing_active,
+        paid_this_month=paid_this_month,
+        last_paid_date=last_paid,
+        fee=fee,
+        payment_link=payment_link,
+        payment_url_configured=SUMIT_PAYMENT_URL_SET,
+        admin_no_billing=(session.get('user_role') in ROLES_ALL_BRANCHES
+                          and mb is None),
+        **ctx)
 
 
 # ── Shared helpers ────────────────────────────────────────────
@@ -4601,6 +4677,497 @@ def admin_users():
     return render_template('admin_users.html',
                            current_user_id=session.get('user_id'),
                            **_page_context('admin'))
+
+
+# ── SUMIT Billing (stage 1: READ-ONLY, per-manager) ──────────────────────
+# One ₪179 charge per MANAGER. manager_billing.sumit_tag = str(user_id) — the
+# value we set as the SUMIT customer ExternalIdentifier via each manager's
+# payment link (?customerexternalidentifier=<user_id>). Toggling active / editing
+# the fee writes to manager_billing ONLY — never to SUMIT. Nobody is billed until
+# Roei toggles them on (active defaults to 0).
+
+# Base SUMIT payment-page URL for the ₪179 product. Override via the
+# SUMIT_PAYMENT_URL env var once the real product page exists; the per-manager
+# link appends the confirmed customerexternalidentifier param.
+SUMIT_PAYMENT_URL = os.environ.get('SUMIT_PAYMENT_URL',
+                                   'https://app.sumit.co.il/checkout/')
+# True only when the env var is explicitly set. The manager-facing /account
+# page hides its pay button behind this, so the placeholder default above is
+# never handed to a paying manager as a real checkout link.
+SUMIT_PAYMENT_URL_SET = bool(os.environ.get('SUMIT_PAYMENT_URL'))
+
+
+def _manager_payment_link(user_id):
+    base = SUMIT_PAYMENT_URL
+    sep = '&' if '?' in base else '?'
+    return f"{base}{sep}customerexternalidentifier={quote(str(user_id), safe='')}"
+
+
+def _ensure_manager_billing_rows(db):
+    """One manager_billing row per active manager, created OFF (active=0).
+    sumit_tag = str(user_id) — unique per manager. Idempotent: INSERT OR IGNORE
+    never flips an existing row's active flag or fee."""
+    for row in db.execute(
+            "SELECT id FROM users WHERE role='manager' AND active=1").fetchall():
+        db.execute(
+            "INSERT OR IGNORE INTO manager_billing (user_id, sumit_tag, fee, active) "
+            "VALUES (?,?,179,0)", (row['id'], str(row['id'])))
+    db.commit()
+
+
+def _run_billing_sync(db):
+    """READ-ONLY vs SUMIT. Pull this-month payments, map each to a manager via
+    payment.CustomerID -> customer.ExternalIdentifier == sumit_tag, and update
+    manager_billing.last_paid_date / last_status. Returns a summary dict.
+
+    Never creates/charges anything in SUMIT. On an empty account this simply
+    marks everyone 'unpaid' and returns paid_managers=0 — proving the join runs.
+    """
+    from utils import sumit
+    if not sumit.is_connected():
+        return {'connected': False, 'message': 'לא מחובר ל-SUMIT'}
+
+    month = _now_il().strftime('%Y-%m')
+    since = month + '-01'
+    try:
+        payments = sumit.list_payments(since)
+        documents = sumit.list_documents(since)
+    except sumit.SumitNotConnected:
+        return {'connected': False, 'message': 'לא מחובר ל-SUMIT'}
+    except Exception as e:
+        return {'connected': True, 'error': str(e)}
+
+    # Payment → tag join goes through the RECEIPT DOCUMENT: the CRM entity
+    # read returns null properties (proven with the live ₪1 test, 2026-07-02),
+    # but every payment's CustomerID matches its receipt's embedded
+    # Customer.ID, which reliably carries the ExternalIdentifier we put on the
+    # payment link. Document details are fetched lazily, once per paying
+    # customer, so the extra reads scale with actual payers.
+    doc_by_customer = {}
+    for d in documents:
+        cid = d.get('CustomerID')
+        if cid is not None and cid not in doc_by_customer:
+            doc_by_customer[cid] = d.get('DocumentID')
+
+    ext_by_customer = {}
+
+    def _tag_for_customer(cid):
+        if cid in ext_by_customer:
+            return ext_by_customer[cid]
+        tag = None
+        doc_id = doc_by_customer.get(cid)
+        if doc_id is not None:
+            try:
+                doc = sumit.get_document(doc_id)
+            except Exception:
+                doc = {}
+            cust = doc.get('Customer') if isinstance(doc.get('Customer'), dict) else {}
+            # join condition: the receipt really belongs to this payer
+            if cust.get('ID') == cid:
+                tag = cust.get('ExternalIdentifier')
+        ext_by_customer[cid] = tag
+        return tag
+
+    # tag -> most-recent valid payment date within the current calendar month
+    paid_by_tag = {}
+    payments_seen = 0
+    for p in payments:
+        if not p.get('ValidPayment'):
+            continue
+        payments_seen += 1
+        pdate = (p.get('Date') or '')[:10]
+        if pdate[:7] != month:
+            continue
+        tag = _tag_for_customer(p.get('CustomerID'))
+        if tag is None:
+            continue
+        if tag not in paid_by_tag or pdate > paid_by_tag[tag]:
+            paid_by_tag[tag] = pdate
+
+    now_iso = _now_il().strftime('%Y-%m-%d %H:%M')
+    matched = 0
+    for row in db.execute(
+            "SELECT user_id, sumit_tag FROM manager_billing").fetchall():
+        tag = row['sumit_tag']
+        if tag in paid_by_tag:
+            db.execute(
+                "UPDATE manager_billing SET last_paid_date=?, last_status='paid', "
+                "updated_at=? WHERE user_id=?",
+                (paid_by_tag[tag], now_iso, row['user_id']))
+            matched += 1
+        else:
+            db.execute(
+                "UPDATE manager_billing SET last_status='unpaid', updated_at=? "
+                "WHERE user_id=?", (now_iso, row['user_id']))
+    db.commit()
+    return {'connected': True, 'payments_seen': payments_seen,
+            'paid_managers': matched, 'customers': len(ext_by_customer)}
+
+
+def _run_billing_sync_logged(db, source):
+    """All sync entrypoints funnel here so /admin/billing can show which layer
+    ran last: 'auto' (scheduled sweep) / 'manual' (רענן button) / 'payment'
+    (sync-on-return). Logging failures never break the sync itself."""
+    started = _now_il().strftime('%Y-%m-%d %H:%M:%S')
+    res = _run_billing_sync(db)
+    ok = 1 if (res.get('connected') and not res.get('error')) else 0
+    err = None if ok else (res.get('error') or res.get('message'))
+    try:
+        db.execute(
+            "INSERT INTO billing_sync_runs (started_at, finished_at, source, ok, "
+            "payments_seen, paid_managers, error) VALUES (?,?,?,?,?,?,?)",
+            (started, _now_il().strftime('%Y-%m-%d %H:%M:%S'), source, ok,
+             res.get('payments_seen'), res.get('paid_managers'), err))
+        db.commit()
+    except Exception as e:
+        app.logger.error(f'billing_sync_runs log failed: {e}')
+    return res
+
+
+# ── Billing motor layer A: sync-on-return ─────────────────────
+# A manager landing back on /account from SUMIT (OG-* params present) triggers
+# the same READ-ONLY sync the רענן button runs — their paid state flips
+# immediately instead of waiting for the scheduled sweep. The OG params NEVER
+# write state: they only schedule this sync, so a forged/replayed param at
+# worst causes one harmless read-only sync per user per minute.
+
+_PAYMENT_SYNC_MIN_INTERVAL = 60    # per-user seconds between triggered syncs
+_PAYMENT_SYNC_INLINE_WAIT = 3.0    # render inline if the sync finishes this fast
+_payment_sync_last = {}            # user_id -> monotonic ts (single worker: -w 1)
+_payment_sync_lock = threading.Lock()
+
+
+def _trigger_payment_sync(user_id):
+    """Returns 'done' (sync finished — re-read state before rendering),
+    'pending' (still running in the background — render the מתעדכן hint with
+    one auto-refresh), or 'skipped' (rate-limited)."""
+    with _payment_sync_lock:
+        now = time.monotonic()
+        last = _payment_sync_last.get(user_id)
+        if last is not None and now - last < _PAYMENT_SYNC_MIN_INTERVAL:
+            return 'skipped'
+        _payment_sync_last[user_id] = now
+
+    done = threading.Event()
+
+    def _run():
+        try:
+            with app.app_context():
+                _run_billing_sync_logged(get_db(), 'payment')
+        except Exception as e:
+            app.logger.error(f'payment-return sync failed (fail-open): {e}')
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, daemon=True,
+                     name=f'billing-sync-u{user_id}').start()
+    return 'done' if done.wait(_PAYMENT_SYNC_INLINE_WAIT) else 'pending'
+
+
+# ── Billing motor layer C: transition alerts ──────────────────
+
+def _billing_alert_state_of(st):
+    """Collapse a paywall state dict into the tracked alert state. 'exempt'
+    maps to None — exempt users are never tracked or alerted."""
+    if st.get('state') == 'locked':
+        return 'locked'
+    if st.get('state') == 'warning':
+        return 'warning_final' if st.get('days_left', 99) <= 1 else 'warning'
+    if st.get('state') == 'ok':
+        return 'ok'
+    return None
+
+
+def _billing_alert_pass(db):
+    """One brrr per STATE TRANSITION per manager: entered warning 🟡, locks
+    tomorrow 🟠, locked 🔴, paid after warning/lock 🟡. Repeated runs with an
+    unchanged state send nothing (alert_state is the last alerted state;
+    alert_date makes the dedup auditable). Returns [(user_id, prev, new)]."""
+    from utils.notify import notify
+    today = _billing_today().isoformat()
+    sent = []
+    for row in db.execute(
+            "SELECT mb.user_id, mb.alert_state, u.name, u.email, u.role "
+            "FROM manager_billing mb JOIN users u ON u.id = mb.user_id "
+            "WHERE mb.active = 1 AND u.active = 1").fetchall():
+        st = _billing_state(row['user_id'], row['role'], row['email'], db)
+        new = _billing_alert_state_of(st)
+        prev = row['alert_state']
+        if new is None or new == prev:
+            continue
+        db.execute("UPDATE manager_billing SET alert_state=?, alert_date=? "
+                   "WHERE user_id=?", (new, today, row['user_id']))
+        name = row['name'] or row['email']
+        title = message = None
+        kwargs = {}
+        if new == 'warning':
+            title = f'Billing: {name} unpaid'
+            message = (f'Manager {name} entered payment warning — '
+                       f'{st.get("days_left")} days before lock.')
+        elif new == 'warning_final':
+            title = f'Billing: {name} locks TOMORROW'
+            message = f'Manager {name} still unpaid — access locks tomorrow.'
+            kwargs = {'medium': True}
+        elif new == 'locked':
+            title = f'Billing: {name} LOCKED'
+            message = (f'Manager {name} locked out after '
+                       f'{st.get("days_unpaid")} unpaid days. '
+                       f'/account stays reachable for payment.')
+            kwargs = {'critical': True,
+                      'dedup_key': f'billing-lock-{row["user_id"]}'}
+        elif new == 'ok' and prev in ('warning', 'warning_final', 'locked'):
+            title = f'Billing: {name} paid'
+            message = f'Manager {name} paid — access OK again.'
+        if title:
+            notify(title, message, **kwargs)
+            sent.append((row['user_id'], prev, new))
+    db.commit()
+    return sent
+
+
+# ── Billing paywall (stage 2) ─────────────────────────────────
+# Policy: billing starts BILLING_START_DATE. An ACTIVE-billed manager who has
+# not paid the current calendar month gets a warning banner for
+# BILLING_GRACE_DAYS days, then is locked to /account until a payment lands
+# (via the read-only SUMIT sync). admin/ceo/demo/active=0 are never affected.
+# FAIL-OPEN everywhere: a billing bug must never lock a paying customer out.
+
+BILLING_START_DATE = os.environ.get('BILLING_START_DATE', '2026-07-05')
+BILLING_GRACE_DAYS = int(os.environ.get('BILLING_GRACE_DAYS', '5') or 5)
+
+# Throttle for the fail-open brrr alert so a broken row can't spam on every
+# request of every user.
+_billing_failopen_last = {'ts': 0.0}
+
+
+def _billing_today():
+    """Today as an Israel-time calendar date. BILLING_FAKE_TODAY (staging /
+    testing only) overrides it so paywall states can be exercised without
+    editing real payment data."""
+    fake = os.environ.get('BILLING_FAKE_TODAY')
+    if fake:
+        try:
+            return date.fromisoformat(fake)
+        except ValueError:
+            pass
+    return _now_il().date()
+
+
+def _billing_fail_open(reason):
+    """Log + (throttled) notify. Callers return 'exempt' after this — the
+    paywall never locks anyone on bad/stale data."""
+    try:
+        app.logger.error(f'billing paywall fail-open: {reason}')
+    except Exception:
+        pass
+    now = time.time()
+    if now - _billing_failopen_last['ts'] > 3600:
+        _billing_failopen_last['ts'] = now
+        try:
+            from utils.notify import notify
+            notify('Billing paywall fail-open',
+                   f'Paywall treated a user as exempt: {str(reason)[:280]}')
+        except Exception:
+            pass
+
+
+def _billing_state(user_id, role, email, db=None):
+    """Paywall state for one user → {'state': exempt|ok|warning|locked, ...}.
+
+    warning adds days_unpaid + days_left (days until lock); locked adds
+    days_unpaid. exempt covers: admin/ceo, the demo account, no row/active=0,
+    today before BILLING_START_DATE, a row the sync/toggle has not touched
+    this month (stale — can't trust 'unpaid' across a month rollover), and
+    ANY exception (fail-open).
+
+    days_unpaid counts from max(BILLING_START_DATE, 1st of current month,
+    activated_at) — so grace restarts every month and a manager toggled on
+    mid-month is never instantly locked.
+    """
+    try:
+        if role in ROLES_ALL_BRANCHES:
+            return {'state': 'exempt'}
+        if (email or '').strip().lower() == DEMO_ACCOUNT_EMAIL:
+            return {'state': 'exempt'}
+        today = _billing_today()
+        start = date.fromisoformat(BILLING_START_DATE)
+        if today < start:
+            return {'state': 'exempt'}
+        db = db or get_db()
+        mb = db.execute(
+            "SELECT active, last_paid_date, last_status, activated_at, "
+            "updated_at FROM manager_billing WHERE user_id=?",
+            (user_id,)).fetchone()
+        if not mb or not mb['active']:
+            return {'state': 'exempt'}
+        month = today.strftime('%Y-%m')
+        if (mb['last_paid_date'] or '')[:7] == month:
+            return {'state': 'ok'}
+        # 'unpaid' is only trustworthy if the SUMIT sync (or the admin toggle)
+        # touched this row THIS month; otherwise the row predates the month
+        # rollover and nobody may be warned/locked on it.
+        if (mb['updated_at'] or '')[:7] != month:
+            _billing_fail_open(
+                f'user {user_id} unpaid but row not synced this month '
+                f'(updated_at={mb["updated_at"]!r})')
+            return {'state': 'exempt'}
+        anchor = max(start, today.replace(day=1))
+        if mb['activated_at']:
+            anchor = max(anchor, date.fromisoformat(mb['activated_at'][:10]))
+        if today < anchor:
+            return {'state': 'exempt'}
+        days_unpaid = (today - anchor).days + 1
+        if days_unpaid <= BILLING_GRACE_DAYS:
+            return {'state': 'warning', 'days_unpaid': days_unpaid,
+                    'days_left': BILLING_GRACE_DAYS - days_unpaid + 1}
+        return {'state': 'locked', 'days_unpaid': days_unpaid}
+    except Exception as e:
+        _billing_fail_open(f'user {user_id}: {e}')
+        return {'state': 'exempt'}
+
+
+# Paths a LOCKED manager may still reach: their account/pay page, auth flows,
+# static assets, and the sync endpoint that unlocks them after payment.
+_BILLING_EXEMPT_PATHS = ('/account', '/login', '/logout', '/forgot-password',
+                         '/reset-password', '/health', '/sw.js',
+                         '/api/admin/billing/sync')
+
+
+@app.before_request
+def _billing_paywall():
+    """THE single paywall chokepoint — runs on every request (pages + API).
+
+    warning → g.billing_warning, rendered as a dismissible banner by
+    base.html. locked → pages redirect to /account (which shows the lock
+    card); API/JSON callers get 402 payment_required instead of a redirect.
+    """
+    if 'user_id' not in session:
+        return
+    path = request.path
+    if path.startswith('/static/') or path in _BILLING_EXEMPT_PATHS:
+        return
+    st = _billing_state(session['user_id'], session.get('user_role'),
+                        session.get('user_email'))
+    if st['state'] == 'locked':
+        if path.startswith('/api/') or request.is_json:
+            return jsonify({'error': 'payment_required'}), 402
+        return redirect('/account')
+    if st['state'] == 'warning':
+        g.billing_warning = st
+
+
+@app.route('/admin/billing')
+@_admin_required
+def admin_billing():
+    from utils import sumit
+    db = get_db()
+    _ensure_manager_billing_rows(db)
+    month = _now_il().strftime('%Y-%m')
+
+    managers = []
+    for u in db.execute(
+            "SELECT id, name, email FROM users "
+            "WHERE role='manager' AND active=1 ORDER BY id").fetchall():
+        mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                        (u['id'],)).fetchone()
+        branches = db.execute(
+            "SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
+            "WHERE ub.user_id=? ORDER BY b.id", (u['id'],)).fetchall()
+        last_paid = mb['last_paid_date'] if mb else None
+        st = _billing_state(u['id'], 'manager', u['email'], db)
+        state = st.get('state', 'exempt')
+        state_label = {
+            'ok': 'תקין',
+            'warning': f"אזהרה · {st.get('days_left')} ימים",
+            'locked': 'נעול',
+            'exempt': 'פטור',
+        }.get(state, state)
+        managers.append({
+            'user_id': u['id'],
+            'name': u['name'],
+            'email': u['email'],
+            'branch_names': ', '.join(b['name'] for b in branches) or '—',
+            'sumit_tag': mb['sumit_tag'] if mb else str(u['id']),
+            'fee': mb['fee'] if mb else 179,
+            'active': bool(mb['active']) if mb else False,
+            'paid_this_month': bool(last_paid and last_paid[:7] == month),
+            'last_paid_date': last_paid or '—',
+            'payment_link': _manager_payment_link(u['id']),
+            'state': state,
+            'state_label': state_label,
+        })
+
+    # "סונכרן לאחרונה" — which layer ran the last sync (auto/manual/payment).
+    last_run = db.execute(
+        "SELECT * FROM billing_sync_runs ORDER BY id DESC LIMIT 1").fetchone()
+    last_sync = None
+    if last_run:
+        last_sync = {
+            'time': last_run['started_at'][11:16],
+            'date': last_run['started_at'][:10],
+            'ok': bool(last_run['ok']),
+            'source_he': {'auto': 'אוטומטי', 'manual': 'ידני',
+                          'payment': 'תשלום'}.get(last_run['source'],
+                                                  last_run['source']),
+        }
+
+    return render_template('admin_billing.html',
+                           managers=managers,
+                           sumit_connected=sumit.is_connected(),
+                           payment_base_url=SUMIT_PAYMENT_URL,
+                           billing_month=month,
+                           last_sync=last_sync,
+                           **_page_context('admin'))
+
+
+@app.route('/api/admin/billing/<int:user_id>', methods=['POST'])
+@_admin_required
+def api_admin_billing_update(user_id):
+    """Update a manager's billing row (active toggle and/or fee). Writes to our
+    DB only — never to SUMIT."""
+    data = request.get_json(silent=True) or {}
+    db = get_db()
+    # ensure the row exists (manager may not have been materialised yet)
+    db.execute(
+        "INSERT OR IGNORE INTO manager_billing (user_id, sumit_tag, fee, active) "
+        "VALUES (?,?,179,0)", (user_id, str(user_id)))
+    updates, params = [], []
+    if 'active' in data:
+        updates.append('active=?')
+        params.append(1 if data.get('active') else 0)
+        if data.get('active'):
+            # Grace anchor for late joiners: the paywall's unpaid countdown
+            # starts at toggle-on, never before (see _billing_state).
+            updates.append('activated_at=?')
+            params.append(_billing_today().isoformat())
+    if 'fee' in data:
+        try:
+            fee = float(data.get('fee'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'מחיר לא תקין'}), 400
+        if fee < 0:
+            return jsonify({'error': 'מחיר לא תקין'}), 400
+        updates.append('fee=?')
+        params.append(fee)
+    if not updates:
+        return jsonify({'ok': True})
+    updates.append("updated_at=?")
+    params.append(_now_il().strftime('%Y-%m-%d %H:%M'))
+    params.append(user_id)
+    db.execute("UPDATE manager_billing SET " + ', '.join(updates) +
+               " WHERE user_id=?", params)
+    db.commit()
+    row = db.execute("SELECT active, fee FROM manager_billing WHERE user_id=?",
+                     (user_id,)).fetchone()
+    return jsonify({'ok': True, 'active': bool(row['active']), 'fee': row['fee']})
+
+
+@app.route('/api/admin/billing/sync', methods=['POST'])
+@_admin_required
+def api_admin_billing_sync():
+    """Run the read-only SUMIT sync on demand (the 'רענן סטטוס' button)."""
+    db = get_db()
+    return jsonify(_run_billing_sync_logged(db, 'manual'))
 
 
 @app.route('/admin/franchise-classifier')
