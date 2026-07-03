@@ -678,14 +678,15 @@ def test_branch_ids_for_date_full_run():
 
 
 def test_branch_ids_for_date_missing_only():
-    """missing_only filters out branches that already have ANY row for the date,
-    including closed-day sentinels (z_number IS NULL)."""
+    """missing_only skips only branches with a REAL Z for the date. Closed-day
+    sentinels are re-probed — a Z closed after the primary run must still be
+    captured by the backfill window (9009 on 2026-07-01)."""
     conn = _multi_branch_db()
-    # 126 has a real row; 127 has a closed-day sentinel — both must be skipped.
+    # 126 has a real row → skipped; 127 has a sentinel → re-probed.
     conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
                  "VALUES (126, '2026-05-24', 1234, 10000.00)")
     zr.record_closed_day(conn, 127, '2026-05-24')
-    assert zr._branch_ids_for_date(conn, '2026-05-24', missing_only=True) == []
+    assert zr._branch_ids_for_date(conn, '2026-05-24', missing_only=True) == [127]
     # Different date → both still missing
     assert zr._branch_ids_for_date(conn, '2026-05-25', missing_only=True) == [126, 127]
 
@@ -705,7 +706,7 @@ def test_record_closed_day_does_not_overwrite_real_row():
 
 
 def test_closed_day_writes_sentinel_row(monkeypatch, sample_pdf_bytes):
-    """run_for_branch's closed-day path writes a sentinel so later passes skip."""
+    """run_for_branch's closed-day path writes a sentinel row."""
     conn = _multi_branch_db()
     _stub_success_path(monkeypatch, sample_pdf_bytes)
     # Filters returns 200 but no Z matching the target date → closed-day.
@@ -754,8 +755,10 @@ def test_backfill_only_pulls_missing(monkeypatch, sample_pdf_bytes):
     assert out[0]['branch_id'] == 126
 
 
-def test_backfill_skips_closed_day_branch(monkeypatch, sample_pdf_bytes):
-    """A branch marked closed-day on an earlier pass is skipped on later passes."""
+def test_backfill_reprobes_closed_day_branch(monkeypatch, sample_pdf_bytes):
+    """A branch sentineled on an earlier pass IS re-probed by backfill, and a
+    late-closed Z (now present in the filters) overwrites the sentinel —
+    the 9009 2026-07-01 recovery scenario."""
     conn = _multi_branch_db()
     _stub_success_path(monkeypatch, sample_pdf_bytes)
     monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
@@ -766,8 +769,11 @@ def test_backfill_skips_closed_day_branch(monkeypatch, sample_pdf_bytes):
     seen = _spy_run_for_branch(monkeypatch)
     zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
 
-    assert 126 not in seen, 'closed-day branch must not be re-probed in backfill'
-    assert seen == [127]
+    assert sorted(seen) == [126, 127], 'sentinel branch must be re-probed'
+    row = conn.execute(
+        "SELECT z_number FROM z_report_902 "
+        "WHERE branch_id=126 AND date='2026-05-20'").fetchone()
+    assert row['z_number'] is not None, 'late Z must overwrite the sentinel'
 
 
 def test_902_chain_auth_uses_chain_token_and_db_aviv_branch_id(monkeypatch, staging_db, sample_pdf_bytes):
@@ -983,27 +989,26 @@ def test_primary_run_pulls_all_branches(monkeypatch, sample_pdf_bytes):
     assert sorted(seen) == [126, 127]
 
 
-def test_backfill_interval_skips_resolved(monkeypatch, sample_pdf_bytes):
-    """Interval backfill: a branch with a row (real or sentinel) is skipped on
-    later 30-min ticks. Simulates ticks N, N+1, N+2 — branch never re-probed.
-    """
+def test_backfill_interval_reprobes_sentinel_until_real(monkeypatch, sample_pdf_bytes):
+    """Interval backfill: a real row is never re-probed; a sentinel is
+    re-probed each tick until a real Z lands, then stops."""
     conn = _multi_branch_db()
     _stub_success_path(monkeypatch, sample_pdf_bytes)
     monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _good_filters())
 
-    # Tick 1: 126 lands a real row, 127 still missing.
+    # Tick 1: 126 landed a real row; 127 got a closed-day sentinel.
     conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
                  "VALUES (126, '2026-05-20', 2525, 5000.0)")
-    # 127 already marked closed-day (sentinel) on the primary run.
     zr.record_closed_day(conn, 127, '2026-05-20')
     conn.commit()
 
     seen = _spy_run_for_branch(monkeypatch)
-    # Tick 2 and Tick 3 (both --missing-only) — neither branch should be touched.
+    # Tick 2: only 127 is re-probed; the (stubbed) Z now exists → real row.
+    # Tick 3: 127 is resolved for real — nothing attempted.
     zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
     zr.run_all_branches('2026-05-20', missing_only=True, conn=conn)
-    assert seen == [], \
-        f'resolved branches (real + sentinel) must not be re-probed; got {seen}'
+    assert seen == [127], \
+        f'only the sentinel branch may be re-probed, once; got {seen}'
 
 
 def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
@@ -1067,7 +1072,8 @@ def test_backfill_interval_retries_missing(monkeypatch, sample_pdf_bytes):
 
 def _autoseed_db():
     """In-memory DB whose branches table has the chain-mode columns the
-    autoseed path needs (id, name, active, aviv_branch_id)."""
+    autoseed path needs (id, name, active, aviv_branch_id). fixed_expenses
+    is required since autoseed seeds the default זיכיונות row (4c09799)."""
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript('''
@@ -1083,6 +1089,11 @@ def _autoseed_db():
             trigger_type TEXT,
             auth_source TEXT,
             UNIQUE(branch_id, date)
+        );
+        CREATE TABLE fixed_expenses (
+            branch_id INTEGER, month TEXT, name TEXT, amount REAL,
+            expense_type TEXT, pct_value REAL,
+            UNIQUE(branch_id, name, month, expense_type)
         );
     ''')
     # Existing mappings: 126 → aviv 3, 127 → aviv 8.

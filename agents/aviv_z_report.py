@@ -35,6 +35,8 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import requests
 import urllib3
 
+from utils.notify import notify
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 log = logging.getLogger(__name__)
@@ -909,9 +911,13 @@ def parse_112_departments(xls_bytes: bytes) -> list[dict]:
 def record_closed_day(conn, branch_id: int, target_date: str,
                       trigger_type: str = 'auto',
                       auth_source: str | None = None) -> None:
-    """Insert a sentinel row (z_number=NULL, amount=NULL) so backfill passes
-    later in the night recognize this (branch, date) as resolved-no-data and
-    don't re-probe Aviv. INSERT OR IGNORE: never overwrite a real row.
+    """Insert a sentinel row (z_number=NULL, amount=NULL) marking "Aviv had
+    no Z for this (branch, date) when probed". INSERT OR IGNORE: never
+    overwrite a real row.
+
+    Backfill passes DO re-probe sentinels (a Z closed after the primary run
+    must still land); a real Z found later overwrites the sentinel via
+    upsert_z_report's ON CONFLICT UPDATE.
 
     Metadata is recorded for the sentinel too — /z-status surfaces it the
     same way it does for real rows.
@@ -1140,8 +1146,9 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
 
         z_number = resolve_z_for_date(filters, target_date)
         if not z_number:
-            # Filters call succeeded but no Z for this date → store was closed.
-            # Mark resolved so 03/04/05 backfill passes skip this branch.
+            # Filters call succeeded but no Z for this date (yet) — store was
+            # closed, or the Z will be closed late. Sentinel it; backfill
+            # passes re-probe sentinels until the window ends.
             record_closed_day(conn, branch_id, target_date,
                               trigger_type=trigger_type,
                               auth_source=auth_source)
@@ -1223,12 +1230,139 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
             conn.close()
 
 
+# ---- Alerting (brrr) -------------------------------------------------------
+#
+# Two independent signals, both deduped once-per-branch/day via z_alert_log
+# (migration 036) because each cron pass is a separate process:
+#   z_fetch_fail — a branch hard-failed a run (transient-give-up, 5xx, parse).
+#     Fired from run_all_branches on auto runs only.
+#   missing_z    — after the whole backfill window, a branch that should have
+#     traded still has no revenue for target_date. Fired by --check-missing.
+
+def _alert_once(conn, branch_id: int, target_date: str, kind: str) -> bool:
+    """True exactly once per (branch, date, kind) — INSERT OR IGNORE gate."""
+    cur = conn.execute(
+        'INSERT OR IGNORE INTO z_alert_log (branch_id, date, kind) '
+        'VALUES (?, ?, ?)', (branch_id, target_date, kind))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def _branch_names(conn, branch_ids) -> dict:
+    if not branch_ids:
+        return {}
+    qmarks = ','.join('?' * len(branch_ids))
+    return {r['id']: r['name'] for r in conn.execute(
+        f'SELECT id, name FROM branches WHERE id IN ({qmarks})',
+        list(branch_ids)).fetchall()}
+
+
+def alert_run_failures(conn, results: list[dict], target_date: str) -> int:
+    """brrr one 🟡 message covering this run's fresh hard failures.
+
+    "no Z for date" is the closed-day path, not a failure — excluded (the
+    missing-Z check owns that signal). Returns how many branches were
+    freshly alerted; already-alerted branches stay silent, so 16 backfill
+    passes hitting the same broken branch page once, not 16 times.
+    """
+    fails = [r for r in results
+             if not r.get('ok') and r.get('error') != 'no Z for date'
+             and r.get('branch_id') is not None]
+    fresh = [r for r in fails
+             if _alert_once(conn, r['branch_id'], target_date, 'z_fetch_fail')]
+    if not fresh:
+        return 0
+    names = _branch_names(conn, [r['branch_id'] for r in fresh])
+    lines = [f"{r['branch_id']} ({names.get(r['branch_id'], '?')}): "
+             f"{str(r.get('error'))[:120]}"
+             for r in fresh]
+    notify(f'Z fetch failed for {len(fresh)} branch(es) — {target_date}',
+           '\n'.join(lines))
+    return len(fresh)
+
+
+def _expected_closed(conn, branch_id: int, target_date: str) -> bool:
+    """True when history says this branch does not trade on this weekday.
+
+    Looks at the same weekday 1/2/3 weeks back: expected-closed iff none of
+    those days has a real Z AND at least one has a closed-day sentinel (i.e.
+    we probed and Aviv confirmed no Z — not just a data gap or a brand-new
+    branch). Handles per-branch Saturday variation: a Saturday-closed store
+    is silenced, a Saturday-trading store still alerts.
+    """
+    lookback = [
+        (date.fromisoformat(target_date) - timedelta(days=7 * k)).isoformat()
+        for k in (1, 2, 3)]
+    qmarks = ','.join('?' * len(lookback))
+    row = conn.execute(
+        f'SELECT SUM(z_number IS NOT NULL) AS real_zs, '
+        f'       SUM(z_number IS NULL) AS sentinels '
+        f'FROM z_report_902 WHERE branch_id=? AND date IN ({qmarks})',
+        [branch_id, *lookback]).fetchone()
+    real_zs = row['real_zs'] or 0
+    sentinels = row['sentinels'] or 0
+    return real_zs == 0 and sentinels > 0
+
+
+def check_missing_z(target_date: str | None = None,
+                    conn: sqlite3.Connection | None = None) -> dict:
+    """Post-backfill completeness check: brrr 🟡 any branch still without
+    revenue for target_date (default yesterday IL), unless history says the
+    branch is expected closed that weekday.
+
+    A branch counts as covered by EITHER a real z_report_902 row or a
+    positive daily_sales amount (Gmail-Z path). Deduped once per branch/day
+    (kind='missing_z'), so re-runs are safe. Runs after the last backfill
+    pass — proposed cron 10:00 UTC (13:00 IL).
+    """
+    target_date = target_date or _yesterday_il()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+    try:
+        bids = _branch_ids_for_date(conn, target_date, missing_only=False,
+                                    chain_mode=USE_CHAIN_AUTH)
+        covered = {r['branch_id'] for r in conn.execute(
+            'SELECT branch_id FROM z_report_902 '
+            'WHERE date=? AND z_number IS NOT NULL', (target_date,))}
+        covered |= {r['branch_id'] for r in conn.execute(
+            'SELECT branch_id FROM daily_sales '
+            'WHERE date=? AND amount > 0', (target_date,))}
+        missing = [b for b in bids if b not in covered]
+        expected_closed = [b for b in missing
+                           if _expected_closed(conn, b, target_date)]
+        to_alert = [b for b in missing if b not in expected_closed]
+        fresh = [b for b in to_alert
+                 if _alert_once(conn, b, target_date, 'missing_z')]
+        if fresh:
+            names = _branch_names(conn, fresh)
+            lines = [f'{b} ({names.get(b, "?")})' for b in fresh]
+            notify(f'Z missing for {len(fresh)} branch(es) — {target_date}',
+                   'No Z captured after all backfill passes: '
+                   + ', '.join(lines))
+        result = {'date': target_date, 'checked': len(bids),
+                  'missing': missing, 'expected_closed': expected_closed,
+                  'alerted': fresh}
+        log.info('missing-Z check %s: %d checked, missing=%s, '
+                 'expected_closed=%s, alerted=%s', target_date, len(bids),
+                 missing, expected_closed, fresh)
+        return result
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def _branch_ids_for_date(conn, target_date: str, missing_only: bool,
                          chain_mode: bool = False) -> list[int]:
-    """All active branches, or only those missing a z_report_902 row for target_date.
+    """All active branches, or only those missing a REAL Z for target_date.
 
-    A "row" is anything — a real Z OR a closed-day sentinel (z_number IS NULL).
-    Both count as resolved; backfill must not re-probe either.
+    Only a real Z (z_number IS NOT NULL) counts as resolved. Closed-day
+    sentinels are re-probed by every backfill pass: a store that closes its
+    Z after the 02:00 IL primary run (9009 on 2026-07-01 closed Z 1728 late)
+    must be picked up by the 05:00–12:30 IL window, not locked out for the
+    day. A re-probe of a genuinely closed day is one cheap 200 "no Z" call;
+    the sentinel becomes final simply because the window ends.
 
     chain_mode=True requires branches.aviv_branch_id NOT NULL; per-branch mode
     requires aviv_user_id NOT NULL.
@@ -1247,7 +1381,8 @@ def _branch_ids_for_date(conn, target_date: str, missing_only: bool,
     if not missing_only:
         return all_branches
     done = {r['branch_id'] for r in conn.execute(
-        'SELECT branch_id FROM z_report_902 WHERE date=?',
+        'SELECT branch_id FROM z_report_902 '
+        'WHERE date=? AND z_number IS NOT NULL',
         (target_date,)
     ).fetchall()}
     return [bid for bid in all_branches if bid not in done]
@@ -1259,9 +1394,10 @@ def run_all_branches(target_date: str | None = None,
                      trigger_type: str = 'auto') -> list[dict]:
     """Run every active branch sequentially. One branch's failure never aborts the loop.
 
-    With missing_only=True, branches that already have a z_report_902 row for
-    target_date (real Z or closed-day sentinel) are skipped — used by the
-    03/04/05 IL backfill passes.
+    With missing_only=True, branches that already have a REAL Z row for
+    target_date are skipped — used by the 30-minute interval backfill ticks
+    (~05:00–12:30 IL). Closed-day sentinels are re-probed each tick so a Z
+    closed after the primary 02:00 IL run is still captured.
     """
     target_date = target_date or _yesterday_il()
     results: list[dict] = []
@@ -1328,6 +1464,15 @@ def run_all_branches(target_date: str | None = None,
                 log.exception('aviv_z_report failed for branch %d', bid)
                 results.append({'ok': False, 'branch_id': bid,
                                 'date': target_date, 'error': str(e)[:200]})
+
+        # brrr hard failures (once per branch/day) — auto runs only; manual
+        # CLI runs print their result to the operator instead. Never let the
+        # alert path break the run itself.
+        if trigger_type == 'auto':
+            try:
+                alert_run_failures(conn, results, target_date)
+            except Exception:
+                log.exception('alert_run_failures failed')
     finally:
         if owns_conn:
             conn.close()
@@ -1351,11 +1496,19 @@ if __name__ == '__main__':
     ap.add_argument('--manual', action='store_true',
                     help="Mark this run as trigger_type='manual' in z_report_902. "
                          "Default is 'auto' (cron/scheduler invocation).")
+    ap.add_argument('--check-missing', action='store_true',
+                    help='No fetching: post-backfill completeness check for '
+                         '--date (default yesterday). brrr any branch still '
+                         'without revenue, excluding expected-closed weekdays.')
     args = ap.parse_args()
 
     trigger = 'manual' if args.manual else 'auto'
 
-    if args.branch_id:
+    if args.check_missing:
+        out = check_missing_z(args.date)
+        print(out)
+        sys.exit(0)
+    elif args.branch_id:
         # Single-branch CLI: in chain mode, issue a chain token here so
         # autoseeded rows (which have no per-store creds) can still be pulled
         # one at a time. Without this the agent would error 'no aviv creds'
