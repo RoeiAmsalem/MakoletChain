@@ -1504,8 +1504,26 @@ def account():
     db = get_db()
     user_id = session['user_id']
     month = _now_il().strftime('%Y-%m')
+
+    # SUMIT post-payment return params (see below). Read early: they gate the
+    # layer-A sync-on-return.
+    og_payment_id = (request.args.get('OG-PaymentID') or '')[:64]
+    og_doc_number = (request.args.get('OG-DocumentNumber') or '')[:32]
+
     mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
                     (user_id,)).fetchone()
+
+    # Layer A: returning payer → run the read-only sync now so the page
+    # renders already-green. Skipped when already paid this month (nothing to
+    # flip) and rate-limited per user (OG params can be replayed; they never
+    # write state themselves — the sync remains the only writer).
+    sync_state = None
+    if (og_payment_id and mb and mb['active']
+            and (mb['last_paid_date'] or '')[:7] != month):
+        sync_state = _trigger_payment_sync(user_id)
+        if sync_state == 'done':
+            mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                            (user_id,)).fetchone()
 
     billing_active = bool(mb['active']) if mb else False
     last_paid = mb['last_paid_date'] if mb else None
@@ -1525,18 +1543,16 @@ def account():
     bst = _billing_state(user_id, session.get('user_role'),
                          session.get('user_email'), db)
 
-    # SUMIT post-payment return (the redirect target configured in SUMIT's
-    # page settings points back here with OG-* query params). DISPLAY-ONLY:
-    # never proof of payment and never mutates state — paid/unpaid still comes
-    # exclusively from the sync. Jinja autoescaping handles the untrusted
-    # values; length-capped here as well.
-    og_payment_id = (request.args.get('OG-PaymentID') or '')[:64]
-    og_doc_number = (request.args.get('OG-DocumentNumber') or '')[:32]
-
+    # The OG-* params are DISPLAY-ONLY (the redirect target configured in
+    # SUMIT's page settings points back here with them): never proof of
+    # payment and never mutate state — paid/unpaid still comes exclusively
+    # from the sync. Jinja autoescaping handles the untrusted values;
+    # length-capped above as well.
     return render_template(
         'account.html',
         payment_return=bool(og_payment_id),
         payment_doc_number=og_doc_number,
+        sync_pending=(sync_state == 'pending'),
         billing_locked=(bst['state'] == 'locked'),
         billing_active=billing_active,
         paid_this_month=paid_this_month,
@@ -5380,6 +5396,127 @@ def _run_billing_sync(db):
             'paid_managers': matched, 'customers': len(ext_by_customer)}
 
 
+def _run_billing_sync_logged(db, source):
+    """All sync entrypoints funnel here so /admin/billing can show which layer
+    ran last: 'auto' (scheduled sweep) / 'manual' (רענן button) / 'payment'
+    (sync-on-return). Logging failures never break the sync itself."""
+    started = _now_il().strftime('%Y-%m-%d %H:%M:%S')
+    res = _run_billing_sync(db)
+    ok = 1 if (res.get('connected') and not res.get('error')) else 0
+    err = None if ok else (res.get('error') or res.get('message'))
+    try:
+        db.execute(
+            "INSERT INTO billing_sync_runs (started_at, finished_at, source, ok, "
+            "payments_seen, paid_managers, error) VALUES (?,?,?,?,?,?,?)",
+            (started, _now_il().strftime('%Y-%m-%d %H:%M:%S'), source, ok,
+             res.get('payments_seen'), res.get('paid_managers'), err))
+        db.commit()
+    except Exception as e:
+        app.logger.error(f'billing_sync_runs log failed: {e}')
+    return res
+
+
+# ── Billing motor layer A: sync-on-return ─────────────────────
+# A manager landing back on /account from SUMIT (OG-* params present) triggers
+# the same READ-ONLY sync the רענן button runs — their paid state flips
+# immediately instead of waiting for the scheduled sweep. The OG params NEVER
+# write state: they only schedule this sync, so a forged/replayed param at
+# worst causes one harmless read-only sync per user per minute.
+
+_PAYMENT_SYNC_MIN_INTERVAL = 60    # per-user seconds between triggered syncs
+_PAYMENT_SYNC_INLINE_WAIT = 3.0    # render inline if the sync finishes this fast
+_payment_sync_last = {}            # user_id -> monotonic ts (single worker: -w 1)
+_payment_sync_lock = threading.Lock()
+
+
+def _trigger_payment_sync(user_id):
+    """Returns 'done' (sync finished — re-read state before rendering),
+    'pending' (still running in the background — render the מתעדכן hint with
+    one auto-refresh), or 'skipped' (rate-limited)."""
+    with _payment_sync_lock:
+        now = time.monotonic()
+        last = _payment_sync_last.get(user_id)
+        if last is not None and now - last < _PAYMENT_SYNC_MIN_INTERVAL:
+            return 'skipped'
+        _payment_sync_last[user_id] = now
+
+    done = threading.Event()
+
+    def _run():
+        try:
+            with app.app_context():
+                _run_billing_sync_logged(get_db(), 'payment')
+        except Exception as e:
+            app.logger.error(f'payment-return sync failed (fail-open): {e}')
+        finally:
+            done.set()
+
+    threading.Thread(target=_run, daemon=True,
+                     name=f'billing-sync-u{user_id}').start()
+    return 'done' if done.wait(_PAYMENT_SYNC_INLINE_WAIT) else 'pending'
+
+
+# ── Billing motor layer C: transition alerts ──────────────────
+
+def _billing_alert_state_of(st):
+    """Collapse a paywall state dict into the tracked alert state. 'exempt'
+    maps to None — exempt users are never tracked or alerted."""
+    if st.get('state') == 'locked':
+        return 'locked'
+    if st.get('state') == 'warning':
+        return 'warning_final' if st.get('days_left', 99) <= 1 else 'warning'
+    if st.get('state') == 'ok':
+        return 'ok'
+    return None
+
+
+def _billing_alert_pass(db):
+    """One brrr per STATE TRANSITION per manager: entered warning 🟡, locks
+    tomorrow 🟠, locked 🔴, paid after warning/lock 🟡. Repeated runs with an
+    unchanged state send nothing (alert_state is the last alerted state;
+    alert_date makes the dedup auditable). Returns [(user_id, prev, new)]."""
+    from utils.notify import notify
+    today = _billing_today().isoformat()
+    sent = []
+    for row in db.execute(
+            "SELECT mb.user_id, mb.alert_state, u.name, u.email, u.role "
+            "FROM manager_billing mb JOIN users u ON u.id = mb.user_id "
+            "WHERE mb.active = 1 AND u.active = 1").fetchall():
+        st = _billing_state(row['user_id'], row['role'], row['email'], db)
+        new = _billing_alert_state_of(st)
+        prev = row['alert_state']
+        if new is None or new == prev:
+            continue
+        db.execute("UPDATE manager_billing SET alert_state=?, alert_date=? "
+                   "WHERE user_id=?", (new, today, row['user_id']))
+        name = row['name'] or row['email']
+        title = message = None
+        kwargs = {}
+        if new == 'warning':
+            title = f'Billing: {name} unpaid'
+            message = (f'Manager {name} entered payment warning — '
+                       f'{st.get("days_left")} days before lock.')
+        elif new == 'warning_final':
+            title = f'Billing: {name} locks TOMORROW'
+            message = f'Manager {name} still unpaid — access locks tomorrow.'
+            kwargs = {'medium': True}
+        elif new == 'locked':
+            title = f'Billing: {name} LOCKED'
+            message = (f'Manager {name} locked out after '
+                       f'{st.get("days_unpaid")} unpaid days. '
+                       f'/account stays reachable for payment.')
+            kwargs = {'critical': True,
+                      'dedup_key': f'billing-lock-{row["user_id"]}'}
+        elif new == 'ok' and prev in ('warning', 'warning_final', 'locked'):
+            title = f'Billing: {name} paid'
+            message = f'Manager {name} paid — access OK again.'
+        if title:
+            notify(title, message, **kwargs)
+            sent.append((row['user_id'], prev, new))
+    db.commit()
+    return sent
+
+
 # ── Billing paywall (stage 2) ─────────────────────────────────
 # Policy: billing starts BILLING_START_DATE. An ACTIVE-billed manager who has
 # not paid the current calendar month gets a warning banner for
@@ -5529,6 +5666,14 @@ def admin_billing():
             "SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
             "WHERE ub.user_id=? ORDER BY b.id", (u['id'],)).fetchall()
         last_paid = mb['last_paid_date'] if mb else None
+        st = _billing_state(u['id'], 'manager', u['email'], db)
+        state = st.get('state', 'exempt')
+        state_label = {
+            'ok': 'תקין',
+            'warning': f"אזהרה · {st.get('days_left')} ימים",
+            'locked': 'נעול',
+            'exempt': 'פטור',
+        }.get(state, state)
         managers.append({
             'user_id': u['id'],
             'name': u['name'],
@@ -5540,13 +5685,30 @@ def admin_billing():
             'paid_this_month': bool(last_paid and last_paid[:7] == month),
             'last_paid_date': last_paid or '—',
             'payment_link': _manager_payment_link(u['id']),
+            'state': state,
+            'state_label': state_label,
         })
+
+    # "סונכרן לאחרונה" — which layer ran the last sync (auto/manual/payment).
+    last_run = db.execute(
+        "SELECT * FROM billing_sync_runs ORDER BY id DESC LIMIT 1").fetchone()
+    last_sync = None
+    if last_run:
+        last_sync = {
+            'time': last_run['started_at'][11:16],
+            'date': last_run['started_at'][:10],
+            'ok': bool(last_run['ok']),
+            'source_he': {'auto': 'אוטומטי', 'manual': 'ידני',
+                          'payment': 'תשלום'}.get(last_run['source'],
+                                                  last_run['source']),
+        }
 
     return render_template('admin_billing.html',
                            managers=managers,
                            sumit_connected=sumit.is_connected(),
                            payment_base_url=SUMIT_PAYMENT_URL,
                            billing_month=month,
+                           last_sync=last_sync,
                            **_page_context('admin'))
 
 
@@ -5597,7 +5759,7 @@ def api_admin_billing_update(user_id):
 def api_admin_billing_sync():
     """Run the read-only SUMIT sync on demand (the 'רענן סטטוס' button)."""
     db = get_db()
-    return jsonify(_run_billing_sync(db))
+    return jsonify(_run_billing_sync_logged(db, 'manual'))
 
 
 @app.route('/admin/franchise-classifier')

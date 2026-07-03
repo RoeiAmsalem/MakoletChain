@@ -62,9 +62,21 @@
             {% else %}
             קבלה נשלחה למייל.
             {% endif %}
+            {% if sync_pending %}
+            <span style="color:#fbbf24;">⏳
+            הסטטוס מתעדכן…
+            </span>
+            {% elif not paid_this_month %}
             הסטטוס בעמוד יתעדכן בסנכרון הקרוב.
+            {% endif %}
         </div>
     </div>
+    {% if sync_pending %}
+    {# one-shot: after the reload the sync has finished (or the per-user rate
+       limit skips a re-trigger), so sync_pending renders false and no further
+       reloads happen #}
+    <script>setTimeout(function () { location.reload(); }, 5000);</script>
+    {% endif %}
     {% endif %}
 
     {# HERO — the subscription state is the page. Locked: the hero IS the

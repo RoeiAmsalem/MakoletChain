@@ -18,6 +18,13 @@
     .sync-btn { margin-right:auto; background:var(--accent); border:none; border-radius:6px; padding:0.45rem 0.95rem; color:white; font-size:0.85rem; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity 0.15s; }
     .sync-btn:hover { opacity:0.85; }
     .sync-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .sync-meta { font-size:0.76rem; color:var(--text-muted); white-space:nowrap; }
+    .sync-meta b { color:var(--text-secondary); font-weight:600; }
+    .state-chip { display:inline-block; border-radius:6px; padding:0.2rem 0.55rem; font-size:0.74rem; font-weight:700; white-space:nowrap; }
+    .state-chip.ok { color:#86efac; background:rgba(34,197,94,0.12); }
+    .state-chip.warning { color:#fbbf24; background:rgba(245,158,11,0.12); }
+    .state-chip.locked { color:#fca5a5; background:rgba(239,68,68,0.12); }
+    .state-chip.exempt { color:var(--text-muted); background:rgba(255,255,255,0.05); }
 
     .billing-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
     table.billing { width:100%; border-collapse:collapse; font-size:0.88rem; }
@@ -70,6 +77,12 @@
         <span class="conn-badge conn-off">לא מחובר ל-SUMIT</span>
         {% endif %}
         <span class="month-chip">חודש נוכחי: {{ billing_month }}</span>
+        {% if last_sync %}
+        <span class="sync-meta">
+        סונכרן לאחרונה:
+        <b>{{ last_sync.time }}</b> {{ '✓' if last_sync.ok else '✗' }} ({{ last_sync.source_he }})
+        </span>
+        {% endif %}
         <button class="sync-btn" id="sync-btn" onclick="runSync()">רענן סטטוס</button>
     </div>
 
@@ -82,6 +95,7 @@
                     <th>מחיר (₪)</th>
                     <th>חיוב פעיל?</th>
                     <th>שילם החודש?</th>
+                    <th>מצב</th>
                     <th>תשלום אחרון</th>
                     <th>קישור תשלום</th>
                 </tr>
@@ -109,6 +123,7 @@
                     <td id="paid-{{ m.user_id }}">
                         {% if m.paid_this_month %}<span class="paid-yes">✅</span>{% else %}<span class="paid-no">—</span>{% endif %}
                     </td>
+                    <td><span class="state-chip {{ m.state }}">{{ m.state_label }}</span></td>
                     <td class="branch-cell">{{ m.last_paid_date }}</td>
                     <td>
                         <button class="link-btn" id="link-{{ m.user_id }}"
