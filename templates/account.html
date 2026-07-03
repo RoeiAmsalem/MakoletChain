@@ -4,29 +4,43 @@
 <style>
     .account-container { max-width:560px; margin:0 auto; padding:1.5rem; }
     .account-container h1 { font-size:1.5rem; font-weight:700; margin:0 0 1.25rem; }
-    .account-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.25rem; margin-bottom:1rem; }
-    .card-label { font-size:0.76rem; font-weight:700; color:var(--text-muted); margin-bottom:0.7rem; }
-    .status-line { display:flex; align-items:center; gap:0.55rem; font-size:1.08rem; font-weight:700; }
-    .status-line svg { width:22px; height:22px; flex-shrink:0; }
-    .status-active { color:#86efac; }
-    .status-waiting { color:#fbbf24; }
-    .status-inactive { color:var(--text-muted); }
-    .lock-card { border-color:rgba(239,68,68,0.45); background:rgba(239,68,68,0.07); }
-    .status-locked { color:#fca5a5; }
-    .success-card { border-color:rgba(34,197,94,0.45); background:rgba(34,197,94,0.07); }
-    .status-sub { font-size:0.82rem; color:var(--text-secondary); margin-top:0.5rem; }
-    .fee-line { font-size:0.85rem; color:var(--text-secondary); margin-top:0.85rem; padding-top:0.85rem; border-top:1px solid var(--card-border); }
-    .fee-line b { color:var(--text-primary); }
-    .pay-btn { display:flex; align-items:center; justify-content:center; gap:0.55rem; width:100%; box-sizing:border-box; background:var(--accent); color:white; text-decoration:none; font-weight:700; font-size:0.98rem; padding:0.9rem 1rem; border-radius:10px; transition:opacity 0.15s; }
+
+    /* HERO — reuses the dashboard's .kpi-card gradient vocabulary; only a
+       pending (amber) variant is added here, following the same pattern as
+       kpi-card--profit / kpi-card--loss in style.css. */
+    .account-hero { margin-bottom:1rem; }
+    .account-hero .kpi-value { font-size:1.55rem; display:flex; align-items:center; gap:0.6rem; }
+    .account-hero .kpi-value svg { width:28px; height:28px; flex-shrink:0; }
+    .kpi-card--pending {
+        background: linear-gradient(135deg, #92400e, #78350f);
+        border-color: rgba(250, 204, 21, 0.3);
+    }
+    .kpi-value.pending { color:#fde68a; }
+    .hero-sub { font-size:0.85rem; color:rgba(241,245,249,0.75); margin-top:0.35rem; }
+    .hero-meta { display:flex; flex-wrap:wrap; gap:0.4rem 1.1rem; font-size:0.85rem; color:rgba(241,245,249,0.72); margin-top:0.85rem; padding-top:0.85rem; border-top:1px solid rgba(255,255,255,0.12); }
+    .hero-meta b { color:var(--text-light); font-weight:700; }
+
+    .section-label { font-size:0.76rem; font-weight:700; color:var(--text-muted); margin:1.15rem 0 0.55rem; }
+
+    .success-card { background:var(--card); border:1px solid rgba(34,197,94,0.45); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.1rem 1.25rem; margin-bottom:1rem; }
+    .success-title { display:flex; align-items:center; gap:0.55rem; font-size:1.02rem; font-weight:700; color:#86efac; }
+    .success-title svg { width:21px; height:21px; flex-shrink:0; }
+    .success-sub { font-size:0.82rem; color:var(--text-secondary); margin-top:0.45rem; }
+
+    .pay-btn { display:flex; align-items:center; justify-content:center; gap:0.55rem; width:100%; box-sizing:border-box; background:var(--accent); color:white; text-decoration:none; font-weight:700; font-size:0.98rem; min-height:48px; padding:0.9rem 1rem; border-radius:10px; box-shadow:var(--shadow); transition:opacity 0.15s; touch-action:manipulation; }
     .pay-btn:hover { opacity:0.88; }
     .pay-btn svg { width:19px; height:19px; flex-shrink:0; }
-    .pay-note { font-size:0.76rem; color:var(--text-muted); margin-top:0.65rem; text-align:center; }
+    .pay-note { font-size:0.76rem; color:var(--text-muted); margin-top:0.6rem; text-align:center; }
+    .pay-placeholder { font-size:0.92rem; color:var(--text-muted); font-weight:600; }
+
     .contact-row { display:flex; gap:0.6rem; }
-    .contact-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:0.5rem; padding:0.9rem 0.4rem; background:rgba(255,255,255,0.04); border:1px solid var(--card-border); border-radius:10px; color:var(--text-secondary); text-decoration:none; font-size:0.79rem; font-weight:600; transition:all 0.15s; touch-action:manipulation; }
+    .contact-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:0.5rem; min-height:48px; padding:0.9rem 0.4rem; background:var(--card); border:1px solid var(--card-border); border-radius:10px; color:var(--text-secondary); text-decoration:none; font-size:0.79rem; font-weight:600; transition:all 0.15s; touch-action:manipulation; }
     .contact-btn:hover { background:rgba(255,255,255,0.09); color:white; }
     .contact-btn svg { width:22px; height:22px; }
+
     @media (max-width: 480px) {
         .account-container { padding:0.75rem; }
+        .account-hero .kpi-value { font-size:1.32rem; }
         .contact-btn { font-size:0.74rem; padding:0.75rem 0.25rem; }
     }
 </style>
@@ -37,12 +51,12 @@
     <h1>החשבון שלי</h1>
 
     {% if payment_return %}
-    <div class="account-card success-card">
-        <div class="status-line status-active">
+    <div class="success-card">
+        <div class="success-title">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="16 9 10.5 15 8 12.5"/></svg>
             התשלום התקבל ✓
         </div>
-        <div class="status-sub">
+        <div class="success-sub">
             {% if payment_doc_number %}
             קבלה מס' {{ payment_doc_number }} נשלחה למייל.
             {% else %}
@@ -53,81 +67,90 @@
     </div>
     {% endif %}
 
+    {# HERO — the subscription state is the page. Locked: the hero IS the
+       lock card; pay + contact follow beneath as one coherent column. #}
     {% if billing_locked %}
-    <div class="account-card lock-card">
-        <div class="status-line status-locked">
+    <div class="kpi-card kpi-card--loss account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value loss">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
             הגישה הושהתה עד להסדרת התשלום
         </div>
-        <div class="status-sub">
-            לאחר קליטת התשלום הגישה תשוחזר אוטומטית.
+        <div class="hero-sub">לאחר קליטת התשלום הגישה תשוחזר אוטומטית.</div>
+        <div class="hero-meta">
+            {% if last_paid_date %}<span>תשלום אחרון: <b>{{ last_paid_date }}</b></span>{% endif %}
+            <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
         </div>
     </div>
-    {% endif %}
-
-    <div class="account-card">
-        <div class="card-label">סטטוס מנוי</div>
-        {% if admin_no_billing %}
-        <div class="status-line status-inactive">אין מנוי לחשבון אדמין</div>
-        {% elif billing_active and paid_this_month %}
-        <div class="status-line status-active">
+    {% elif admin_no_billing %}
+    <div class="kpi-card kpi-card--neutral account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value">אין מנוי לחשבון אדמין</div>
+    </div>
+    {% elif billing_active and paid_this_month %}
+    <div class="kpi-card kpi-card--profit account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value profit">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="16 9 10.5 15 8 12.5"/></svg>
             המנוי פעיל ✓
         </div>
-        <div class="status-sub">תשלום אחרון: {{ last_paid_date }}</div>
-        {% elif billing_active %}
-        <div class="status-line status-waiting">
+        <div class="hero-meta">
+            <span>תשלום אחרון: <b>{{ last_paid_date }}</b></span>
+            <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
+        </div>
+    </div>
+    {% elif billing_active %}
+    <div class="kpi-card kpi-card--pending account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value pending">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             ממתין לתשלום החודש
         </div>
-        {% else %}
-        <div class="status-line status-inactive">המנוי אינו פעיל</div>
-        {% endif %}
-        {% if not admin_no_billing %}
-        <div class="fee-line">
-            דמי מנוי חודשיים:
-            <b>₪{{ fee }}</b>
+        <div class="hero-meta">
+            {% if last_paid_date %}<span>תשלום אחרון: <b>{{ last_paid_date }}</b></span>{% endif %}
+            <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
         </div>
-        {% endif %}
     </div>
-
-    {% if billing_active %}
-    <div class="account-card">
-        <div class="card-label">
-            תשלום / ניהול מנוי
+    {% else %}
+    <div class="kpi-card kpi-card--neutral account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value">המנוי אינו פעיל</div>
+        <div class="hero-meta">
+            <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
         </div>
-        {% if payment_link %}
-        <a class="pay-btn" href="{{ payment_link }}" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-            לתשלום / עדכון אמצעי תשלום
-        </a>
-        <div class="pay-note">
-            הקישור נפתח בדף תשלום מאובטח של SUMIT
-        </div>
-        {% else %}
-        <div class="status-line status-inactive" style="font-size:0.92rem;">
-            קישור תשלום יוגדר בקרוב
-        </div>
-        {% endif %}
     </div>
     {% endif %}
 
-    <div class="account-card">
-        <div class="card-label">יצירת קשר</div>
-        <div class="contact-row">
-            <a class="contact-btn" href="tel:0523455860">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
-                <span>חייגו אליי</span>
-            </a>
-            <a class="contact-btn" href="https://wa.me/972523455860" target="_blank" rel="noopener">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-                <span>WhatsApp</span>
-            </a>
-            <a class="contact-btn" href="mailto:KupaShkufa@gmail.com">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                <span>שלחו מייל</span>
-            </a>
-        </div>
+    {% if billing_active %}
+    {% if payment_link %}
+    <a class="pay-btn" href="{{ payment_link }}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        לתשלום / עדכון אמצעי תשלום
+    </a>
+    <div class="pay-note">
+        הקישור נפתח בדף תשלום מאובטח של SUMIT
+    </div>
+    {% else %}
+    <div class="pay-placeholder">
+        קישור תשלום יוגדר בקרוב
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <div class="section-label">יצירת קשר</div>
+    <div class="contact-row">
+        <a class="contact-btn" href="tel:0523455860">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+            <span>חייגו אליי</span>
+        </a>
+        <a class="contact-btn" href="https://wa.me/972523455860" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            <span>WhatsApp</span>
+        </a>
+        <a class="contact-btn" href="mailto:kupashkufaa@gmail.com">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <span>שלחו מייל</span>
+        </a>
     </div>
 </div>
 {% endblock %}

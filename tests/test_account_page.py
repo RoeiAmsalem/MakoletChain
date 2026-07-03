@@ -169,7 +169,24 @@ def test_contact_hrefs_exact(client, monkeypatch):
     html = _get_account(client, 'norow@test.com', monkeypatch)
     assert 'href="tel:0523455860"' in html
     assert 'href="https://wa.me/972523455860"' in html
-    assert 'href="mailto:KupaShkufa@gmail.com"' in html
+    assert 'href="mailto:kupashkufaa@gmail.com"' in html
+
+
+def test_hero_accent_class_per_state(client, monkeypatch):
+    """The hero card carries the dashboard's kpi-card accent for each state:
+    active+paid → green (--profit), active+unpaid → amber (--pending),
+    inactive/no-row → neutral. Locked (--loss) is asserted in
+    test_billing_paywall.py where the lock machinery lives."""
+    def hero(html):
+        m = re.search(r'class="kpi-card (kpi-card--\w+) account-hero"', html)
+        assert m, 'hero kpi-card not found'
+        return m.group(1)
+
+    assert hero(_get_account(client, 'paid@test.com', monkeypatch)) == 'kpi-card--profit'
+    client.get('/logout')
+    assert hero(_get_account(client, 'unpaid@test.com', monkeypatch)) == 'kpi-card--pending'
+    client.get('/logout')
+    assert hero(_get_account(client, 'norow@test.com', monkeypatch)) == 'kpi-card--neutral'
 
 
 def test_payment_return_banner_with_doc_number(client, monkeypatch):

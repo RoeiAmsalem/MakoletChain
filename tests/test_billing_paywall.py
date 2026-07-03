@@ -217,6 +217,7 @@ def test_locked_account_shows_lock_card_with_own_tag(client, monkeypatch):
     assert resp.status_code == 200
     html = resp.data.decode('utf-8')
     assert 'הגישה הושהתה עד להסדרת התשלום' in html
+    assert 'kpi-card--loss' in html  # the hero IS the lock card (red accent)
     assert f'?customerexternalidentifier={U_MGR}' in html
     assert 'href="tel:0523455860"' in html
 
