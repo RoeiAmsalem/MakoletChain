@@ -111,6 +111,20 @@
             <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
         </div>
     </div>
+    {% elif billing_active and before_start %}
+    {# Pre-launch: neutral hero (never amber) — nobody is ASKED to pay before
+       BILLING_START_DATE; the pay slot below shows the info line instead. A
+       payment that already landed still renders green above — only the
+       payment demand is suppressed, never the paid confirmation. #}
+    <div class="kpi-card kpi-card--neutral account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value">
+        המנוי טרם החל
+        </div>
+        <div class="hero-meta">
+            <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
+        </div>
+    </div>
     {% elif billing_active %}
     <div class="kpi-card kpi-card--pending account-hero">
         <div class="kpi-label">סטטוס מנוי</div>
@@ -134,7 +148,11 @@
     {% endif %}
 
     {% if billing_active %}
-    {% if payment_link %}
+    {% if before_start %}
+    <div class="pay-placeholder">
+        המנוי מתחיל ב-{{ start_display }} — אפשרות התשלום תיפתח כאן
+    </div>
+    {% elif payment_link %}
     <a class="pay-btn" href="{{ payment_link }}" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
         לתשלום / עדכון אמצעי תשלום

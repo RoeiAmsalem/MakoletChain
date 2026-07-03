@@ -1401,8 +1401,22 @@ def account():
     if fee == int(fee):
         fee = int(fee)
 
+    # Before BILLING_START_DATE the payment option is hidden for EVERYONE —
+    # even active=1 rows: no pay link in the HTML at all, a neutral info line
+    # renders in its place and the hero stays neutral (not amber). From the
+    # start date onward this block is inert and behavior is unchanged.
+    before_start = False
+    start_display = ''
+    try:
+        _start = date.fromisoformat(BILLING_START_DATE)
+        if _billing_today() < _start:
+            before_start = True
+            start_display = f'{_start.day}.{_start.month}'
+    except ValueError:
+        pass
+
     payment_link = None
-    if billing_active and SUMIT_PAYMENT_URL_SET:
+    if billing_active and SUMIT_PAYMENT_URL_SET and not before_start:
         payment_link = _manager_payment_link(user_id)
         # Server-side guarantee: the rendered link carries the session user's
         # tag — nothing else could have been substituted upstream.
@@ -1429,7 +1443,9 @@ def account():
         fee=fee,
         payment_link=payment_link,
         payment_url_configured=SUMIT_PAYMENT_URL_SET,
-        admin_no_billing=(session.get('user_role') in ROLES_ALL_BRANCHES
+        before_start=before_start,
+        start_display=start_display,
+        admin_no_billing=(session.get('user_role') == 'admin'
                           and mb is None),
         **ctx)
 
@@ -4704,11 +4720,13 @@ def _manager_payment_link(user_id):
 
 
 def _ensure_manager_billing_rows(db):
-    """One manager_billing row per active manager, created OFF (active=0).
-    sumit_tag = str(user_id) — unique per manager. Idempotent: INSERT OR IGNORE
-    never flips an existing row's active flag or fee."""
+    """One manager_billing row per active manager/ceo, created OFF (active=0).
+    sumit_tag = str(user_id) — unique per user. Idempotent: INSERT OR IGNORE
+    never flips an existing row's active flag or fee. CEOs are billable like
+    managers (2026-07-03); only admin is categorically outside billing."""
     for row in db.execute(
-            "SELECT id FROM users WHERE role='manager' AND active=1").fetchall():
+            "SELECT id FROM users WHERE role IN ('manager','ceo') "
+            "AND active=1").fetchall():
         db.execute(
             "INSERT OR IGNORE INTO manager_billing (user_id, sumit_tag, fee, active) "
             "VALUES (?,?,179,0)", (row['id'], str(row['id'])))
@@ -4929,7 +4947,9 @@ def _billing_alert_pass(db):
 # Policy: billing starts BILLING_START_DATE. An ACTIVE-billed manager who has
 # not paid the current calendar month gets a warning banner for
 # BILLING_GRACE_DAYS days, then is locked to /account until a payment lands
-# (via the read-only SUMIT sync). admin/ceo/demo/active=0 are never affected.
+# (via the read-only SUMIT sync). admin/demo/active=0 are never affected; a
+# ceo is billable exactly like a manager once toggled ON (2026-07-03), and
+# exempt while toggled OFF like everyone else.
 # FAIL-OPEN everywhere: a billing bug must never lock a paying customer out.
 
 BILLING_START_DATE = os.environ.get('BILLING_START_DATE', '2026-07-05')
@@ -4975,17 +4995,18 @@ def _billing_state(user_id, role, email, db=None):
     """Paywall state for one user → {'state': exempt|ok|warning|locked, ...}.
 
     warning adds days_unpaid + days_left (days until lock); locked adds
-    days_unpaid. exempt covers: admin/ceo, the demo account, no row/active=0,
-    today before BILLING_START_DATE, a row the sync/toggle has not touched
-    this month (stale — can't trust 'unpaid' across a month rollover), and
-    ANY exception (fail-open).
+    days_unpaid. exempt covers: admin (ONLY — a toggled-ON ceo goes through
+    the same warning→lock machine as a manager), the demo account, no
+    row/active=0, today before BILLING_START_DATE, a row the sync/toggle has
+    not touched this month (stale — can't trust 'unpaid' across a month
+    rollover), and ANY exception (fail-open).
 
     days_unpaid counts from max(BILLING_START_DATE, 1st of current month,
     activated_at) — so grace restarts every month and a manager toggled on
     mid-month is never instantly locked.
     """
     try:
-        if role in ROLES_ALL_BRANCHES:
+        if role == 'admin':
             return {'state': 'exempt'}
         if (email or '').strip().lower() == DEMO_ACCOUNT_EMAIL:
             return {'state': 'exempt'}
@@ -5066,15 +5087,15 @@ def admin_billing():
 
     managers = []
     for u in db.execute(
-            "SELECT id, name, email FROM users "
-            "WHERE role='manager' AND active=1 ORDER BY id").fetchall():
+            "SELECT id, name, email, role FROM users "
+            "WHERE role IN ('manager','ceo') AND active=1 ORDER BY id").fetchall():
         mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
                         (u['id'],)).fetchone()
         branches = db.execute(
             "SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
             "WHERE ub.user_id=? ORDER BY b.id", (u['id'],)).fetchall()
         last_paid = mb['last_paid_date'] if mb else None
-        st = _billing_state(u['id'], 'manager', u['email'], db)
+        st = _billing_state(u['id'], u['role'], u['email'], db)
         state = st.get('state', 'exempt')
         state_label = {
             'ok': 'תקין',
@@ -5086,7 +5107,8 @@ def admin_billing():
             'user_id': u['id'],
             'name': u['name'],
             'email': u['email'],
-            'branch_names': ', '.join(b['name'] for b in branches) or '—',
+            'branch_names': (', '.join(b['name'] for b in branches)
+                             or ('כל הרשת' if u['role'] == 'ceo' else '—')),
             'sumit_tag': mb['sumit_tag'] if mb else str(u['id']),
             'fee': mb['fee'] if mb else 179,
             'active': bool(mb['active']) if mb else False,

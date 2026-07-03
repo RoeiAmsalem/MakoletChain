@@ -35,7 +35,13 @@ U_PAID, U_UNPAID, U_INACTIVE, U_NOROW, U_ADMIN = 21, 22, 23, 24, 25
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Pin "normal operation" (on/after BILLING_START_DATE) for every test that
+    # doesn't explicitly exercise the pre-launch state — otherwise the suite
+    # would flip behavior depending on the real calendar date.
+    monkeypatch.setattr(app_module, 'BILLING_START_DATE', '2000-01-01')
+    monkeypatch.delenv('BILLING_FAKE_TODAY', raising=False)
+
     app.config['TESTING'] = True
     original_db = app_module.DB_PATH
     if os.path.exists(TEST_DB):
@@ -187,6 +193,41 @@ def test_hero_accent_class_per_state(client, monkeypatch):
     assert hero(_get_account(client, 'unpaid@test.com', monkeypatch)) == 'kpi-card--pending'
     client.get('/logout')
     assert hero(_get_account(client, 'norow@test.com', monkeypatch)) == 'kpi-card--neutral'
+
+
+def test_active_before_start_hides_pay_shows_info(client, monkeypatch):
+    # Pre-launch: an active=1 manager gets NO pay link anywhere in the HTML —
+    # the info line renders in its place and the hero stays neutral.
+    monkeypatch.setattr(app_module, 'BILLING_START_DATE', '2099-07-05')
+    html = _get_account(client, 'unpaid@test.com', monkeypatch)
+    assert 'המנוי מתחיל ב-5.7 — אפשרות התשלום תיפתח כאן' in html
+    assert 'customerexternalidentifier' not in html
+    assert 'לתשלום / עדכון אמצעי תשלום' not in html
+    assert 'ממתין לתשלום החודש' not in html
+    m = re.search(r'class="kpi-card (kpi-card--\w+) account-hero"', html)
+    assert m and m.group(1) == 'kpi-card--neutral', 'hero must stay neutral pre-launch'
+    assert 'המנוי טרם החל' in html
+
+
+def test_on_start_date_button_renders(client, monkeypatch):
+    # Exactly on BILLING_START_DATE the normal behavior returns: amber hero,
+    # live pay button, no pre-launch info line.
+    monkeypatch.setattr(app_module, 'BILLING_START_DATE', '2026-07-05')
+    monkeypatch.setenv('BILLING_FAKE_TODAY', '2026-07-05')
+    html = _get_account(client, 'unpaid@test.com', monkeypatch)
+    assert 'לתשלום / עדכון אמצעי תשלום' in html
+    assert f'?customerexternalidentifier={U_UNPAID}' in html
+    assert 'אפשרות התשלום תיפתח כאן' not in html
+
+
+def test_before_start_inactive_manager_sees_no_info_line(client, monkeypatch):
+    # A toggled-OFF manager sees the plain inactive state pre-launch — the
+    # start-date info line is only for rows Roei has already activated.
+    monkeypatch.setattr(app_module, 'BILLING_START_DATE', '2099-07-05')
+    html = _get_account(client, 'inactive@test.com', monkeypatch)
+    assert 'המנוי אינו פעיל' in html
+    assert 'אפשרות התשלום תיפתח כאן' not in html
+    assert 'customerexternalidentifier' not in html
 
 
 def test_payment_return_banner_with_doc_number(client, monkeypatch):

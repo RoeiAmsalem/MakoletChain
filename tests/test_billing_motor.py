@@ -195,6 +195,10 @@ def test_og_already_paid_no_sync(client, monkeypatch):
 
 def test_slow_path_pending_hint_and_forged_og_writes_nothing(client, monkeypatch):
     # forged OG: the sync runs but finds nothing → state must stay unpaid.
+    # Pinned post-start: the amber hero asserted below is (correctly)
+    # suppressed before BILLING_START_DATE, and this test is about the OG
+    # write-nothing guarantee, not the pre-launch state.
+    monkeypatch.setenv('BILLING_FAKE_TODAY', '2026-07-06')
     monkeypatch.setattr(app_module, '_PAYMENT_SYNC_INLINE_WAIT', 0.05)
     calls = _fake_sync(monkeypatch, delay=0.3)   # no effect — nothing to find
     _login(client, 'mgr@test.com')

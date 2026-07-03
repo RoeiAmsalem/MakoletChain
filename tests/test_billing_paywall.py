@@ -3,7 +3,9 @@
 Policy under test: billing starts BILLING_START_DATE (2026-07-05 here);
 active-billed unpaid managers get a warning banner for BILLING_GRACE_DAYS
 days counted from max(start, 1st of month, activated_at), then are locked to
-/account until a payment lands. admin/ceo/demo/active=0 are never affected.
+/account until a payment lands. admin/demo/active=0 are never affected; a
+toggled-ON ceo goes through the same warning→lock machine as a manager
+(2026-07-03), a toggled-OFF ceo stays exempt.
 Fail-open: unreadable rows or a row the sync hasn't touched this month must
 never lock anyone.
 
@@ -27,6 +29,7 @@ TEST_DB = os.path.join(os.path.dirname(__file__), 'test_billing_paywall.db')
 
 BRANCH = 126
 U_MGR, U_OFF, U_ADMIN, U_DEMO = 31, 32, 33, 34
+U_CEO, U_CEO_NOROW = 35, 36
 START = '2026-07-05'
 GRACE = 5
 
@@ -68,6 +71,8 @@ def client(monkeypatch):
         (U_OFF, 'off@test.com', 'manager'),
         (U_ADMIN, 'admin@test.com', 'admin'),
         (U_DEMO, app_module.DEMO_ACCOUNT_EMAIL, 'manager'),
+        (U_CEO, 'ceo@test.com', 'ceo'),
+        (U_CEO_NOROW, 'ceo2@test.com', 'ceo'),
     ]:
         conn.execute(
             "INSERT INTO users (id, name, email, password_hash, role, active) "
@@ -84,6 +89,12 @@ def client(monkeypatch):
     conn.execute(
         "INSERT INTO manager_billing (user_id, sumit_tag, fee, active) "
         "VALUES (?, ?, 179, 0)", (U_OFF, str(U_OFF)))
+    # U_CEO: billed-active ceo, unpaid, row synced within July (trustworthy) —
+    # goes through the same machine as U_MGR. U_CEO_NOROW deliberately has no
+    # row (materialization + no-row exemption are tested).
+    conn.execute(
+        "INSERT INTO manager_billing (user_id, sumit_tag, fee, active, last_status, updated_at) "
+        "VALUES (?, ?, 179, 1, 'unpaid', '2026-07-05 08:00')", (U_CEO, str(U_CEO)))
     conn.commit()
     conn.close()
 
@@ -101,10 +112,10 @@ def _db():
     return conn
 
 
-def _set_row(**cols):
+def _set_row(uid=U_MGR, **cols):
     conn = _db()
     sets = ', '.join(f'{k}=?' for k in cols)
-    conn.execute(f'UPDATE manager_billing SET {sets} WHERE user_id={U_MGR}',
+    conn.execute(f'UPDATE manager_billing SET {sets} WHERE user_id={uid}',
                  tuple(cols.values()))
     conn.commit()
     conn.close()
@@ -185,6 +196,60 @@ def test_admin_demo_inactive_norow_exempt(client, monkeypatch):
                   email='off@test.com')['state'] == 'exempt'
     assert _state(monkeypatch, '2026-07-20', uid=999,
                   email='ghost@test.com')['state'] == 'exempt'
+
+
+def test_ceo_active_unpaid_goes_through_machine(client, monkeypatch):
+    # A toggled-ON ceo is billable exactly like a manager: warning inside
+    # grace, locked after it.
+    st = _state(monkeypatch, '2026-07-06', uid=U_CEO, role='ceo',
+                email='ceo@test.com')
+    assert (st['state'], st['days_unpaid']) == ('warning', 2)
+    st = _state(monkeypatch, '2026-07-10', uid=U_CEO, role='ceo',
+                email='ceo@test.com')
+    assert st['state'] == 'locked'
+
+
+def test_ceo_toggled_off_exempt(client, monkeypatch):
+    # Toggled OFF (or no row at all) → the ceo sees nothing, like any
+    # unbilled user.
+    _set_row(uid=U_CEO, active=0)
+    assert _state(monkeypatch, '2026-07-20', uid=U_CEO, role='ceo',
+                  email='ceo@test.com')['state'] == 'exempt'
+    assert _state(monkeypatch, '2026-07-20', uid=U_CEO_NOROW, role='ceo',
+                  email='ceo2@test.com')['state'] == 'exempt'
+
+
+def test_admin_always_exempt_even_with_active_row(client, monkeypatch):
+    # role='admin' short-circuits before the row is read — even a
+    # (mis-)created active unpaid row can never warn or lock the admin.
+    conn = _db()
+    conn.execute(
+        "INSERT INTO manager_billing (user_id, sumit_tag, fee, active, last_status, updated_at) "
+        "VALUES (?, ?, 179, 1, 'unpaid', '2026-07-05 08:00')",
+        (U_ADMIN, str(U_ADMIN)))
+    conn.commit()
+    conn.close()
+    assert _state(monkeypatch, '2026-07-20', uid=U_ADMIN, role='admin',
+                  email='admin@test.com')['state'] == 'exempt'
+
+
+def test_admin_billing_materializes_ceo_rows(client, monkeypatch):
+    # /admin/billing includes role IN ('manager','ceo'): a ceo with no row
+    # gets one auto-created OFF (active=0) and appears in the roster.
+    _login(client, 'admin@test.com')
+    resp = client.get('/admin/billing')
+    assert resp.status_code == 200
+    html = resp.data.decode('utf-8')
+    assert 'ceo@test.com' in html
+    assert 'ceo2@test.com' in html
+    conn = _db()
+    row = conn.execute(
+        'SELECT active, sumit_tag FROM manager_billing WHERE user_id=?',
+        (U_CEO_NOROW,)).fetchone()
+    conn.close()
+    assert row is not None
+    assert row['active'] == 0
+    assert row['sumit_tag'] == str(U_CEO_NOROW)
 
 
 def test_unreadable_billing_data_fails_open(client, monkeypatch):
