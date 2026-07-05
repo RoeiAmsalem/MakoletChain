@@ -83,6 +83,10 @@
         <b>{{ last_sync.time }}</b> {{ '✓' if last_sync.ok else '✗' }} ({{ last_sync.source_he }})
         </span>
         {% endif %}
+        <span class="sync-meta">
+        קריאות API החודש:
+        <b>{{ api_calls_month }}</b>
+        </span>
         <button class="sync-btn" id="sync-btn" onclick="runSync()">רענן סטטוס</button>
     </div>
 
