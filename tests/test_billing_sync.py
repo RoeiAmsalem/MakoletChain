@@ -124,7 +124,9 @@ def test_payment_joined_to_manager_via_document(db, monkeypatch):
     with app.test_request_context():
         result = app_module._run_billing_sync(db)
     assert result == {'connected': True, 'payments_seen': 1,
-                      'paid_managers': 1, 'customers': 1}
+                      'paid_managers': 1, 'customers': 1,
+                      'last_payment_id': 1, 'last_payment_date': PDATE,
+                      'unmatched': 0}
     paid = _row(db, 26)
     assert (paid['last_paid_date'], paid['last_status']) == (PDATE, 'paid')
     other = _row(db, 27)

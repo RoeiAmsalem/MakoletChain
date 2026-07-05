@@ -1,15 +1,18 @@
-"""Billing motor layer B: the scheduled sweep (cron-driven, like the Z agent).
+"""Billing motor layer B: the ONCE-DAILY sweep (cron-driven, like the Z agent).
 
-Runs the READ-ONLY SUMIT sync + the layer-C transition alerts. This is the
-layer that catches payments nobody clicks through — SUMIT's automatic monthly
-recharges, pay-and-close-tab — and it feeds the warning/lock/paid alerts.
+Runs the READ-ONLY SUMIT sync + the layer-C transition alerts. Since the SUMIT
+webhook (layer A½) became the primary event-driven sync, this is a daily
+SAFETY NET only — SUMIT meters API calls, so the sweep's jobs are: catch
+missed webhooks, pick up SUMIT's automatic monthly recurring charges, and run
+the warning/lock/paid transition alerts once a day.
 
 Gates, in order:
   - BILLING_SYNC_ENABLED (own flag, default TRUE; deliberately NOT gated by
     ENABLE_AGENTS — billing must keep syncing even where agents are off, e.g.
     staging).
-  - 07:00–23:00 Israel window (cron on the UTC box fires every 2h; this gate
-    keeps the IL window exact across DST shifts).
+  - IL hour == BILLING_SWEEP_HOUR (default 09). Cron on the UTC box fires at
+    both 06:10 and 07:10 UTC; this gate lets exactly one run through at
+    09:10 IL year-round across DST shifts.
 
 On SUMIT failure: retry once after RETRY_DELAY_SECONDS, then one 🟠 brrr.
 Fail-open is sacred: a failed sweep changes nothing — _billing_state's
@@ -23,6 +26,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 RETRY_DELAY_SECONDS = 300
+# IL hour the daily sweep runs at. Overridable for on-demand staging runs
+# (BILLING_SWEEP_HOUR=<current IL hour> to force a run outside 09:xx).
+SWEEP_HOUR = 9
 
 
 def _sync_ok(res):
@@ -40,9 +46,12 @@ def run_sweep(retry_delay=RETRY_DELAY_SECONDS):
         _now_il
     from utils.notify import notify
 
+    sweep_hour = int(os.environ.get('BILLING_SWEEP_HOUR', str(SWEEP_HOUR))
+                     or SWEEP_HOUR)
     hour = _now_il().hour
-    if not 7 <= hour <= 23:
-        print(f'[billing-sweep] outside 07-23 IL window (hour={hour}) — skipped')
+    if hour != sweep_hour:
+        print(f'[billing-sweep] not the daily {sweep_hour:02d}:xx IL slot '
+              f'(hour={hour}) — skipped')
         return 'outside-window'
 
     with app.app_context():

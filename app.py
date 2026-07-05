@@ -5307,13 +5307,20 @@ def _ensure_manager_billing_rows(db):
     db.commit()
 
 
-def _run_billing_sync(db):
+def _run_billing_sync(db, allow_skip=False):
     """READ-ONLY vs SUMIT. Pull this-month payments, map each to a manager via
     payment.CustomerID -> customer.ExternalIdentifier == sumit_tag, and update
     manager_billing.last_paid_date / last_status. Returns a summary dict.
 
     Never creates/charges anything in SUMIT. On an empty account this simply
     marks everyone 'unpaid' and returns paid_managers=0 — proving the join runs.
+
+    allow_skip: SUMIT meters API calls, so when payments/list shows NOTHING new
+    since the last successful run this month (same count, same max payment id)
+    AND that run resolved every payment's tag (unmatched=0), the sync stops at
+    1 call: manager rows keep their state, only updated_at is refreshed (the
+    paywall's staleness guard needs a this-month touch). The manual רענן button
+    passes allow_skip=False so a human refresh is always the full truth.
     """
     from utils import sumit
     if not sumit.is_connected():
@@ -5323,9 +5330,39 @@ def _run_billing_sync(db):
     since = month + '-01'
     try:
         payments = sumit.list_payments(since)
-        documents = sumit.list_documents(since)
     except sumit.SumitNotConnected:
         return {'connected': False, 'message': 'לא מחובר ל-SUMIT'}
+    except Exception as e:
+        return {'connected': True, 'error': str(e)}
+
+    valid = [p for p in payments if p.get('ValidPayment')]
+    cur_max_id = max((p.get('ID') or 0 for p in valid), default=0)
+    cur_max_date = max(((p.get('Date') or '')[:10] for p in valid), default='')
+
+    if allow_skip:
+        # Previous successful run THIS month (LIKE month% → the skip window
+        # resets on month rollover, when everyone must be re-marked unpaid).
+        prev = db.execute(
+            "SELECT last_payment_id, payments_seen, unmatched "
+            "FROM billing_sync_runs WHERE ok=1 AND last_payment_id IS NOT NULL "
+            "AND started_at LIKE ? ORDER BY id DESC LIMIT 1",
+            (month + '%',)).fetchone()
+        if (prev and prev['unmatched'] == 0
+                and prev['last_payment_id'] == cur_max_id
+                and prev['payments_seen'] == len(valid)):
+            now_iso = _now_il().strftime('%Y-%m-%d %H:%M')
+            db.execute("UPDATE manager_billing SET updated_at=?", (now_iso,))
+            db.commit()
+            paid_now = db.execute(
+                "SELECT COUNT(*) FROM manager_billing "
+                "WHERE substr(last_paid_date,1,7)=?", (month,)).fetchone()[0]
+            return {'connected': True, 'skipped': True,
+                    'payments_seen': len(valid), 'paid_managers': paid_now,
+                    'last_payment_id': cur_max_id,
+                    'last_payment_date': cur_max_date, 'unmatched': 0}
+
+    try:
+        documents = sumit.list_documents(since)
     except Exception as e:
         return {'connected': True, 'error': str(e)}
 
@@ -5362,16 +5399,16 @@ def _run_billing_sync(db):
 
     # tag -> most-recent valid payment date within the current calendar month
     paid_by_tag = {}
-    payments_seen = 0
-    for p in payments:
-        if not p.get('ValidPayment'):
-            continue
-        payments_seen += 1
+    unmatched = 0
+    for p in valid:
         pdate = (p.get('Date') or '')[:10]
         if pdate[:7] != month:
             continue
         tag = _tag_for_customer(p.get('CustomerID'))
         if tag is None:
+            # receipt-document join failed — the doc may simply not exist YET.
+            # unmatched > 0 blocks the skip path so later runs retry the join.
+            unmatched += 1
             continue
         if tag not in paid_by_tag or pdate > paid_by_tag[tag]:
             paid_by_tag[tag] = pdate
@@ -5392,25 +5429,53 @@ def _run_billing_sync(db):
                 "UPDATE manager_billing SET last_status='unpaid', updated_at=? "
                 "WHERE user_id=?", (now_iso, row['user_id']))
     db.commit()
-    return {'connected': True, 'payments_seen': payments_seen,
-            'paid_managers': matched, 'customers': len(ext_by_customer)}
+    return {'connected': True, 'payments_seen': len(valid),
+            'paid_managers': matched, 'customers': len(ext_by_customer),
+            'last_payment_id': cur_max_id, 'last_payment_date': cur_max_date,
+            'unmatched': unmatched}
+
+
+# Monthly SUMIT-call budget alert: 🟠 once when the month's total crosses this
+# (approaching a 2,000-call plan quota).
+BILLING_CALL_ALERT_THRESHOLD = int(
+    os.environ.get('BILLING_CALL_ALERT_THRESHOLD', '1500') or 1500)
 
 
 def _run_billing_sync_logged(db, source):
     """All sync entrypoints funnel here so /admin/billing can show which layer
     ran last: 'auto' (scheduled sweep) / 'manual' (רענן button) / 'payment'
-    (sync-on-return). Logging failures never break the sync itself."""
+    (sync-on-return) / 'webhook' (SUMIT trigger). Logging failures never break
+    the sync itself. Also the call-accounting chokepoint: every run records how
+    many metered SUMIT calls it made."""
+    from utils import sumit
     started = _now_il().strftime('%Y-%m-%d %H:%M:%S')
-    res = _run_billing_sync(db)
+    sumit.reset_call_count()
+    # manual = a human pressed רענן — always the full truth, never skipped
+    res = _run_billing_sync(db, allow_skip=(source != 'manual'))
+    api_calls = sumit.call_count()
     ok = 1 if (res.get('connected') and not res.get('error')) else 0
     err = None if ok else (res.get('error') or res.get('message'))
     try:
         db.execute(
             "INSERT INTO billing_sync_runs (started_at, finished_at, source, ok, "
-            "payments_seen, paid_managers, error) VALUES (?,?,?,?,?,?,?)",
+            "payments_seen, paid_managers, error, api_calls, last_payment_id, "
+            "last_payment_date, unmatched, skipped) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (started, _now_il().strftime('%Y-%m-%d %H:%M:%S'), source, ok,
-             res.get('payments_seen'), res.get('paid_managers'), err))
+             res.get('payments_seen'), res.get('paid_managers'), err, api_calls,
+             res.get('last_payment_id'), res.get('last_payment_date'),
+             res.get('unmatched'), 1 if res.get('skipped') else 0))
         db.commit()
+        month_total = db.execute(
+            "SELECT COALESCE(SUM(api_calls),0) FROM billing_sync_runs "
+            "WHERE started_at LIKE ?",
+            (_now_il().strftime('%Y-%m') + '%',)).fetchone()[0]
+        # fires exactly once — only the run that crosses the line
+        if month_total >= BILLING_CALL_ALERT_THRESHOLD > month_total - api_calls:
+            from utils.notify import notify
+            notify('SUMIT API call budget',
+                   f'{month_total} metered SUMIT calls this month — '
+                   f'approaching the plan quota (alert at '
+                   f'{BILLING_CALL_ALERT_THRESHOLD}).', medium=True)
     except Exception as e:
         app.logger.error(f'billing_sync_runs log failed: {e}')
     return res
@@ -5454,6 +5519,58 @@ def _trigger_payment_sync(user_id):
     threading.Thread(target=_run, daemon=True,
                      name=f'billing-sync-u{user_id}').start()
     return 'done' if done.wait(_PAYMENT_SYNC_INLINE_WAIT) else 'pending'
+
+
+# ── Billing motor layer A½: SUMIT webhook (event-driven sync) ─
+# SUMIT's trigger (subscribed on the receipts CRM folder, TriggerType=Create)
+# POSTs here the moment a receipt document is created — i.e. a payment landed.
+# SUMIT sends no auth, so the payload is UNTRUSTED and OPAQUE: it is logged and
+# then IGNORED. It never writes state and is never parsed into decisions — its
+# only power is to schedule the same READ-ONLY sync the רענן button runs, at
+# most once per _WEBHOOK_SYNC_MIN_INTERVAL. A forged/replayed/malformed hit at
+# worst causes one harmless read-only sync per minute. Fail-open: any error
+# here still returns 200 (SUMIT retries/eventual state is the daily sweep's job).
+
+_WEBHOOK_SYNC_MIN_INTERVAL = 60     # global seconds between webhook-triggered syncs
+_webhook_sync_last = {'ts': 0.0}    # monotonic ts of last accepted hit (-w 1)
+_webhook_sync_lock = threading.Lock()
+
+
+@app.route('/api/billing/sumit-webhook', methods=['POST'])
+def api_billing_sumit_webhook():
+    try:
+        raw = request.get_data(as_text=True)[:1500]
+    except Exception:
+        raw = '<unreadable>'
+    # log every hit (WARNING so it always lands in journalctl regardless of
+    # the gunicorn log level)
+    try:
+        app.logger.warning(
+            f"[sumit-webhook] hit from "
+            f"{request.headers.get('CF-Connecting-IP') or request.remote_addr} "
+            f"payload={raw!r}")
+    except Exception:
+        pass
+    try:
+        with _webhook_sync_lock:
+            now = time.monotonic()
+            if now - _webhook_sync_last['ts'] < _WEBHOOK_SYNC_MIN_INTERVAL:
+                return jsonify({'ok': True, 'sync': 'rate-limited'})
+            _webhook_sync_last['ts'] = now
+
+        def _run():
+            try:
+                with app.app_context():
+                    _run_billing_sync_logged(get_db(), 'webhook')
+            except Exception as e:
+                app.logger.error(f'webhook sync failed (fail-open): {e}')
+
+        threading.Thread(target=_run, daemon=True,
+                         name='billing-sync-webhook').start()
+        return jsonify({'ok': True, 'sync': 'started'})
+    except Exception as e:
+        app.logger.error(f'sumit-webhook handler error (fail-open): {e}')
+        return jsonify({'ok': True}), 200
 
 
 # ── Billing motor layer C: transition alerts ──────────────────
@@ -5689,7 +5806,8 @@ def admin_billing():
             'state_label': state_label,
         })
 
-    # "סונכרן לאחרונה" — which layer ran the last sync (auto/manual/payment).
+    # "סונכרן לאחרונה" — which layer ran the last sync
+    # (auto/manual/payment/webhook).
     last_run = db.execute(
         "SELECT * FROM billing_sync_runs ORDER BY id DESC LIMIT 1").fetchone()
     last_sync = None
@@ -5699,9 +5817,15 @@ def admin_billing():
             'date': last_run['started_at'][:10],
             'ok': bool(last_run['ok']),
             'source_he': {'auto': 'אוטומטי', 'manual': 'ידני',
-                          'payment': 'תשלום'}.get(last_run['source'],
-                                                  last_run['source']),
+                          'payment': 'תשלום',
+                          'webhook': 'אירוע SUMIT'}.get(last_run['source'],
+                                                        last_run['source']),
         }
+
+    # SUMIT calls are metered — show this month's spend in the header.
+    api_calls_month = db.execute(
+        "SELECT COALESCE(SUM(api_calls),0) FROM billing_sync_runs "
+        "WHERE started_at LIKE ?", (month + '%',)).fetchone()[0]
 
     return render_template('admin_billing.html',
                            managers=managers,
@@ -5709,6 +5833,7 @@ def admin_billing():
                            payment_base_url=SUMIT_PAYMENT_URL,
                            billing_month=month,
                            last_sync=last_sync,
+                           api_calls_month=api_calls_month,
                            **_page_context('admin'))
 
 

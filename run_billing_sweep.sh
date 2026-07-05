@@ -1,11 +1,15 @@
 #!/bin/bash
 # Billing motor layer B — scheduled SUMIT sweep (STAGING wrapper).
-# Wired into the system crontab every 2h; the script itself enforces the
-# 07:00-23:00 IL window and the BILLING_SYNC_ENABLED flag.
+# ONCE-DAILY safety net at 09:10 IL (the SUMIT webhook is the primary,
+# event-driven sync — SUMIT meters API calls, so the sweep only catches missed
+# webhooks, SUMIT's automatic monthly recurring charges, and runs the
+# transition alerts). The script enforces the IL hour (BILLING_SWEEP_HOUR,
+# default 09) and the BILLING_SYNC_ENABLED flag.
 #
-# Crontab entry (UTC box; 04-20 UTC ≈ 07-23 IL in summer, the in-script IL
-# gate absorbs the winter DST shift):
-#   10 4,6,8,10,12,14,16,18,20 * * * /opt/makolet-chain-staging/run_billing_sweep.sh
+# Crontab entries (UTC box; BOTH fire, the in-script IL-hour gate lets exactly
+# one through year-round across the DST shift — 06:10 UTC = 09:10 IDT summer,
+# 07:10 UTC = 09:10 IST winter):
+#   10 6,7 * * * /opt/makolet-chain-staging/run_billing_sweep.sh
 
 set -u
 

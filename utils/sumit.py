@@ -17,11 +17,29 @@ Credentials come from the environment (SUMIT_API_KEY + SUMIT_ORG_ID, loaded from
 "לא מחובר ל-SUMIT" instead of erroring.
 """
 import os
+import threading
 
 import requests
 
 BASE = "https://api.sumit.co.il"
 TIMEOUT = 30
+
+# SUMIT meters API calls (plan actions ×5 = monthly quota, overage billed).
+# Every HTTP call through this module bumps a thread-local counter so each
+# sync can record exactly what it spent (billing_sync_runs.api_calls).
+_tl = threading.local()
+
+
+def reset_call_count():
+    _tl.calls = 0
+
+
+def call_count():
+    return getattr(_tl, "calls", 0)
+
+
+def _count_call():
+    _tl.calls = getattr(_tl, "calls", 0) + 1
 
 # Hard READ-ONLY allowlist. Any endpoint not in this set is refused before the
 # HTTP call. Nothing here mutates SUMIT state.
@@ -76,10 +94,56 @@ def _post(endpoint, **body):
     low = endpoint.lower()
     if any(tok in low for tok in _WRITE_TOKENS):
         raise RuntimeError(f"SUMIT client refused write-looking endpoint: {endpoint}")
+    _count_call()
     resp = requests.post(BASE + endpoint, json={"Credentials": creds, **body},
                          headers={"Content-Type": "application/json"}, timeout=TIMEOUT)
     resp.raise_for_status()
     return resp.json()
+
+
+# ── Trigger (webhook) management — the ONE sanctioned non-read call ─────────
+# /triggers/triggers/subscribe/ registers OUR receiver URL on a CRM folder so
+# SUMIT pushes an event when a document is created there; unsubscribe/ (by URL)
+# is the undo. Neither touches any financial object — they only manage the
+# webhook registration itself. They deliberately do NOT go through _post: the
+# read-only allowlist + tripwire above stay exactly as strict as before, and
+# this path allows nothing but these two endpoints.
+_TRIGGER_ENDPOINTS = {
+    "/triggers/triggers/subscribe/",
+    "/triggers/triggers/unsubscribe/",
+}
+
+# CRM folder "קבלות" (receipts) in this SUMIT org — probed via
+# /crm/schema/listfolders/ on 2026-07-05. Hosted-page payments create their
+# receipt document here, so Create on this folder == "a payment landed".
+RECEIPTS_FOLDER_ID = "2053200638"
+
+
+def _post_trigger(endpoint, **body):
+    creds = _credentials()
+    if creds is None:
+        raise SumitNotConnected("SUMIT_API_KEY / SUMIT_ORG_ID not configured")
+    if endpoint not in _TRIGGER_ENDPOINTS:
+        raise RuntimeError(f"SUMIT trigger client refused endpoint: {endpoint}")
+    _count_call()
+    resp = requests.post(BASE + endpoint, json={"Credentials": creds, **body},
+                         headers={"Content-Type": "application/json"}, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def subscribe_trigger(url, folder_id=RECEIPTS_FOLDER_ID, trigger_type="Create"):
+    """Register `url` as a webhook on a CRM folder. Returns the raw envelope —
+    success is Status == 0; the spec's response Data is an empty object (SUMIT
+    returns no subscription id; the URL itself is the handle)."""
+    return _post_trigger("/triggers/triggers/subscribe/",
+                         URL=url, Folder=str(folder_id), TriggerType=trigger_type)
+
+
+def unsubscribe_trigger(url):
+    """Remove the webhook registration for `url` (the spec keys removal on the
+    URL alone — there is no list endpoint and no id)."""
+    return _post_trigger("/triggers/triggers/unsubscribe/", URL=url)
 
 
 def _first(val):

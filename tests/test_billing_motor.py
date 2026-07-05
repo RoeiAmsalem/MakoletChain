@@ -127,7 +127,7 @@ def _fake_sync(monkeypatch, effect=None, result=None, delay=0.0):
     """Replace _run_billing_sync with a recorder. effect(db) runs inside."""
     calls = []
 
-    def fake(db):
+    def fake(db, allow_skip=False):
         calls.append(1)
         if delay:
             _time.sleep(delay)
@@ -210,11 +210,12 @@ def test_slow_path_pending_hint_and_forged_og_writes_nothing(client, monkeypatch
     assert len(runs) == 1 and runs[0]['source'] == 'payment'
 
 
-# ── layer B: scheduled sweep ─────────────────────────────────
+# ── layer B: scheduled sweep (once daily at 09:xx IL) ────────
 
 def _noon(monkeypatch):
+    # the daily sweep slot — 09:10 IL
     monkeypatch.setattr(app_module, '_now_il',
-                        lambda: datetime(2026, 7, 10, 12, 0, 0))
+                        lambda: datetime(2026, 7, 10, 9, 10, 0))
 
 
 def test_sweep_flag_off_skips_but_manual_sync_works(client, monkeypatch):
@@ -229,12 +230,15 @@ def test_sweep_flag_off_skips_but_manual_sync_works(client, monkeypatch):
     assert _sync_runs()[-1]['source'] == 'manual'
 
 
-def test_sweep_outside_il_window(client, monkeypatch):
-    monkeypatch.setattr(app_module, '_now_il',
-                        lambda: datetime(2026, 7, 10, 3, 0, 0))
-    calls = _fake_sync(monkeypatch)
-    assert billing_sweep.run_sweep(retry_delay=0) == 'outside-window'
-    assert calls == []
+def test_sweep_outside_daily_slot(client, monkeypatch):
+    # noon used to be inside the old 07-23 window — the once-daily sweep
+    # must skip it now (only 09:xx IL runs).
+    for hour in (3, 12, 20):
+        monkeypatch.setattr(app_module, '_now_il',
+                            lambda h=hour: datetime(2026, 7, 10, h, 0, 0))
+        calls = _fake_sync(monkeypatch)
+        assert billing_sweep.run_sweep(retry_delay=0) == 'outside-window'
+        assert calls == []
 
 
 def test_sweep_retry_then_medium_alert(client, monkeypatch):
