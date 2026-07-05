@@ -5538,6 +5538,13 @@ _webhook_sync_lock = threading.Lock()
 
 @app.route('/api/billing/sumit-webhook', methods=['POST'])
 def api_billing_sumit_webhook():
+    # OFF unless SUMIT_WEBHOOK_ENABLED=true: SUMIT's Triggers module turned out
+    # to be a paid add-on we skipped (2026-07-05), so no legitimate caller
+    # exists — and an unauthenticated public endpoint whose hits cause metered
+    # SUMIT reads (even rate-limited to 1/min) must not be reachable by default.
+    if os.environ.get('SUMIT_WEBHOOK_ENABLED', '').strip().lower() not in (
+            'true', '1', 'yes'):
+        abort(404)
     try:
         raw = request.get_data(as_text=True)[:1500]
     except Exception:

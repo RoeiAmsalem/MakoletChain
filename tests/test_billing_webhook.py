@@ -37,6 +37,7 @@ NOW_PREFIX = MONTH_REAL + '-01 08:00'
 def client(monkeypatch):
     monkeypatch.setattr(app_module, 'BILLING_START_DATE', '2026-07-05')
     monkeypatch.setattr(app_module, 'BILLING_GRACE_DAYS', 5)
+    monkeypatch.setenv('SUMIT_WEBHOOK_ENABLED', 'true')
     app_module._payment_sync_last.clear()
     app_module._webhook_sync_last['ts'] = 0.0
 
@@ -140,6 +141,17 @@ def test_webhook_needs_no_login(client, monkeypatch):
     _fake_sync(monkeypatch)
     r = client.post('/api/billing/sumit-webhook', data=b'x')
     assert r.status_code == 200
+
+
+def test_webhook_404_when_flag_off(client, monkeypatch):
+    # default state everywhere since the Triggers module was skipped (paid
+    # add-on): the unauthenticated endpoint must not exist at all.
+    monkeypatch.delenv('SUMIT_WEBHOOK_ENABLED')
+    calls = _fake_sync(monkeypatch)
+    r = client.post('/api/billing/sumit-webhook', json={'a': 1})
+    assert r.status_code == 404
+    _time.sleep(0.1)
+    assert calls == []
 
 
 def test_webhook_malformed_payload_no_crash(client, monkeypatch):
