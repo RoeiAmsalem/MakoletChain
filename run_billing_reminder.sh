@@ -1,5 +1,5 @@
 #!/bin/bash
-# Billing motor layer D — daily payment-reminder email (STAGING wrapper).
+# Billing motor layer D — daily payment-reminder email (cron wrapper).
 # Emails warning-state unpaid managers ONCE per month at 08:30 IL. The script
 # enforces the IL hour (BILLING_REMINDER_HOUR, default 08), the
 # BILLING_REMINDER_ENABLED kill switch, and dry-run (real sends only when
@@ -9,11 +9,14 @@
 # Crontab entries (UTC box; BOTH fire, the in-script IL-hour gate lets exactly
 # one through year-round across the DST shift — 05:30 UTC = 08:30 IDT summer,
 # 06:30 UTC = 08:30 IST winter):
-#   30 5,6 * * * /opt/makolet-chain-staging/run_billing_reminder.sh
+#   30 5,6 * * * /opt/makolet-chain/run_billing_reminder.sh
+#
+# APP_DIR is derived from the script's own location, so the same file serves
+# both trees (/opt/makolet-chain on prod, /opt/makolet-chain-staging on staging).
 
 set -u
 
-APP_DIR="/opt/makolet-chain-staging"
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$APP_DIR/logs"
 LOG_FILE="$LOG_DIR/billing_reminder.log"
 
