@@ -1,8 +1,10 @@
 """Billing motor layer D: the payment-reminder email (cron-driven, daily 08:30 IL).
 
-Emails every ACTIVE-billed manager who is in the paywall WARNING state — unpaid
-this month, inside the grace window. Locked managers get nothing (they already
-see the lock screen); exempt/paid/ok managers get nothing. ONE email per
+Emails every ACTIVE-billed manager who is in the paywall WARNING state AND
+within REMINDER_DAYS_LEFT days of lock — the mail lands on the
+2-days-before-lock morning, not on day 1 of warning. Locked managers get
+nothing (they already see the lock screen); exempt/paid/ok get nothing;
+early-warning managers wait for their final-stretch morning. ONE email per
 manager per month, tracked in manager_billing.reminder_sent_month (set only
 after SMTP accepts the send, so a failed send retries the next morning).
 
@@ -42,6 +44,11 @@ sys.path.insert(0, ROOT)
 # IL hour the daily reminder runs at. Overridable for on-demand staging runs
 # (BILLING_REMINDER_HOUR=<current IL hour> to force a run outside 08:xx).
 REMINDER_HOUR = 8
+
+# Send only on the final-stretch mornings: days_left <= 2 (2 days before lock).
+# '<=' rather than '==' so a manager who crossed the threshold before the job
+# existed — or while it was down — still gets their one reminder.
+REMINDER_DAYS_LEFT = 2
 
 SMTP_HOST = 'smtp.gmail.com'
 SMTP_PORT = 587
@@ -104,8 +111,9 @@ def run_pass(db):
     """Select + send + mark. Returns a summary dict.
 
     Selection is the paywall's own machinery: the _billing_alert_pass join
-    (mb.active=1 AND u.active=1) filtered to _billing_state == 'warning'.
-    locked/exempt/ok are excluded by the state itself. The once-per-month
+    (mb.active=1 AND u.active=1) filtered to _billing_state == 'warning' AND
+    days_left <= REMINDER_DAYS_LEFT. locked/exempt/ok are excluded by the
+    state itself; early-warning managers by the threshold. The once-per-month
     dedup (reminder_sent_month == current month) is checked AFTER the state
     filter and set per-send, committed immediately, only on SMTP success.
     """
@@ -123,6 +131,10 @@ def run_pass(db):
             "WHERE mb.active = 1 AND u.active = 1").fetchall():
         st = _billing_state(row['user_id'], row['role'], row['email'], db)
         if st.get('state') != 'warning':
+            continue
+        # missing days_left can't happen for 'warning'; default 0 fails toward
+        # sending — a stray mail beats a manager locking with no reminder
+        if st.get('days_left', 0) > REMINDER_DAYS_LEFT:
             continue
         if row['reminder_sent_month'] == month:
             skipped_already_sent += 1
