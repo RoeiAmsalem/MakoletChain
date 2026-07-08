@@ -32,6 +32,7 @@ BILLING_REMINDER_DRY_RUN=false.
 SMTP failure: log + ONE 🟠 brrr for the whole run (never crashes the job);
 the unsent managers retry tomorrow because their flag was never set.
 """
+import html
 import os
 import smtplib
 import sys
@@ -57,6 +58,8 @@ SMTP_TIMEOUT = 30
 SENDER_NAME = 'קופה שקופה'
 
 SUBJECT = 'קופה שקופה — תזכורת תשלום'
+
+ACCOUNT_URL = 'https://app.makoletdashboard.com/account'
 
 BODY = '''\
 שלום {name},
@@ -92,6 +95,22 @@ def _dry_run():
         not in ('false', '0', 'no')
 
 
+def _body_html(name):
+    """The same BODY as minimal RTL HTML — Hebrew plain text renders
+    left-aligned in Gmail, so the real part is a single dir=rtl div.
+    Paragraphs (blank-line separated) → <p>, the /account URL → a plain
+    clickable link. No images, no styling beyond direction/font."""
+    paras = []
+    for para in BODY.format(name=name).strip().split('\n\n'):
+        esc = html.escape(para).replace('\n', '<br>')
+        esc = esc.replace(ACCOUNT_URL,
+                          f'<a href="{ACCOUNT_URL}">{ACCOUNT_URL}</a>')
+        paras.append(f'<p style="margin:0 0 1em">{esc}</p>')
+    return ('<div dir="rtl" style="text-align:right; '
+            'font-family:Arial,sans-serif; font-size:15px; line-height:1.6">'
+            + '\n'.join(paras) + '</div>')
+
+
 def _send_email(to_addr, name):
     """One real SMTP send. Raises on any failure — the caller decides what a
     failure means (no flag, one brrr per run)."""
@@ -100,7 +119,10 @@ def _send_email(to_addr, name):
     msg['Subject'] = SUBJECT
     msg['From'] = formataddr((SENDER_NAME, user))
     msg['To'] = to_addr
+    # multipart/alternative: plain text stays as fallback for old clients,
+    # modern clients render the RTL HTML part.
     msg.set_content(BODY.format(name=name))
+    msg.add_alternative(_body_html(name), subtype='html')
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as smtp:
         smtp.starttls()
         smtp.login(user, password)
