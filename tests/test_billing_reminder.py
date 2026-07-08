@@ -225,6 +225,44 @@ def test_zero_sumit_calls(db, live_mode, monkeypatch):
     assert utils.sumit.call_count() == 0
 
 
+def test_html_body_rtl():
+    h = billing_reminder._body_html('מנהל בדיקה')
+    assert h.startswith('<div dir="rtl"')
+    assert 'text-align:right' in h
+    assert 'שלום מנהל בדיקה,' in h
+    assert (f'<a href="{billing_reminder.ACCOUNT_URL}">'
+            f'{billing_reminder.ACCOUNT_URL}</a>') in h
+    assert '<img' not in h
+
+
+def test_email_is_multipart_alternative(monkeypatch):
+    monkeypatch.setenv('BILLING_GMAIL_USER', 'kupashkufaa@gmail.com')
+    monkeypatch.setenv('BILLING_GMAIL_APP_PASSWORD', 'x')
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, *a, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+        def starttls(self):
+            pass
+        def login(self, *a):
+            pass
+        def send_message(self, msg):
+            captured['msg'] = msg
+
+    monkeypatch.setattr(smtplib, 'SMTP', FakeSMTP)
+    billing_reminder._send_email('to@test.com', 'מנהל')
+    msg = captured['msg']
+    assert msg.get_content_type() == 'multipart/alternative'
+    parts = {p.get_content_type(): p.get_content() for p in msg.iter_parts()}
+    assert 'שלום מנהל,' in parts['text/plain']
+    assert '<div dir="rtl"' in parts['text/html']
+
+
 def test_kill_switch_and_hour_gate(db, monkeypatch):
     monkeypatch.setenv('BILLING_REMINDER_ENABLED', 'false')
     assert billing_reminder.run_reminder() == 'disabled'
