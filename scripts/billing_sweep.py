@@ -1,10 +1,13 @@
 """Billing motor layer B: the ONCE-DAILY sweep (cron-driven, like the Z agent).
 
-Runs the READ-ONLY SUMIT sync + the layer-C transition alerts. Since the SUMIT
-webhook (layer A½) became the primary event-driven sync, this is a daily
-SAFETY NET only — SUMIT meters API calls, so the sweep's jobs are: catch
-missed webhooks, pick up SUMIT's automatic monthly recurring charges, and run
-the warning/lock/paid transition alerts once a day.
+Runs the READ-ONLY SUMIT sync + the layer-C transition alerts + the manager
+lock-notification email. Since the SUMIT webhook (layer A½) became the primary
+event-driven sync, this is a daily SAFETY NET only — SUMIT meters API calls,
+so the sweep's jobs are: catch missed webhooks, pick up SUMIT's automatic
+monthly recurring charges, run the warning/lock/paid transition alerts once a
+day, and email each newly-LOCKED manager once (run_lock_pass in
+billing_reminder.py — same Gmail sender and dry-run convention as the 08:30
+reminder, zero extra SUMIT calls).
 
 Gates, in order:
   - BILLING_SYNC_ENABLED (own flag, default TRUE; deliberately NOT gated by
@@ -24,6 +27,8 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# sibling scripts/ imports (billing_reminder) regardless of how we were invoked
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 RETRY_DELAY_SECONDS = 300
 # IL hour the daily sweep runs at. Overridable for on-demand staging runs
@@ -72,9 +77,24 @@ def run_sweep(retry_delay=RETRY_DELAY_SECONDS):
         # Alerts only run on FRESH data — a failed sync must never produce a
         # warning/lock alert off stale rows.
         sent = _billing_alert_pass(db)
+        # Lock-notification emails ride the same fresh-state run. run_lock_pass
+        # handles SMTP failures itself (flag unset + one 🟠); this catch is
+        # only for a pass-level crash, which must never take down the sweep.
+        try:
+            import billing_reminder
+            lres = billing_reminder.run_lock_pass(db)
+            lock_note = (f"lock_emails={len(lres['sent'])} "
+                         f"dry={len(lres['would_send'])} "
+                         f"failed={len(lres['failed'])}")
+        except Exception as e:
+            print(f'[billing-sweep] lock-email pass crashed '
+                  f'(sweep unaffected): {e}')
+            notify('Billing lock-email pass crashed', str(e)[:280],
+                   medium=True)
+            lock_note = 'lock_emails=crashed'
         print(f"[billing-sweep] ok — payments_seen={res.get('payments_seen')} "
               f"paid_managers={res.get('paid_managers')} "
-              f"alerts={len(sent)} {sent}")
+              f"alerts={len(sent)} {sent} {lock_note}")
         return 'ok'
 
 
