@@ -136,7 +136,7 @@ def _flag(db, uid):
 def test_only_final_stretch_warning_selected(db, live_mode, monkeypatch):
     sends = []
     monkeypatch.setattr(billing_reminder, '_send_email',
-                        lambda to, name: sends.append((to, name)))
+                        lambda to, name, **kw: sends.append((to, name)))
     res = billing_reminder.run_pass(db)
     assert res['dry_run'] is False
     # days_left=2 (today's threshold) AND days_left=1 (missed yesterday) send;
@@ -154,7 +154,7 @@ def test_only_final_stretch_warning_selected(db, live_mode, monkeypatch):
 def test_once_per_month_dedup(db, live_mode, monkeypatch):
     sends = []
     monkeypatch.setattr(billing_reminder, '_send_email',
-                        lambda to, name: sends.append(to))
+                        lambda to, name, **kw: sends.append(to))
     billing_reminder.run_pass(db)
     res2 = billing_reminder.run_pass(db)
     assert sends == ['warn@test.com', 'missed@test.com']  # once each, not twice
@@ -163,7 +163,7 @@ def test_once_per_month_dedup(db, live_mode, monkeypatch):
 
 
 def test_smtp_failure_no_flag_one_brrr(db, live_mode, monkeypatch):
-    def boom(to, name):
+    def boom(to, name, **kw):
         raise smtplib.SMTPAuthenticationError(535, b'bad credentials')
     monkeypatch.setattr(billing_reminder, '_send_email', boom)
     alerts = []
@@ -179,7 +179,7 @@ def test_smtp_failure_no_flag_one_brrr(db, live_mode, monkeypatch):
     # next-morning retry actually reselects the managers
     sends = []
     monkeypatch.setattr(billing_reminder, '_send_email',
-                        lambda to, name: sends.append(to))
+                        lambda to, name, **kw: sends.append(to))
     billing_reminder.run_pass(db)
     assert sends == ['warn@test.com', 'missed@test.com']
     assert _flag(db, U_WARN) == MONTH
@@ -213,7 +213,7 @@ def test_dry_run_forced_even_with_creds(db, monkeypatch):
 
 
 def test_zero_sumit_calls(db, live_mode, monkeypatch):
-    monkeypatch.setattr(billing_reminder, '_send_email', lambda to, name: None)
+    monkeypatch.setattr(billing_reminder, '_send_email', lambda to, name, **kw: None)
     for fn in ('list_payments', 'list_documents', 'get_document',
                'list_customers', 'ping', '_post'):
         monkeypatch.setattr(
@@ -270,3 +270,86 @@ def test_kill_switch_and_hour_gate(db, monkeypatch):
     wrong_hour = (app_module._now_il().hour + 1) % 24
     monkeypatch.setenv('BILLING_REMINDER_HOUR', str(wrong_hour))
     assert billing_reminder.run_reminder() == 'outside-window'
+
+
+# ── Lock-notification email (run_lock_pass, fired by the 09:10 sweep) ──────
+
+def _lock_flag(db, uid):
+    return db.execute(
+        'SELECT locked_email_sent_month FROM manager_billing WHERE user_id=?',
+        (uid,)).fetchone()[0]
+
+
+def test_lock_email_only_locked_selected(db, live_mode, monkeypatch):
+    sends = []
+    monkeypatch.setattr(billing_reminder, '_send_email',
+                        lambda to, name, **kw: sends.append((to, kw['subject'])))
+    res = billing_reminder.run_lock_pass(db)
+    # locked selected with the lock subject; warning/paid/exempt/off/inactive never
+    assert sends == [('locked@test.com', billing_reminder.LOCKED_SUBJECT)]
+    assert [u for u, _, _ in res['sent']] == [U_LOCKED]
+    assert _lock_flag(db, U_LOCKED) == MONTH
+    for uid in (U_WARN, U_MISSED, U_EARLY, U_PAID, U_OFF, U_DEMO, U_INACT):
+        assert _lock_flag(db, uid) is None
+    # the lock pass never touches the reminder flag and vice versa
+    assert _flag(db, U_LOCKED) is None
+
+
+def test_lock_email_once_then_relock_next_month(db, live_mode, monkeypatch):
+    sends = []
+    monkeypatch.setattr(billing_reminder, '_send_email',
+                        lambda to, name, **kw: sends.append(to))
+    billing_reminder.run_lock_pass(db)
+    res2 = billing_reminder.run_lock_pass(db)
+    assert sends == ['locked@test.com']        # staying locked ≠ more mail
+    assert res2['sent'] == [] and res2['skipped_already_sent'] == 1
+    # paid in July, re-locked in August: the July flag no longer matches →
+    # exactly one more mail (simulated by backdating the flag a month)
+    db.execute("UPDATE manager_billing SET locked_email_sent_month='2026-06' "
+               "WHERE user_id=?", (U_LOCKED,))
+    db.commit()
+    res3 = billing_reminder.run_lock_pass(db)
+    assert [u for u, _, _ in res3['sent']] == [U_LOCKED]
+    assert _lock_flag(db, U_LOCKED) == MONTH
+
+
+def test_lock_email_smtp_fail_no_flag_one_brrr(db, live_mode, monkeypatch):
+    def boom(to, name, **kw):
+        raise smtplib.SMTPAuthenticationError(535, b'bad credentials')
+    monkeypatch.setattr(billing_reminder, '_send_email', boom)
+    alerts = []
+    monkeypatch.setattr(utils.notify, 'notify',
+                        lambda *a, **kw: alerts.append((a, kw)))
+    res = billing_reminder.run_lock_pass(db)
+    assert [u for u, _, _ in res['failed']] == [U_LOCKED]
+    assert _lock_flag(db, U_LOCKED) is None    # retries next sweep
+    assert len(alerts) == 1
+    assert alerts[0][1].get('medium') is True
+    sends = []
+    monkeypatch.setattr(billing_reminder, '_send_email',
+                        lambda to, name, **kw: sends.append(to))
+    billing_reminder.run_lock_pass(db)
+    assert sends == ['locked@test.com']
+
+
+def test_lock_email_dry_run(db, monkeypatch):
+    monkeypatch.delenv('BILLING_GMAIL_USER', raising=False)
+    monkeypatch.delenv('BILLING_GMAIL_APP_PASSWORD', raising=False)
+
+    def no_smtp(*a, **kw):
+        raise AssertionError('SMTP must not be touched in dry-run')
+    monkeypatch.setattr(smtplib, 'SMTP', no_smtp)
+    res = billing_reminder.run_lock_pass(db)
+    assert res['dry_run'] is True
+    assert [u for u, _, _ in res['would_send']] == [U_LOCKED]
+    assert res['sent'] == [] and res['failed'] == []
+    assert _lock_flag(db, U_LOCKED) is None
+
+
+def test_lock_email_html_body():
+    h = billing_reminder._body_html('מנהל', billing_reminder.LOCKED_BODY)
+    assert h.startswith('<div dir="rtl"')
+    assert 'הגישה למערכת קופה שקופה הושהתה זמנית' in h
+    assert (f'<a href="{billing_reminder.ACCOUNT_URL}">'
+            f'{billing_reminder.ACCOUNT_URL}</a>') in h
+    assert '<img' not in h
