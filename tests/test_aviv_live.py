@@ -23,6 +23,12 @@ from app import app
 
 # ── chain-account path (run_aviv_live_chain) ──────────────────
 
+@pytest.fixture(autouse=True)
+def _fresh_chain_gate():
+    """The outage gate is module-global (persists across scheduler ticks);
+    reset it so tests don't leak streak state into each other."""
+    aviv_live._chain_gate = aviv_live._ChainFailureGate()
+
 def _chain_db():
     """In-memory DB with the columns the chain path touches."""
     conn = sqlite3.connect(':memory:')
@@ -220,6 +226,95 @@ def test_chain_outside_store_hours_silent_skip(monkeypatch):
     monkeypatch.setattr(aviv_live, '_login_chain_account', boom)
     out = aviv_live.run_aviv_live_chain()
     assert out == {'success': True, 'skipped': 'outside_hours'}
+
+
+# ── chain outage gate (page after N consecutive ticks) ────────
+
+def _capture_notify(monkeypatch):
+    calls = []
+    monkeypatch.setattr(aviv_live, 'notify',
+                        lambda title, msg, **kw: calls.append((title, msg, kw)))
+    return calls
+
+
+def _chain_tick(conn, monkeypatch, *, fail):
+    if fail:
+        def boom():
+            raise Exception('Read timed out. (read timeout=30)')
+        monkeypatch.setattr(aviv_live, '_login_chain_account', boom)
+    else:
+        monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
+        monkeypatch.setattr(aviv_live, '_fetch_multi_status',
+                            lambda t, ids: [_live_status_row(b, 100.0) for b in ids])
+    return aviv_live.run_aviv_live_chain(conn=conn)
+
+
+def test_chain_single_blip_does_not_page(monkeypatch):
+    """One failed tick then a good one → no ❌ page, no ✅ recovery."""
+    conn = _chain_db()
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    calls = _capture_notify(monkeypatch)
+
+    out = _chain_tick(conn, monkeypatch, fail=True)
+    assert out['success'] is False and out['fail_streak'] == 1
+    _chain_tick(conn, monkeypatch, fail=False)
+
+    chain_alerts = [c for c in calls if 'Aviv Live (chain)' in c[0]]
+    assert chain_alerts == [], f'blip must not page: {chain_alerts}'
+
+
+def test_chain_pages_once_after_threshold(monkeypatch):
+    """3 consecutive failed ticks → exactly one ❌ page; a 4th adds none."""
+    conn = _chain_db()
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    calls = _capture_notify(monkeypatch)
+
+    for _ in range(2):
+        _chain_tick(conn, monkeypatch, fail=True)
+    assert [c for c in calls if '❌' in c[0]] == [], 'must not page before threshold'
+
+    _chain_tick(conn, monkeypatch, fail=True)   # 3rd — crosses threshold
+    _chain_tick(conn, monkeypatch, fail=True)   # 4th — already alerted
+
+    pages = [c for c in calls if '❌ Aviv Live (chain)' in c[0]]
+    assert len(pages) == 1, f'expected exactly one page, got {len(pages)}'
+    assert '3 ticks in a row' in pages[0][1]
+    assert pages[0][2].get('critical') is True
+
+
+def test_chain_recovery_after_page(monkeypatch):
+    """First good tick after a page → one ✅ recovery; next good tick silent."""
+    conn = _chain_db()
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    calls = _capture_notify(monkeypatch)
+
+    for _ in range(3):
+        _chain_tick(conn, monkeypatch, fail=True)
+    _chain_tick(conn, monkeypatch, fail=False)
+    _chain_tick(conn, monkeypatch, fail=False)
+
+    recoveries = [c for c in calls if '✅ Aviv Live (chain)' in c[0]]
+    assert len(recoveries) == 1, f'expected one recovery, got {len(recoveries)}'
+    assert '15 minutes' in recoveries[0][1]
+
+
+def test_chain_no_recovery_without_page(monkeypatch):
+    """2 failed ticks (below threshold) then success → fully silent."""
+    conn = _chain_db()
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    calls = _capture_notify(monkeypatch)
+
+    for _ in range(2):
+        _chain_tick(conn, monkeypatch, fail=True)
+    _chain_tick(conn, monkeypatch, fail=False)
+
+    assert [c for c in calls if 'Aviv Live (chain)' in c[0]] == []
+
+
+def test_chain_timeout_is_30s():
+    """Chain path uses the widened timeout; legacy per-branch stays at 15."""
+    assert aviv_live.CHAIN_API_TIMEOUT == 30
+    assert aviv_live.API_TIMEOUT == 15
 
 
 # ── run_aviv_live() guard ─────────────────────────────────────

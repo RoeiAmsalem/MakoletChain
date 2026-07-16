@@ -656,6 +656,42 @@ def scrape_hours_midday(branch_id: int) -> dict:
 CHAIN_USER_ENV = 'AVIV_CHAIN_USER'
 CHAIN_PASS_ENV = 'AVIV_CHAIN_PASS'
 
+# Aviv's login endpoint intermittently takes >15s (evening lean, ~daily since
+# 2026-07-01); 30s absorbs those. Per-branch legacy path stays at API_TIMEOUT.
+CHAIN_API_TIMEOUT = 30
+
+# A single failed chain tick self-heals on the next 5-min tick (cumulative
+# totals — no data lost), so it only logs. Page 🔴 once per sustained outage,
+# after this many consecutive failed ticks; first good tick after a page
+# sends a ✅ recovery.
+CHAIN_ALERT_AFTER = 3
+
+
+class _ChainFailureGate:
+    def __init__(self, threshold: int = CHAIN_ALERT_AFTER):
+        self.threshold = threshold
+        self.streak = 0
+        self.alerted = False
+
+    def record_failure(self) -> bool:
+        """Count a failed tick. True → threshold just crossed, page now."""
+        self.streak += 1
+        if self.streak >= self.threshold and not self.alerted:
+            self.alerted = True
+            return True
+        return False
+
+    def record_success(self) -> int:
+        """Count a good tick. Returns the ended outage's failed-tick count if
+        a page was sent (caller sends recovery), else 0."""
+        streak, alerted = self.streak, self.alerted
+        self.streak = 0
+        self.alerted = False
+        return streak if alerted else 0
+
+
+_chain_gate = _ChainFailureGate()
+
 # Opt-in flag mirroring AVIV_Z_USE_CHAIN / AVIV_EMP_USE_CHAIN. When set, the
 # manual /ops aviv_live trigger uses the chain-account path for branches with
 # aviv_branch_id; otherwise the legacy per-store path runs as before.
@@ -674,7 +710,7 @@ def _login_chain_account() -> str:
         f'{API_BASE}/account/login',
         json={'user': user, 'password': pw},
         headers={'Content-Type': 'application/json'},
-        timeout=API_TIMEOUT, verify=False,
+        timeout=CHAIN_API_TIMEOUT, verify=False,
     )
     if r.status_code == 401:
         raise Exception('401 Aviv chain login failed — credentials may have changed')
@@ -691,7 +727,7 @@ def _fetch_multi_status(token: str, aviv_branch_ids: list[int]) -> list[dict]:
         f'{API_PLAIN}/raw/status/plain',
         json={'branches': aviv_branch_ids},
         headers={'Content-Type': 'application/json', 'Authtoken': token},
-        timeout=API_TIMEOUT, verify=False,
+        timeout=CHAIN_API_TIMEOUT, verify=False,
     )
     r.raise_for_status()
     data = r.json()
@@ -873,12 +909,22 @@ def run_aviv_live_chain(force: bool = False,
             response = _fetch_multi_status(token, aviv_ids)
         except Exception as e:
             log.error('chain REST call failed (no Playwright fallback): %s', e)
-            # Critical + systemic: single login/POST failing kills the whole tick
-            # for every branch. dedup_key collapses repeat ticks during an outage.
-            notify('❌ Aviv Live (chain)',
-                   f'Chain status call failed; this tick skipped. {_friendly_error(e)}',
-                   critical=True, dedup_key="aviv_chain_auth")
-            return {'success': False, 'error': str(e)[:200]}
+            if _chain_gate.record_failure():
+                notify('❌ Aviv Live (chain)',
+                       f'Chain status call failed {_chain_gate.streak} ticks in a row '
+                       f'(~{_chain_gate.streak * 5} min). {_friendly_error(e)}',
+                       critical=True, dedup_key="aviv_chain_auth")
+            else:
+                log.warning('chain tick failure %d/%d — no page yet',
+                            _chain_gate.streak, _chain_gate.threshold)
+            return {'success': False, 'error': str(e)[:200],
+                    'fail_streak': _chain_gate.streak}
+
+        down_ticks = _chain_gate.record_success()
+        if down_ticks:
+            notify('✅ Aviv Live (chain)',
+                   f'Back online after ~{down_ticks * 5} minutes '
+                   f'({down_ticks} failed ticks).')
 
         # ── per-branch fan-out ───────────────────────────────────────────
         by_aviv_response = {row.get('branch'): row for row in response
