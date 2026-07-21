@@ -4733,6 +4733,49 @@ def _ensure_manager_billing_rows(db):
     db.commit()
 
 
+# A pending (receipt-less) payment blocks the 1-call skip for this many
+# DISTINCT DAYS (a receipt may lag hours/a day); then it's classified
+# unmatchable and stops costing calls. Days, not runs — a burst of manual
+# רענן clicks must not eat the grace window in minutes.
+BILLING_UNMATCHABLE_AFTER_DAYS = int(
+    os.environ.get('BILLING_UNMATCHABLE_AFTER_DAYS', '5') or 5)
+
+
+def _track_unresolved(db, payment, today):
+    """Pending-payment bookkeeping (billing_payment_resolutions). Bumps
+    seen_days once per calendar day; on day BILLING_UNMATCHABLE_AFTER_DAYS
+    classifies the payment 'unmatchable' + 🟡 brrr ONCE (the pending →
+    unmatchable transition happens exactly once). Returns the resolution
+    after tracking ('pending' or 'unmatchable')."""
+    pid = payment.get('ID')
+    row = db.execute(
+        "SELECT seen_days, last_seen_date FROM billing_payment_resolutions "
+        "WHERE payment_id=?", (pid,)).fetchone()
+    if row is None:
+        db.execute(
+            "INSERT INTO billing_payment_resolutions (payment_id, customer_id, "
+            "resolution, seen_days, first_seen_date, last_seen_date) "
+            "VALUES (?,?,'pending',1,?,?)",
+            (pid, payment.get('CustomerID'), today, today))
+        return 'pending'
+    seen = row['seen_days'] + (1 if row['last_seen_date'] != today else 0)
+    if seen >= BILLING_UNMATCHABLE_AFTER_DAYS:
+        db.execute(
+            "UPDATE billing_payment_resolutions SET resolution='unmatchable', "
+            "seen_days=?, last_seen_date=?, resolved_at=? WHERE payment_id=?",
+            (seen, today, today, pid))
+        from utils.notify import notify
+        notify('SUMIT payment unmatched',
+               f'Payment {pid} still has no receipt after {seen} days — '
+               f'assign it manually from /admin/billing. It no longer blocks '
+               f'the daily 1-call skip.')
+        return 'unmatchable'
+    db.execute(
+        "UPDATE billing_payment_resolutions SET seen_days=?, last_seen_date=? "
+        "WHERE payment_id=?", (seen, today, pid))
+    return 'pending'
+
+
 def _run_billing_sync(db, allow_skip=False):
     """READ-ONLY vs SUMIT. Pull this-month payments, map each to a manager via
     payment.CustomerID -> customer.ExternalIdentifier == sumit_tag, and update
@@ -4743,9 +4786,11 @@ def _run_billing_sync(db, allow_skip=False):
 
     allow_skip: SUMIT meters API calls, so when payments/list shows NOTHING new
     since the last successful run this month (same count, same max payment id)
-    AND that run resolved every payment's tag (unmatched=0), the sync stops at
+    AND every current payment id has a terminal resolution (matched /
+    unmatchable — see billing_payment_resolutions), the sync stops at
     1 call: manager rows keep their state, only updated_at is refreshed (the
-    paywall's staleness guard needs a this-month touch). The manual רענן button
+    paywall's staleness guard needs a this-month touch). Only PENDING payments
+    (a receipt may still be on its way) block the skip. The manual רענן button
     passes allow_skip=False so a human refresh is always the full truth.
     """
     from utils import sumit
@@ -4765,15 +4810,31 @@ def _run_billing_sync(db, allow_skip=False):
     cur_max_id = max((p.get('ID') or 0 for p in valid), default=0)
     cur_max_date = max(((p.get('Date') or '')[:10] for p in valid), default='')
 
+    # Resolution memory for every this-month payment id (see migration 041).
+    month_ids = [p.get('ID') for p in valid
+                 if (p.get('Date') or '')[:7] == month and p.get('ID')]
+    res_rows = {}
+    if month_ids:
+        qmarks = ','.join('?' * len(month_ids))
+        res_rows = {r['payment_id']: r for r in db.execute(
+            "SELECT payment_id, resolution, tag "
+            "FROM billing_payment_resolutions "
+            f"WHERE payment_id IN ({qmarks})", month_ids).fetchall()}
+    unresolved = [pid for pid in month_ids
+                  if (res_rows.get(pid) is None
+                      or res_rows[pid]['resolution'] == 'pending')]
+
     if allow_skip:
         # Previous successful run THIS month (LIKE month% → the skip window
         # resets on month rollover, when everyone must be re-marked unpaid).
+        # Count/max-id must still match: a payment DISAPPEARING (cancelled)
+        # must trigger a full run to re-mark its manager unpaid.
         prev = db.execute(
             "SELECT last_payment_id, payments_seen, unmatched "
             "FROM billing_sync_runs WHERE ok=1 AND last_payment_id IS NOT NULL "
             "AND started_at LIKE ? ORDER BY id DESC LIMIT 1",
             (month + '%',)).fetchone()
-        if (prev and prev['unmatched'] == 0
+        if (prev and not unresolved
                 and prev['last_payment_id'] == cur_max_id
                 and prev['payments_seen'] == len(valid)):
             now_iso = _now_il().strftime('%Y-%m-%d %H:%M')
@@ -4826,16 +4887,35 @@ def _run_billing_sync(db, allow_skip=False):
     # tag -> most-recent valid payment date within the current calendar month
     paid_by_tag = {}
     unmatched = 0
+    unmatchable = 0
+    today = _now_il().strftime('%Y-%m-%d')
     for p in valid:
         pdate = (p.get('Date') or '')[:10]
         if pdate[:7] != month:
             continue
-        tag = _tag_for_customer(p.get('CustomerID'))
+        res = res_rows.get(p.get('ID'))
+        if res is not None and res['resolution'] == 'unmatchable':
+            unmatchable += 1          # classified — no fetch, never blocks
+            continue
+        if res is not None and res['resolution'] == 'matched':
+            tag = res['tag']          # receipts are immutable — reuse, 0 calls
+        else:
+            tag = _tag_for_customer(p.get('CustomerID'))
         if tag is None:
             # receipt-document join failed — the doc may simply not exist YET.
-            # unmatched > 0 blocks the skip path so later runs retry the join.
-            unmatched += 1
+            # Track as pending (blocks the skip so later runs retry the join)
+            # until it ages out to 'unmatchable' and stops costing calls.
+            if _track_unresolved(db, p, today) == 'pending':
+                unmatched += 1
+            else:
+                unmatchable += 1
             continue
+        db.execute(
+            "INSERT INTO billing_payment_resolutions (payment_id, customer_id, "
+            "resolution, tag, first_seen_date, last_seen_date, resolved_at) "
+            "VALUES (?,?,'matched',?,?,?,?) ON CONFLICT(payment_id) DO UPDATE "
+            "SET resolution='matched', tag=excluded.tag, resolved_at=excluded.resolved_at",
+            (p.get('ID'), p.get('CustomerID'), tag, today, today, today))
         if tag not in paid_by_tag or pdate > paid_by_tag[tag]:
             paid_by_tag[tag] = pdate
 
@@ -4858,7 +4938,7 @@ def _run_billing_sync(db, allow_skip=False):
     return {'connected': True, 'payments_seen': len(valid),
             'paid_managers': matched, 'customers': len(ext_by_customer),
             'last_payment_id': cur_max_id, 'last_payment_date': cur_max_date,
-            'unmatched': unmatched}
+            'unmatched': unmatched, 'unmatchable': unmatchable}
 
 
 # Monthly SUMIT-call budget alert: 🟠 once when the month's total crosses this
