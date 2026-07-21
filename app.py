@@ -4754,9 +4754,10 @@ def _track_unresolved(db, payment, today):
     if row is None:
         db.execute(
             "INSERT INTO billing_payment_resolutions (payment_id, customer_id, "
-            "resolution, seen_days, first_seen_date, last_seen_date) "
-            "VALUES (?,?,'pending',1,?,?)",
-            (pid, payment.get('CustomerID'), today, today))
+            "resolution, seen_days, first_seen_date, last_seen_date, "
+            "payment_date, amount) VALUES (?,?,'pending',1,?,?,?,?)",
+            (pid, payment.get('CustomerID'), today, today,
+             (payment.get('Date') or '')[:10] or None, payment.get('Amount')))
         return 'pending'
     seen = row['seen_days'] + (1 if row['last_seen_date'] != today else 0)
     if seen >= BILLING_UNMATCHABLE_AFTER_DAYS:
@@ -5344,6 +5345,14 @@ def admin_billing():
         "SELECT COALESCE(SUM(api_calls),0) FROM billing_sync_runs "
         "WHERE started_at LIKE ?", (month + '%',)).fetchone()[0]
 
+    # Payments the sweep could not join to a receipt (pending/unmatchable) —
+    # resolvable by hand via the assign control, using data already fetched.
+    unassigned_payments = [dict(r) for r in db.execute(
+        "SELECT payment_id, resolution, seen_days, payment_date, amount "
+        "FROM billing_payment_resolutions "
+        "WHERE resolution IN ('pending','unmatchable') "
+        "ORDER BY payment_id DESC").fetchall()]
+
     return render_template('admin_billing.html',
                            managers=managers,
                            sumit_connected=sumit.is_connected(),
@@ -5351,6 +5360,9 @@ def admin_billing():
                            billing_month=month,
                            last_sync=last_sync,
                            api_calls_month=api_calls_month,
+                           unassigned_payments=unassigned_payments,
+                           assignable_managers=[m for m in managers
+                                                if m['active']],
                            **_page_context('admin'))
 
 
@@ -5402,6 +5414,59 @@ def api_admin_billing_sync():
     """Run the read-only SUMIT sync on demand (the 'רענן סטטוס' button)."""
     db = get_db()
     return jsonify(_run_billing_sync_logged(db, 'manual'))
+
+
+@app.route('/api/admin/billing/assign-payment', methods=['POST'])
+@_admin_required
+def api_admin_billing_assign_payment():
+    """Assign an unresolved SUMIT payment to a manager by hand — for payments
+    whose receipt-join failed (no receipt / SUMIT payer-dedup landed the tag
+    elsewhere). Uses only already-fetched payment data: zero SUMIT calls,
+    writes to our DB only. tag=str(user_id) makes future syncs treat the
+    payment as matched, so the assignment survives every later run."""
+    data = request.get_json(silent=True) or {}
+    try:
+        payment_id = int(data.get('payment_id'))
+        user_id = int(data.get('user_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'בקשה לא תקינה'}), 400
+    db = get_db()
+    res = db.execute(
+        "SELECT resolution, payment_date, amount "
+        "FROM billing_payment_resolutions WHERE payment_id=?",
+        (payment_id,)).fetchone()
+    if res is None:
+        return jsonify({'error': 'תשלום לא מוכר'}), 404
+    if res['resolution'] == 'matched':
+        return jsonify({'error': 'התשלום כבר משויך'}), 409
+    mgr = db.execute(
+        "SELECT mb.active, u.name FROM manager_billing mb "
+        "JOIN users u ON u.id=mb.user_id WHERE mb.user_id=?",
+        (user_id,)).fetchone()
+    if mgr is None or not mgr['active']:
+        return jsonify({'error': 'המנהל אינו פעיל לחיוב'}), 400
+
+    now_iso = _now_il().strftime('%Y-%m-%d %H:%M')
+    paid_date = res['payment_date'] or now_iso[:10]
+    admin_id = session['user_id']
+    db.execute(
+        "UPDATE billing_payment_resolutions SET resolution='matched', tag=?, "
+        "resolved_at=?, assigned_by=?, assigned_at=? "
+        "WHERE payment_id=? AND resolution != 'matched'",
+        (str(user_id), now_iso[:10], admin_id, now_iso, payment_id))
+    db.execute(
+        "UPDATE manager_billing SET last_paid_date=?, last_status='paid', "
+        "updated_at=? WHERE user_id=?", (paid_date, now_iso, user_id))
+    db.commit()
+    app.logger.info(
+        f'billing assign: payment {payment_id} -> user {user_id} '
+        f'by admin {admin_id}')
+    from utils.notify import notify
+    notify('SUMIT payment assigned',
+           f'Payment {payment_id} assigned to {mgr["name"]} (uid {user_id}) '
+           f'by admin uid {admin_id}; last_paid_date={paid_date}.')
+    return jsonify({'ok': True, 'user_id': user_id,
+                    'last_paid_date': paid_date})
 
 
 @app.route('/admin/franchise-classifier')

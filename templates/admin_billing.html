@@ -141,6 +141,56 @@
         </table>
     </div>
 
+    {% if unassigned_payments %}
+    <div class="billing-card" style="margin-top:1.2rem;">
+        <div style="padding:0.8rem 0.85rem 0; font-weight:700;">
+            תשלומים ללא שיוך ({{ unassigned_payments|length }})
+        </div>
+        <table class="billing">
+            <thead>
+                <tr>
+                    <th>מזהה תשלום</th>
+                    <th>תאריך</th>
+                    <th>סכום</th>
+                    <th>סטטוס</th>
+                    <th>שיוך למנהל</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for p in unassigned_payments %}
+                <tr id="pay-{{ p.payment_id }}">
+                    <td>{{ p.payment_id }}</td>
+                    <td>{{ p.payment_date or '—' }}</td>
+                    <td>{{ ('₪%.0f'|format(p.amount)) if p.amount else '—' }}</td>
+                    <td>
+                        {% if p.resolution == 'pending' %}
+                        ממתין לקבלה
+                        {% else %}
+                        ללא קבלה
+                        {% endif %}
+                    </td>
+                    <td>
+                        <select class="fee-input" style="width:auto;"
+                                id="assign-sel-{{ p.payment_id }}">
+                            <option value="">
+                                בחר מנהל…
+                            </option>
+                            {% for m in assignable_managers %}
+                            <option value="{{ m.user_id }}">{{ m.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <button class="toggle-btn"
+                                onclick="assignPayment({{ p.payment_id }})">
+                            שייך
+                        </button>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
     <div class="note">
         חיוב לכל מנהל בנפרד (₪179). התג של כל מנהל הוא <code>user_id</code>, שמוגדר ב-SUMIT כ-
         <code>customerexternalidentifier</code> בקישור התשלום. שינוי "חיוב פעיל?" ומחיר נשמרים אצלנו בלבד — לא נשלח דבר ל-SUMIT.
@@ -232,6 +282,37 @@ async function runSync() {
     } finally {
         btn.disabled = false;
         btn.textContent = 'רענן סטטוס';
+    }
+}
+
+async function assignPayment(paymentId) {
+    const sel = document.getElementById(`assign-sel-${paymentId}`);
+    const userId = parseInt(sel.value);
+    if (!userId) {
+        await mkAlert({type: 'warning', title: 'שיוך תשלום',
+                       message: 'יש לבחור מנהל מהרשימה'});
+        return;
+    }
+    const name = sel.options[sel.selectedIndex].text.trim();
+    if (!await mkConfirm({type: 'warning', title: 'שיוך תשלום',
+                          message: `לשייך את תשלום ${paymentId} אל ${name}? המנהל יסומן כשילם החודש.`,
+                          confirmText: 'שייך'})) return;
+    try {
+        const resp = await fetch('/api/admin/billing/assign-payment', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({payment_id: paymentId, user_id: userId})
+        });
+        if (resp.status === 401) { window.location.href = '/login'; return; }
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            await mkAlert({type: 'danger', title: 'שגיאה',
+                           message: data.error || 'השיוך נכשל'});
+            return;
+        }
+        location.reload();
+    } catch (e) {
+        await mkAlert({type: 'danger', title: 'שגיאה', message: e.message});
     }
 }
 </script>
