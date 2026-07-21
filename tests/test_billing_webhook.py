@@ -236,8 +236,22 @@ def _seed_prev_run(payments_seen=1, last_payment_id=7, unmatched=0,
     conn.close()
 
 
+def _seed_resolution(payment_id, resolution, tag=None, seen_days=1,
+                     last_seen_date=None):
+    conn = _db()
+    conn.execute(
+        "INSERT INTO billing_payment_resolutions (payment_id, customer_id, "
+        "resolution, tag, seen_days, first_seen_date, last_seen_date) "
+        "VALUES (?, 500, ?, ?, ?, ?, ?)",
+        (payment_id, resolution, tag, seen_days,
+         last_seen_date or TODAY_REAL, last_seen_date or TODAY_REAL))
+    conn.commit()
+    conn.close()
+
+
 def test_skip_path_nothing_new(client, monkeypatch):
     _seed_prev_run()
+    _seed_resolution(7, 'matched', tag=str(U_MGR))
     _mock_sumit(monkeypatch, [PAYMENT], docs_forbidden=True)
     conn = _db()
     sumit.reset_call_count()
@@ -271,6 +285,94 @@ def test_no_skip_when_prev_unmatched(client, monkeypatch):
     conn = _db()
     res = app_module._run_billing_sync(conn, allow_skip=True)
     assert not res.get('skipped') and res.get('unmatched') == 0
+    conn.close()
+
+
+# ── payment resolutions (migration 041): unmatchable ≠ unmatched ──
+
+# a payment whose customer has NO receipt document (600 ∉ documents list)
+UNMATCHED8 = {'ID': 8, 'CustomerID': 600,
+              'Date': f'{MONTH_REAL}-03T10:00:00+03:00', 'ValidPayment': True}
+
+
+def _capture_notify(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify_module, 'notify',
+                        lambda *a, **k: calls.append((a, k)))
+    return calls
+
+
+def test_unmatchable_does_not_block_skip(client, monkeypatch):
+    _seed_prev_run(payments_seen=1, last_payment_id=8)
+    _seed_resolution(8, 'unmatchable')
+    _mock_sumit(monkeypatch, [UNMATCHED8], docs_forbidden=True)
+    notifies = _capture_notify(monkeypatch)
+    conn = _db()
+    sumit.reset_call_count()
+    res = app_module._run_billing_sync(conn, allow_skip=True)
+    assert res.get('skipped') is True
+    assert sumit.call_count() == 1          # payments/list only
+    assert notifies == []
+    conn.close()
+
+
+def test_new_unmatched_payment_blocks_skip_while_pending(client, monkeypatch):
+    _seed_prev_run(payments_seen=2, last_payment_id=8)
+    _seed_resolution(7, 'matched', tag=str(U_MGR))
+    _mock_sumit(monkeypatch, [PAYMENT, UNMATCHED8])
+    notifies = _capture_notify(monkeypatch)
+    conn = _db()
+    for _ in range(2):                      # same day: stays pending, still blocks
+        res = app_module._run_billing_sync(conn, allow_skip=True)
+        assert not res.get('skipped')
+        assert res['unmatched'] == 1
+    row = conn.execute("SELECT resolution, seen_days FROM "
+                       "billing_payment_resolutions WHERE payment_id=8").fetchone()
+    assert (row['resolution'], row['seen_days']) == ('pending', 1)
+    assert notifies == []                   # no alert during the grace window
+    conn.close()
+
+
+def test_pending_ages_out_alert_fires_once_then_skip(client, monkeypatch):
+    _seed_prev_run(payments_seen=2, last_payment_id=8)
+    _seed_resolution(7, 'matched', tag=str(U_MGR))
+    # seen on 4 distinct days already, last of them long ago → today is day 5
+    _seed_resolution(8, 'pending', seen_days=4, last_seen_date='2020-01-01')
+    _mock_sumit(monkeypatch, [PAYMENT, UNMATCHED8])
+    notifies = _capture_notify(monkeypatch)
+    conn = _db()
+
+    res = app_module._run_billing_sync(conn, allow_skip=True)
+    assert not res.get('skipped')
+    assert res['unmatched'] == 0 and res['unmatchable'] == 1
+    assert len(notifies) == 1               # the classification alert, once
+    assert 'Payment 8' in notifies[0][0][1]
+    row = conn.execute("SELECT resolution FROM billing_payment_resolutions "
+                       "WHERE payment_id=8").fetchone()
+    assert row['resolution'] == 'unmatchable'
+
+    # next sweep: everything terminal → 1-call skip, no second alert
+    sumit.reset_call_count()
+    res2 = app_module._run_billing_sync(conn, allow_skip=True)
+    assert res2.get('skipped') is True
+    assert sumit.call_count() == 1
+    assert len(notifies) == 1
+    conn.close()
+
+
+def test_matched_stays_matched_without_refetch(client, monkeypatch):
+    _seed_resolution(7, 'matched', tag=str(U_MGR))
+    _mock_sumit(monkeypatch, [PAYMENT])
+
+    def boom(doc_id):
+        raise AssertionError('matched payment must not re-fetch its document')
+    monkeypatch.setattr(sumit, 'get_document', boom)
+
+    conn = _db()
+    res = app_module._run_billing_sync(conn, allow_skip=False)   # full run
+    assert res['paid_managers'] == 1 and res['unmatched'] == 0
+    assert conn.execute('SELECT last_status FROM manager_billing WHERE user_id=?',
+                        (U_MGR,)).fetchone()[0] == 'paid'
     conn.close()
 
 
@@ -323,13 +425,14 @@ def test_call_budget_alert_fires_once_on_crossing(client, monkeypatch):
     monkeypatch.setattr(notify_module, 'notify',
                         lambda t, m, **kw: alerts.append((t, kw)))
     _seed_prev_run()                        # month total 3
+    _seed_resolution(7, 'matched', tag=str(U_MGR))
     _mock_sumit(monkeypatch, [PAYMENT])
     conn = _db()
     app_module._run_billing_sync_logged(conn, 'auto')    # skip path: +1 → 4
     assert _sync_runs()[-1]['api_calls'] == 1
-    app_module._run_billing_sync_logged(conn, 'manual')  # full: +3 → 7, below 8
-    assert alerts == []
-    app_module._run_billing_sync_logged(conn, 'manual')  # +3 → 10, crosses 8
+    app_module._run_billing_sync_logged(conn, 'manual')  # full: +2 → 6, below 8
+    assert alerts == []                     # (matched tag reused — no getdetails)
+    app_module._run_billing_sync_logged(conn, 'manual')  # +2 → 8, crosses 8
     assert len(alerts) == 1 and alerts[0][1].get('medium') is True
     app_module._run_billing_sync_logged(conn, 'manual')  # already over — quiet
     assert len(alerts) == 1
