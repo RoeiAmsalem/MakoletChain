@@ -17,11 +17,21 @@ import agents.aviv_z_report as zr
 
 
 FIXTURE_PDF = os.path.join(os.path.dirname(__file__), 'fixtures', 'z_902_sample.pdf')
+FIXTURE_WOLT_PDF = os.path.join(os.path.dirname(__file__), 'fixtures',
+                                'z_902_wolt_sample.pdf')
 
 
 @pytest.fixture
 def sample_pdf_bytes() -> bytes:
     with open(FIXTURE_PDF, 'rb') as f:
+        return f.read()
+
+
+@pytest.fixture
+def wolt_pdf_bytes() -> bytes:
+    """Real Wolt-day Z (branch 9020, 2026-07-30) — rings Wolt/Cibus/10Bis
+    as additive sale tenders alongside cash and credit."""
+    with open(FIXTURE_WOLT_PDF, 'rb') as f:
         return f.read()
 
 
@@ -109,6 +119,29 @@ def test_parse_902_payment_breakdown(sample_pdf_bytes):
     assert pb['soed'] == 483.00
     assert pb['check'] == 0.0
     assert pb['transfer'] == 0.0
+    # Pre-Wolt Zs have no additive-tender lines → six-key shape preserved.
+    assert 'wolt' not in pb
+
+
+def test_parse_902_wolt_day_breakdown(wolt_pdf_bytes):
+    """Wolt-day Z: additive tenders are captured with their own keys."""
+    out = zr.parse_902_pdf(wolt_pdf_bytes)
+    pb = out['payment_breakdown']
+    assert out['total'] == 13541.19
+    assert pb['cash'] == 2898.60
+    assert pb['credit'] == 8256.66
+    assert pb['wolt'] == 2162.48
+    assert pb['cibus'] == 151.00
+    assert pb['10bis'] == 72.45
+
+
+def test_parse_902_wolt_day_split_sums_to_total(wolt_pdf_bytes):
+    """Sale tenders (everything except the soed debt line) sum to the Z total —
+    the breakdown stays complete on Wolt days."""
+    out = zr.parse_902_pdf(wolt_pdf_bytes)
+    sale_sum = sum(v for k, v in out['payment_breakdown'].items()
+                   if k != 'soed' and v is not None)
+    assert abs(sale_sum - out['total']) < 0.01
 
 
 # ── submit body ───────────────────────────────────────────────────────────

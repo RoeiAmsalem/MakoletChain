@@ -196,6 +196,53 @@ def test_live_storage_unchanged(monkeypatch):
     assert h['hours_this_month'] == 250.5
 
 
+def test_amount_prefers_payments_sum(monkeypatch):
+    """payments[] present → amount = sum of tender sums, NOT dealTotal.
+    dealTotal misses additive tenders (Wolt) so the split is authoritative."""
+    conn = _chain_db()
+    _silence_notify(monkeypatch)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
+
+    row = _live_status_row(3, 8932.42)
+    row['payments'] = [
+        {'type': 1, 'count': 30, 'sum': 1500.00},
+        {'type': 2, 'count': 140, 'sum': 7432.42},
+        {'type': 20, 'count': 5, 'sum': 119.90},   # Wolt — absent from dealTotal
+    ]
+    monkeypatch.setattr(aviv_live, '_fetch_multi_status', lambda t, ids: [row])
+
+    aviv_live.run_aviv_live_chain(conn=conn)
+    saved = conn.execute("SELECT amount FROM live_sales WHERE branch_id=126").fetchone()
+    assert saved['amount'] == pytest.approx(9052.32)
+
+
+def test_amount_falls_back_to_dealtotal_without_payments(monkeypatch):
+    """payments[] missing or empty → amount = dealTotal (legacy behavior)."""
+    conn = _chain_db()
+    _silence_notify(monkeypatch)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
+
+    empty = _live_status_row(3, 1234.56)          # payments: []
+    absent = _live_status_row(8, 777.77)
+    del absent['payments']
+    monkeypatch.setattr(aviv_live, '_fetch_multi_status',
+                        lambda t, ids: [empty, absent])
+
+    aviv_live.run_aviv_live_chain(conn=conn)
+    assert conn.execute("SELECT amount FROM live_sales WHERE branch_id=126"
+                        ).fetchone()['amount'] == 1234.56
+    assert conn.execute("SELECT amount FROM live_sales WHERE branch_id=127"
+                        ).fetchone()['amount'] == 777.77
+
+
+def test_amount_zeroed_payments_fall_back(monkeypatch):
+    """All-zero payments[] (day not started / broken feed) → dealTotal wins."""
+    row = {'dealTotal': 500.0, 'payments': [{'type': 2, 'count': 0, 'sum': 0}]}
+    assert aviv_live._amount_from_row(row) == 500.0
+
+
 def test_total_rest_failure_does_not_fallback_to_playwright(monkeypatch):
     """If the chain REST call fails entirely, NO Playwright is launched."""
     conn = _chain_db()
