@@ -157,6 +157,24 @@ def _fmt_last_updated(tm: str) -> str:
         return tm
 
 
+def _amount_from_row(row: dict) -> float:
+    """Live amount = sum of payments[] tender sums, falling back to dealTotal.
+
+    dealTotal excludes additive tenders (Wolt et al.) on registers that ring
+    them separately, so it under-reports on Wolt days. The payments[] split is
+    what the register's Z totals, so prefer it whenever it carries a positive
+    sum; otherwise (missing/empty/zeroed payments[]) keep the dealTotal
+    behavior unchanged.
+    """
+    total = 0.0
+    for p in (row.get('payments') or []):
+        if isinstance(p, dict):
+            total += float(p.get('sum') or 0)
+    if total > 0:
+        return total
+    return float(row.get('dealTotal') or 0)
+
+
 def _scrape_api(branch: dict, log: logging.Logger) -> dict:
     """REST API path: login → status. No browser."""
     user_id = branch.get('aviv_user_id') or ''
@@ -204,7 +222,7 @@ def _scrape_api(branch: dict, log: logging.Logger) -> dict:
         raise Exception("Status response empty")
     row = rows[0]
 
-    amount = float(row.get('dealTotal') or 0)
+    amount = _amount_from_row(row)
     transactions = int(row.get('dealCount') or 0)
     last_updated = _fmt_last_updated(row.get('tmUpdate') or '')
     monthly_hours = float(row.get('totalEmployeeHours') or 0)
@@ -742,7 +760,7 @@ def _status_row_to_data(row: dict) -> dict:
     """
     return {
         'date': date.today().isoformat(),
-        'amount': float(row.get('dealTotal') or 0),
+        'amount': _amount_from_row(row),
         'transactions': int(row.get('dealCount') or 0),
         'last_updated': _fmt_last_updated(row.get('tmUpdate') or ''),
         'fetched_at': datetime.now(IL_TZ).isoformat(),

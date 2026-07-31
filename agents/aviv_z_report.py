@@ -137,6 +137,16 @@ TRANSFER_RTL = re.compile(r'([\d,]+\.?\d*)\s*₪\s*תיאקנב\s*הרבעהב\s
 # סועד is reported as a debt payment line, not a sale. Number may abut ₪.
 SOED_RTL = re.compile(r'([\d,]+\.?\d*)\s*₪?\s*דעוס\s*יסיטרכב\s*בוח\s*םולשת')
 
+# Additive sale tenders (Wolt / Cibus / 10Bis, ...) print as "מכירה ב<Name>";
+# the Latin name survives RTL reversal unreversed, so the extracted line reads
+# "<value> ₪ <Name>ב הריכמ". One generic pattern catches any such tender.
+LATIN_TENDER_RTL = re.compile(
+    r'([\d,]+\.?\d*)\s*₪\s*([A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*)ב\s*הריכמ')
+# Hebrew-named tenders that only newer Zs print (sale section, not debt).
+VOUCHER_RTL = re.compile(r'([\d,]+\.?\d*)\s*₪\s*הינק\s*יוותב\s*הריכמ')
+ZIKUI_RTL = re.compile(r'([\d,]+\.?\d*)\s*₪\s*יוכיזב\s*הריכמ')
+ZIKUI_REDEEM_RTL = re.compile(r'([\d,]+\.?\d*)\s*₪\s*יוכיז\s*שומימב\s*הריכמ')
+
 
 def _to_float(s: str | None) -> float | None:
     if s is None:
@@ -172,8 +182,12 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
 def parse_902_pdf(pdf_bytes: bytes) -> dict:
     """Parse a Z-902 PDF → {total, transactions, avg_per_txn, payment_breakdown}.
 
-    payment_breakdown contains the six payment-method amounts seen on the Z:
-    cash / credit / hakafa / soed / check / transfer. Missing methods stay None.
+    payment_breakdown always carries the six classic payment-method amounts:
+    cash / credit / hakafa / soed / check / transfer (None when the line is
+    absent). Zs that used additive tenders add lowercase keys per tender
+    (wolt / cibus / 10bis / voucher / zikui / zikui_redeem) — only when the
+    line exists, so older rows keep the six-key shape. Sale tenders (all keys
+    except the soed debt line) sum to `total` on such Zs.
     """
     text = _extract_pdf_text(pdf_bytes)
 
@@ -194,6 +208,13 @@ def parse_902_pdf(pdf_bytes: bytes) -> dict:
         'check': _g(CHECK_RTL),
         'transfer': _g(TRANSFER_RTL),
     }
+    for m in LATIN_TENDER_RTL.finditer(text):
+        payment_breakdown.setdefault(m.group(2).lower(), _to_float(m.group(1)))
+    for key, pat in (('voucher', VOUCHER_RTL), ('zikui', ZIKUI_RTL),
+                     ('zikui_redeem', ZIKUI_REDEEM_RTL)):
+        m = pat.search(text)
+        if m:
+            payment_breakdown[key] = _to_float(m.group(1))
 
     return {
         'total': total,
