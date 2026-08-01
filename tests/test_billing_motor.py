@@ -202,7 +202,10 @@ def test_slow_path_pending_hint_and_forged_og_writes_nothing(client, monkeypatch
         .get_data(as_text=True)
     assert len(calls) == 1
     assert 'מתעדכן' in html and 'location.reload' in html
-    assert 'ממתין לתשלום החודש' in html      # hero still amber, not flipped
+    # forged OG flipped nothing: U_MGR (never paid, active since START) still
+    # renders the lock hero, not the paid one
+    assert 'הגישה הושהתה עד להסדרת התשלום' in html
+    assert 'המנוי פעיל ✓' not in html
     assert '<script>x</script>' not in html   # autoescaped
     _time.sleep(0.4)                          # let the background sync finish
     assert _row()['last_status'] == 'unpaid'  # OG param wrote NOTHING

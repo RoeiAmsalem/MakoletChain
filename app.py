@@ -1503,7 +1503,6 @@ def account():
     ctx = _page_context('account')
     db = get_db()
     user_id = session['user_id']
-    month = _now_il().strftime('%Y-%m')
 
     # SUMIT post-payment return params (see below). Read early: they gate the
     # layer-A sync-on-return.
@@ -1514,20 +1513,26 @@ def account():
                     (user_id,)).fetchone()
 
     # Layer A: returning payer → run the read-only sync now so the page
-    # renders already-green. Skipped when already paid this month (nothing to
-    # flip) and rate-limited per user (OG params can be replayed; they never
-    # write state themselves — the sync remains the only writer).
+    # renders already-green. Skipped when the current payment cycle is still
+    # covered (today <= paid_until — nothing to flip) and rate-limited per
+    # user (OG params can be replayed; they never write state themselves —
+    # the sync remains the only writer).
     sync_state = None
-    if (og_payment_id and mb and mb['active']
-            and (mb['last_paid_date'] or '')[:7] != month):
-        sync_state = _trigger_payment_sync(user_id)
-        if sync_state == 'done':
-            mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
-                            (user_id,)).fetchone()
+    today = _billing_today()
+    if og_payment_id and mb and mb['active']:
+        pu = _paid_until(mb['last_paid_date'])
+        if pu is None or today > pu:
+            sync_state = _trigger_payment_sync(user_id)
+            if sync_state == 'done':
+                mb = db.execute(
+                    "SELECT * FROM manager_billing WHERE user_id=?",
+                    (user_id,)).fetchone()
 
     billing_active = bool(mb['active']) if mb else False
     last_paid = mb['last_paid_date'] if mb else None
-    paid_this_month = bool(billing_active and last_paid and last_paid[:7] == month)
+    paid_until = _paid_until(last_paid) if billing_active else None
+    # "paid up" = inside the payment anniversary window, NOT calendar month
+    paid_this_month = bool(paid_until and today <= paid_until)
     fee = mb['fee'] if mb and mb['fee'] is not None else 179
     if fee == int(fee):
         fee = int(fee)
@@ -1556,6 +1561,7 @@ def account():
         billing_locked=(bst['state'] == 'locked'),
         billing_active=billing_active,
         paid_this_month=paid_this_month,
+        paid_until=(paid_until.isoformat() if paid_until else None),
         last_paid_date=last_paid,
         fee=fee,
         payment_link=payment_link,
@@ -5723,14 +5729,22 @@ def _billing_alert_pass(db):
 
 
 # ── Billing paywall (stage 2) ─────────────────────────────────
-# Policy: billing starts BILLING_START_DATE. An ACTIVE-billed manager who has
-# not paid the current calendar month gets a warning banner for
-# BILLING_GRACE_DAYS days, then is locked to /account until a payment lands
-# (via the read-only SUMIT sync). admin/ceo/demo/active=0 are never affected.
+# Policy: billing starts BILLING_START_DATE. A payment covers ONE MONTH from
+# its own date (the payment anniversary): paid_until = last_paid_date + 1
+# calendar month. Past paid_until an ACTIVE-billed manager gets a warning
+# banner for BILLING_GRACE_DAYS days, then is locked to /account until a
+# payment lands (via the read-only SUMIT sync). days_unpaid counts
+# CONTINUOUSLY from paid_until+1 (or from activation for never-payers) — a
+# month rollover NEVER resets the count or unlocks anyone.
+# admin/ceo/demo/active=0 are never affected.
 # FAIL-OPEN everywhere: a billing bug must never lock a paying customer out.
 
 BILLING_START_DATE = os.environ.get('BILLING_START_DATE', '2026-07-05')
 BILLING_GRACE_DAYS = int(os.environ.get('BILLING_GRACE_DAYS', '5') or 5)
+# A row the sync has not touched for this many days is STALE: 'unpaid' can't
+# be trusted (sync outage), so would-be warning/locked fails open to exempt.
+# The daily sweep touches every row, so >3 days means the motor is down.
+BILLING_STALE_DAYS = int(os.environ.get('BILLING_STALE_DAYS', '3') or 3)
 
 # Throttle for the fail-open brrr alert so a broken row can't spam on every
 # request of every user.
@@ -5768,18 +5782,42 @@ def _billing_fail_open(reason):
             pass
 
 
+def _add_one_month(d):
+    """d + 1 calendar month, clamped to the target month's last day:
+    Jul 31 → Aug 31, Jan 30 → Feb 28 (29 in leap years)."""
+    y, m = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def _paid_until(last_paid_date):
+    """The date a payment covers through — payment anniversary, not calendar
+    month: last_paid_date + 1 month. None when never paid / unparseable."""
+    if not last_paid_date:
+        return None
+    try:
+        return _add_one_month(date.fromisoformat(str(last_paid_date)[:10]))
+    except ValueError:
+        return None
+
+
 def _billing_state(user_id, role, email, db=None):
     """Paywall state for one user → {'state': exempt|ok|warning|locked, ...}.
 
-    warning adds days_unpaid + days_left (days until lock); locked adds
-    days_unpaid. exempt covers: admin/ceo, the demo account, no row/active=0,
-    today before BILLING_START_DATE, a row the sync/toggle has not touched
-    this month (stale — can't trust 'unpaid' across a month rollover), and
-    ANY exception (fail-open).
+    ok: today <= paid_until (= last_paid_date + 1 month). Adds paid_until.
+    warning/locked: days_unpaid counts CONTINUOUSLY from cycle_start —
+    paid_until+1 day for lapsed payers, max(start, activated_at) for
+    never-payers. No reset on the 1st of a month, EVER: a manager locked in
+    July with no new payment stays locked across every rollover until a
+    payment lands. warning adds days_unpaid + days_left; locked adds
+    days_unpaid; both add cycle_start (the billing-cycle dedup key for the
+    reminder/lock emails).
 
-    days_unpaid counts from max(BILLING_START_DATE, 1st of current month,
-    activated_at) — so grace restarts every month and a manager toggled on
-    mid-month is never instantly locked.
+    exempt covers: admin/ceo, the demo account, no row/active=0, today before
+    BILLING_START_DATE, today before cycle_start (manager toggled on with no
+    payment yet due), a row the sync/toggle has not touched for
+    BILLING_STALE_DAYS days (sync outage — 'unpaid' can't be trusted), and
+    ANY exception (fail-open). Staleness is checked only on the unpaid path:
+    a paid-up manager is ok regardless of row freshness.
     """
     try:
         if role in ROLES_ALL_BRANCHES:
@@ -5797,27 +5835,38 @@ def _billing_state(user_id, role, email, db=None):
             (user_id,)).fetchone()
         if not mb or not mb['active']:
             return {'state': 'exempt'}
-        month = today.strftime('%Y-%m')
-        if (mb['last_paid_date'] or '')[:7] == month:
-            return {'state': 'ok'}
-        # 'unpaid' is only trustworthy if the SUMIT sync (or the admin toggle)
-        # touched this row THIS month; otherwise the row predates the month
-        # rollover and nobody may be warned/locked on it.
-        if (mb['updated_at'] or '')[:7] != month:
+        paid_until = _paid_until(mb['last_paid_date'])
+        if paid_until and today <= paid_until:
+            return {'state': 'ok', 'paid_until': paid_until.isoformat()}
+        # 'unpaid' is only trustworthy if the SUMIT sync (or the admin
+        # toggle) touched this row recently; a stale row means the motor is
+        # down and nobody may be warned/locked on it. Signed diff: a
+        # future-dated touch (clock skew / fake-today tests) is not stale.
+        try:
+            updated = date.fromisoformat((mb['updated_at'] or '')[:10])
+        except ValueError:
+            updated = None
+        if updated is None or (today - updated).days > BILLING_STALE_DAYS:
             _billing_fail_open(
-                f'user {user_id} unpaid but row not synced this month '
-                f'(updated_at={mb["updated_at"]!r})')
+                f'user {user_id} unpaid but row not synced for '
+                f'{BILLING_STALE_DAYS}+ days (updated_at={mb["updated_at"]!r})')
             return {'state': 'exempt'}
-        anchor = max(start, today.replace(day=1))
+        if paid_until:
+            cycle_start = paid_until + timedelta(days=1)
+        else:
+            cycle_start = start
         if mb['activated_at']:
-            anchor = max(anchor, date.fromisoformat(mb['activated_at'][:10]))
-        if today < anchor:
+            cycle_start = max(cycle_start,
+                              date.fromisoformat(mb['activated_at'][:10]))
+        if today < cycle_start:
             return {'state': 'exempt'}
-        days_unpaid = (today - anchor).days + 1
+        days_unpaid = (today - cycle_start).days + 1
+        st = {'days_unpaid': days_unpaid,
+              'cycle_start': cycle_start.isoformat()}
         if days_unpaid <= BILLING_GRACE_DAYS:
-            return {'state': 'warning', 'days_unpaid': days_unpaid,
-                    'days_left': BILLING_GRACE_DAYS - days_unpaid + 1}
-        return {'state': 'locked', 'days_unpaid': days_unpaid}
+            return {'state': 'warning',
+                    'days_left': BILLING_GRACE_DAYS - days_unpaid + 1, **st}
+        return {'state': 'locked', **st}
     except Exception as e:
         _billing_fail_open(f'user {user_id}: {e}')
         return {'state': 'exempt'}
@@ -5871,6 +5920,7 @@ def admin_billing():
             "SELECT b.name FROM user_branches ub JOIN branches b ON b.id=ub.branch_id "
             "WHERE ub.user_id=? ORDER BY b.id", (u['id'],)).fetchall()
         last_paid = mb['last_paid_date'] if mb else None
+        pu = _paid_until(last_paid)
         st = _billing_state(u['id'], 'manager', u['email'], db)
         state = st.get('state', 'exempt')
         state_label = {
@@ -5887,7 +5937,9 @@ def admin_billing():
             'sumit_tag': mb['sumit_tag'] if mb else str(u['id']),
             'fee': mb['fee'] if mb else 179,
             'active': bool(mb['active']) if mb else False,
-            'paid_this_month': bool(last_paid and last_paid[:7] == month),
+            # paid up = inside the payment anniversary window (paid_until)
+            'paid_this_month': bool(pu and _billing_today() <= pu),
+            'paid_until': pu.isoformat() if pu else '—',
             'last_paid_date': last_paid or '—',
             'payment_link': _manager_payment_link(u['id']),
             'state': state,

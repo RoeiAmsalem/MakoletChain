@@ -77,9 +77,12 @@ def client():
     conn.execute(
         "INSERT INTO manager_billing (user_id, sumit_tag, fee, active, last_paid_date, last_status) "
         "VALUES (?, ?, 179, 1, ?, 'paid')", (U_PAID, str(U_PAID), PAID_DATE))
+    # activated today → warning day 1 (an unpaid manager who is NOT yet
+    # locked; never-paid + active-since-July would render the lock hero)
     conn.execute(
-        "INSERT INTO manager_billing (user_id, sumit_tag, fee, active, last_status) "
-        "VALUES (?, ?, 179, 1, 'unpaid')", (U_UNPAID, str(U_UNPAID)))
+        "INSERT INTO manager_billing (user_id, sumit_tag, fee, active, "
+        "last_status, activated_at) VALUES (?, ?, 179, 1, 'unpaid', ?)",
+        (U_UNPAID, str(U_UNPAID), app_module._now_il().strftime('%Y-%m-%d')))
     conn.execute(
         "INSERT INTO manager_billing (user_id, sumit_tag, fee, active) "
         "VALUES (?, ?, 179, 0)", (U_INACTIVE, str(U_INACTIVE)))
@@ -120,14 +123,14 @@ def test_active_paid_shows_active_status(client, monkeypatch):
     html = _get_account(client, 'paid@test.com', monkeypatch)
     assert 'המנוי פעיל' in html
     assert PAID_DATE in html
-    assert 'ממתין לתשלום החודש' not in html
+    assert 'ממתין לתשלום' not in html
     assert 'המנוי אינו פעיל' not in html
     assert '₪179' in html
 
 
 def test_active_unpaid_shows_waiting(client, monkeypatch):
     html = _get_account(client, 'unpaid@test.com', monkeypatch)
-    assert 'ממתין לתשלום החודש' in html
+    assert 'ממתין לתשלום' in html
     assert 'המנוי פעיל' not in html
 
 
