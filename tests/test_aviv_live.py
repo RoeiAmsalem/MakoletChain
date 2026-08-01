@@ -544,3 +544,57 @@ def test_scheduled_run_gates_on_branch_schedule(monkeypatch):
     assert res_chain.get('skipped') == 'outside_hours'
     res_9020 = aviv_live.run_aviv_live(9020)
     assert res_9020.get('skipped') == 'no_credentials'
+
+
+def test_chain_path_scrapes_only_in_hours_branches(monkeypatch):
+    """Saturday morning: chain default is closed, 9020's override is open —
+    the chain pull runs, fetches ONLY 9020's aviv id, and the closed
+    branches get no live_sales row and no agent_runs entry (silent skip)."""
+    import datetime as _dtmod
+
+    class _FakeDT(_dtmod.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return SAT_MORNING if tz else SAT_MORNING.replace(tzinfo=None)
+
+    conn = _chain_db()
+    conn.execute("INSERT INTO branches (id, name, active, aviv_branch_id) "
+                 "VALUES (9020, 'רמת גן', 1, 30)")
+    conn.commit()
+    monkeypatch.setattr(aviv_live, 'datetime', _FakeDT)
+    monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
+    fetch_calls = []
+
+    def fake_fetch(token, aviv_branch_ids):
+        fetch_calls.append(list(aviv_branch_ids))
+        return [_live_status_row(b, 777.0) for b in aviv_branch_ids]
+
+    monkeypatch.setattr(aviv_live, '_fetch_multi_status', fake_fetch)
+    out = aviv_live.run_aviv_live_chain(conn=conn)
+    assert out['success'] is True and out.get('ok') == 1
+    assert fetch_calls == [[30]]          # only 9020's aviv id pulled
+    assert conn.execute("SELECT amount FROM live_sales WHERE branch_id=9020"
+                        ).fetchone()['amount'] == 777.0
+    for bid in (126, 127):
+        assert conn.execute("SELECT * FROM live_sales WHERE branch_id=?",
+                            (bid,)).fetchone() is None
+        assert conn.execute("SELECT * FROM agent_runs WHERE branch_id=?",
+                            (bid,)).fetchone() is None
+
+
+def test_chain_path_skips_entirely_when_nothing_open(monkeypatch):
+    """Weekday 04:00 — nobody (default or override) is open → 1-line skip,
+    no login, no fetch."""
+    import datetime as _dtmod
+    night = _il(2026, 8, 5, 4, 0)
+
+    class _FakeDT(_dtmod.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return night if tz else night.replace(tzinfo=None)
+
+    monkeypatch.setattr(aviv_live, 'datetime', _FakeDT)
+    monkeypatch.setattr(aviv_live, '_login_chain_account',
+                        lambda: (_ for _ in ()).throw(AssertionError('no login')))
+    out = aviv_live.run_aviv_live_chain()
+    assert out.get('skipped') == 'outside_hours'

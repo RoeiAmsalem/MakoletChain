@@ -127,6 +127,13 @@ def _schedule_for(branch_id):
     return BRANCH_SCHEDULE.get(branch_id, STORE_SCHEDULE)
 
 
+def _any_store_hours(now=None) -> bool:
+    """True when the chain default OR any per-branch override is in trading
+    hours — the chain scrape must run whenever even one branch is open."""
+    return (_is_store_hours(now=now)
+            or any(_is_store_hours(bid, now=now) for bid in BRANCH_SCHEDULE))
+
+
 def _is_store_hours(branch_id=None, now=None) -> bool:
     """Inside trading hours for this branch (chain default when branch_id is
     None/unlisted). now is injectable for tests only."""
@@ -839,11 +846,11 @@ def run_aviv_live_chain_one(branch_id: int, force: bool = False) -> dict:
     log = _setup_logger(branch_id)
     t0 = time.time()
 
-    if not force and not _is_store_hours():
+    if not force and not _is_store_hours(branch_id):
         log.info("Outside store hours, skipping (chain)")
         return {'success': True, 'amount': 0, 'transactions': 0,
                 'skipped': 'outside_hours'}
-    if force and not _is_store_hours():
+    if force and not _is_store_hours(branch_id):
         log.info("Manual force run outside store hours — bypassing guard (chain)")
 
     branch = _get_branch_config(branch_id)
@@ -925,7 +932,7 @@ def run_aviv_live_chain(force: bool = False,
         log.addHandler(logging.StreamHandler())
         log.setLevel(logging.INFO)
 
-    if not force and not _is_store_hours():
+    if not force and not _any_store_hours():
         log.info('outside store hours, skipping')
         return {'success': True, 'skipped': 'outside_hours'}
 
@@ -938,8 +945,19 @@ def run_aviv_live_chain(force: bool = False,
             'SELECT id, name, aviv_branch_id FROM branches '
             'WHERE active=1 AND aviv_branch_id IS NOT NULL ORDER BY id'
         ).fetchall()
+        # Per-branch hours: closed branches are silently dropped from the
+        # pull (no fetch, no DB write, no agent_runs — same contract as the
+        # legacy path's outside-hours skip). This is what keeps everyone but
+        # 9020 out of Sat morning / Fri evening / post-23:00 ticks.
+        if not force:
+            skipped = [r['id'] for r in rows if not _is_store_hours(r['id'])]
+            rows = [r for r in rows if _is_store_hours(r['id'])]
+            if skipped:
+                log.info('outside store hours for %d branch(es): %s',
+                         len(skipped), skipped)
         if not rows:
-            log.info('no branches with aviv_branch_id set; nothing to do')
+            log.info('no branch both in-hours and aviv_branch_id-mapped; '
+                     'nothing to do')
             return {'success': True, 'branches': 0}
 
         # local branch_id ↔ aviv_branch_id maps
