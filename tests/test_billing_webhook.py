@@ -262,6 +262,11 @@ def test_skip_path_nothing_new(client, monkeypatch):
                        'WHERE user_id=?', (U_MGR,)).fetchone()
     assert row['last_status'] == 'unpaid'   # state untouched
     assert row['updated_at'] != NOW_PREFIX  # staleness guard still satisfied
+    # and the paywall agrees: a SKIP run counts as fresh — the unpaid manager
+    # keeps warning/locking instead of aging into the fail-open exemption
+    # (the uid-18 loophole would resurface if skip stopped stamping rows)
+    st = app_module._billing_state(U_MGR, 'manager', 'mgr@test.com', db=conn)
+    assert st['state'] in ('warning', 'locked')
     conn.close()
 
 

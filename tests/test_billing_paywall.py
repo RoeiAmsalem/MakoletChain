@@ -194,6 +194,23 @@ def test_locked_never_paid_stays_locked_across_rollover(client, monkeypatch):
     assert st['state'] == 'locked' and st['days_unpaid'] == 56
 
 
+def test_recharge_on_anniversary_extends_seamlessly(client, monkeypatch):
+    # SUMIT auto-recharge lands as a new payment ON the anniversary: paid
+    # Jul-6 (ok through Aug-6), recharge Aug-6 → last_paid_date rolls →
+    # paid_until Sep-6, no warning day in between. Any later payment source
+    # (sweep / instant / assign) writes the same column, so one test covers
+    # them all.
+    _set_row(last_paid_date='2026-07-06', last_status='paid',
+             updated_at='2026-08-06 09:10')
+    assert _state(monkeypatch, '2026-08-06')['state'] == 'ok'
+    _set_row(last_paid_date='2026-08-06')          # the recharge lands
+    st = _state(monkeypatch, '2026-08-06')
+    assert st['state'] == 'ok' and st['paid_until'] == '2026-09-06'
+    assert _state(monkeypatch, '2026-09-06')['state'] == 'ok'
+    st = _state(monkeypatch, '2026-09-07')
+    assert (st['state'], st['days_unpaid']) == ('warning', 1)
+
+
 def test_paid_until_month_length_edges(client, monkeypatch):
     from datetime import date as d
     assert app_module._add_one_month(d(2026, 7, 31)) == d(2026, 8, 31)
