@@ -4,7 +4,9 @@ Policy under test: daily job emails ACTIVE-billed managers whose paywall state
 is 'warning' AND days_left <= 2 (the 2-days-before-lock morning; '<=' catches
 a manager who crossed the threshold while the job was down) —
 locked/exempt/paid/ok and early-warning managers get nothing. ONE email per
-manager per month via manager_billing.reminder_sent_month, set only on SMTP
+manager per BILLING CYCLE via manager_billing.reminder_sent_month, which
+holds the cycle key (the state's cycle_start — the first unpaid day, stable
+across month rollovers), set only on SMTP
 success (a failed send retries next morning + fires one 🟠 brrr). Dry-run
 (missing creds or BILLING_REMINDER_DRY_RUN != 'false') logs would-sends,
 touches no SMTP and no flag. The job makes ZERO SUMIT calls.
@@ -44,6 +46,11 @@ GRACE = 5
 FAKE_TODAY = '2026-07-12'
 MONTH = '2026-07'
 SYNCED = '2026-07-12 06:00'
+# dedup flags now hold the CYCLE key = cycle_start (first unpaid day):
+# activation date for never-payers, paid_until+1 for lapsed payers
+CYCLE_WARN = '2026-07-09'
+CYCLE_MISSED = '2026-07-08'
+CYCLE_LOCKED = '2026-07-05'     # no activated_at → anchored at START
 
 
 @pytest.fixture
@@ -145,13 +152,13 @@ def test_only_final_stretch_warning_selected(db, live_mode, monkeypatch):
                      ('missed@test.com', 'מנהל פוספס')]
     assert [u for u, _, _ in res['sent']] == [U_WARN, U_MISSED]
     assert res['failed'] == [] and res['would_send'] == []
-    assert _flag(db, U_WARN) == MONTH
-    assert _flag(db, U_MISSED) == MONTH
+    assert _flag(db, U_WARN) == CYCLE_WARN
+    assert _flag(db, U_MISSED) == CYCLE_MISSED
     for uid in (U_EARLY, U_LOCKED, U_PAID, U_OFF, U_DEMO, U_INACT):
         assert _flag(db, uid) is None
 
 
-def test_once_per_month_dedup(db, live_mode, monkeypatch):
+def test_once_per_cycle_dedup(db, live_mode, monkeypatch):
     sends = []
     monkeypatch.setattr(billing_reminder, '_send_email',
                         lambda to, name, **kw: sends.append(to))
@@ -160,6 +167,16 @@ def test_once_per_month_dedup(db, live_mode, monkeypatch):
     assert sends == ['warn@test.com', 'missed@test.com']  # once each, not twice
     assert res2['sent'] == []
     assert res2['skipped_already_sent'] == 2
+    # a NEW cycle (paid → lapsed again) re-selects the manager exactly once:
+    # paid Jul-13 → paid_until Aug-13 → new cycle_start Aug-14, warning
+    # days_left=2 lands on Aug-17
+    db.execute("UPDATE manager_billing SET last_paid_date='2026-07-13', "
+               "updated_at='2026-08-17 06:00' WHERE user_id=?", (U_WARN,))
+    db.commit()
+    monkeypatch.setenv('BILLING_FAKE_TODAY', '2026-08-17')
+    res3 = billing_reminder.run_pass(db)
+    assert [u for u, _, _ in res3['sent']] == [U_WARN]
+    assert _flag(db, U_WARN) == '2026-08-14'
 
 
 def test_smtp_failure_no_flag_one_brrr(db, live_mode, monkeypatch):
@@ -182,7 +199,7 @@ def test_smtp_failure_no_flag_one_brrr(db, live_mode, monkeypatch):
                         lambda to, name, **kw: sends.append(to))
     billing_reminder.run_pass(db)
     assert sends == ['warn@test.com', 'missed@test.com']
-    assert _flag(db, U_WARN) == MONTH
+    assert _flag(db, U_WARN) == CYCLE_WARN
 
 
 def test_dry_run_no_smtp_no_flag(db, monkeypatch):
@@ -288,14 +305,15 @@ def test_lock_email_only_locked_selected(db, live_mode, monkeypatch):
     # locked selected with the lock subject; warning/paid/exempt/off/inactive never
     assert sends == [('locked@test.com', billing_reminder.LOCKED_SUBJECT)]
     assert [u for u, _, _ in res['sent']] == [U_LOCKED]
-    assert _lock_flag(db, U_LOCKED) == MONTH
+    assert _lock_flag(db, U_LOCKED) == CYCLE_LOCKED
     for uid in (U_WARN, U_MISSED, U_EARLY, U_PAID, U_OFF, U_DEMO, U_INACT):
         assert _lock_flag(db, uid) is None
     # the lock pass never touches the reminder flag and vice versa
     assert _flag(db, U_LOCKED) is None
 
 
-def test_lock_email_once_then_relock_next_month(db, live_mode, monkeypatch):
+def test_lock_email_once_per_cycle_even_across_rollover(db, live_mode,
+                                                        monkeypatch):
     sends = []
     monkeypatch.setattr(billing_reminder, '_send_email',
                         lambda to, name, **kw: sends.append(to))
@@ -303,14 +321,24 @@ def test_lock_email_once_then_relock_next_month(db, live_mode, monkeypatch):
     res2 = billing_reminder.run_lock_pass(db)
     assert sends == ['locked@test.com']        # staying locked ≠ more mail
     assert res2['sent'] == [] and res2['skipped_already_sent'] == 1
-    # paid in July, re-locked in August: the July flag no longer matches →
-    # exactly one more mail (simulated by backdating the flag a month)
-    db.execute("UPDATE manager_billing SET locked_email_sent_month='2026-06' "
+    # month rollover, SAME unpaid cycle → still no second mail (the old
+    # month-keyed flag would have re-fired here)
+    db.execute("UPDATE manager_billing SET updated_at='2026-08-03 06:00' "
                "WHERE user_id=?", (U_LOCKED,))
     db.commit()
+    monkeypatch.setenv('BILLING_FAKE_TODAY', '2026-08-03')
+    res2b = billing_reminder.run_lock_pass(db)
+    assert sends == ['locked@test.com']
+    assert res2b['sent'] == [] and res2b['skipped_already_sent'] == 1
+    # paid → lapsed → re-locked = a NEW cycle key → exactly one more mail:
+    # paid Jul-20 → paid_until Aug-20 → cycle_start Aug-21 → locked Aug-26
+    db.execute("UPDATE manager_billing SET last_paid_date='2026-07-20', "
+               "updated_at='2026-08-26 06:00' WHERE user_id=?", (U_LOCKED,))
+    db.commit()
+    monkeypatch.setenv('BILLING_FAKE_TODAY', '2026-08-26')
     res3 = billing_reminder.run_lock_pass(db)
     assert [u for u, _, _ in res3['sent']] == [U_LOCKED]
-    assert _lock_flag(db, U_LOCKED) == MONTH
+    assert _lock_flag(db, U_LOCKED) == '2026-08-21'
 
 
 def test_lock_email_smtp_fail_no_flag_one_brrr(db, live_mode, monkeypatch):

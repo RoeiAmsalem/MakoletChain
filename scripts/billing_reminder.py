@@ -5,8 +5,10 @@ within REMINDER_DAYS_LEFT days of lock — the mail lands on the
 2-days-before-lock morning, not on day 1 of warning. Locked managers get
 nothing (they already see the lock screen); exempt/paid/ok get nothing;
 early-warning managers wait for their final-stretch morning. ONE email per
-manager per month, tracked in manager_billing.reminder_sent_month (set only
-after SMTP accepts the send, so a failed send retries the next morning).
+manager per BILLING CYCLE (keyed on the cycle's first unpaid day — NOT the
+calendar month, which the cycle may span), tracked in
+manager_billing.reminder_sent_month (set only after SMTP accepts the send,
+so a failed send retries the next morning).
 
 State selection REUSES the paywall state machine exactly — the same
 mb.active=1 AND u.active=1 join as _billing_alert_pass, then
@@ -158,11 +160,15 @@ def _email_pass(db, *, label, flag_col, subject, body, selects, fail_title):
     Selection is the paywall's own machinery: the _billing_alert_pass join
     (mb.active=1 AND u.active=1), then selects(_billing_state(...)) decides
     eligibility — locked/exempt/ok/etc. are excluded by the state itself.
-    Zero SUMIT calls: _billing_state reads only local rows. The once-per-month
-    dedup (flag_col == current month) is checked AFTER the state filter and
-    set per-send, committed immediately, ONLY on SMTP success — failures
-    retry on the next run and fire ONE 🟠 brrr for the whole pass.
-    flag_col is always a code literal (mig 039/040 columns), never input.
+    Zero SUMIT calls: _billing_state reads only local rows. The
+    once-per-BILLING-CYCLE dedup (flag_col == the state's cycle_start — the
+    first unpaid day of the current cycle, stable across month rollovers) is
+    checked AFTER the state filter and set per-send, committed immediately,
+    ONLY on SMTP success — failures retry on the next run and fire ONE 🟠
+    brrr for the whole pass. A payment starts a new cycle (new cycle_start),
+    making the manager remindable exactly once per cycle; a calendar-month
+    rollover does NOT. flag_col is always a code literal (mig 039/040
+    columns), never input.
     """
     from app import _billing_state, _billing_today
     from utils.notify import notify
@@ -180,7 +186,10 @@ def _email_pass(db, *, label, flag_col, subject, body, selects, fail_title):
         st = _billing_state(row['user_id'], row['role'], row['email'], db)
         if not selects(st):
             continue
-        if row['flag'] == month:
+        # warning/locked always carry cycle_start; fall back to month so a
+        # missing key can never cause more than one mail a month
+        cycle = st.get('cycle_start') or month
+        if row['flag'] == cycle:
             skipped_already_sent += 1
             continue
         name = row['name'] or row['email']
@@ -199,7 +208,7 @@ def _email_pass(db, *, label, flag_col, subject, body, selects, fail_title):
             continue
         db.execute(
             f"UPDATE manager_billing SET {flag_col}=? WHERE user_id=?",
-            (month, row['user_id']))
+            (cycle, row['user_id']))
         db.commit()
         print(f"[{label}] sent to {name} <{row['email']}>")
         sent.append((row['user_id'], name, row['email']))
@@ -218,8 +227,8 @@ def _email_pass(db, *, label, flag_col, subject, body, selects, fail_title):
 
 def run_pass(db):
     """The 08:30 payment reminder: warning-state managers within
-    REMINDER_DAYS_LEFT days of lock, once per month
-    (manager_billing.reminder_sent_month)."""
+    REMINDER_DAYS_LEFT days of lock, once per billing cycle
+    (manager_billing.reminder_sent_month holds the cycle key)."""
     return _email_pass(
         db, label='billing-reminder', flag_col='reminder_sent_month',
         subject=SUBJECT, body=BODY,
@@ -234,12 +243,12 @@ def run_lock_pass(db):
     """The lock notification — called by the 09:10 sweep (billing_sweep.py)
     right after the transition alerts, on the same fresh post-sync state.
 
-    state == 'locked' AND locked_email_sent_month != month → the mail goes
-    out the first sweep that SEES the manager locked (their transition
-    morning), never repeats while they stay locked that month, and a
-    pay → re-lock in a later month gets exactly one more (new month = new
-    flag). An SMTP failure leaves the flag unset — retried next sweep —
-    and never crashes the sweep."""
+    state == 'locked' AND locked_email_sent_month != cycle key → the mail
+    goes out the first sweep that SEES the manager locked (their transition
+    morning), never repeats while they stay locked in the SAME unpaid cycle
+    (even across month rollovers), and a pay → re-lapse → re-lock gets
+    exactly one more (new cycle_start = new key). An SMTP failure leaves the
+    flag unset — retried next sweep — and never crashes the sweep."""
     return _email_pass(
         db, label='billing-lock-email', flag_col='locked_email_sent_month',
         subject=LOCKED_SUBJECT, body=LOCKED_BODY,

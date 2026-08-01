@@ -1,13 +1,15 @@
 """Billing paywall (stage 2) — state machine + route enforcement.
 
-Policy under test: billing starts BILLING_START_DATE (2026-07-05 here);
-active-billed unpaid managers get a warning banner for BILLING_GRACE_DAYS
-days counted from max(start, 1st of month, activated_at), then are locked to
-/account until a payment lands. admin/demo/active=0 are never affected; a
-toggled-ON ceo goes through the same warning→lock machine as a manager
-(2026-07-03), a toggled-OFF ceo stays exempt.
-Fail-open: unreadable rows or a row the sync hasn't touched this month must
-never lock anyone.
+Policy under test: billing starts BILLING_START_DATE (2026-07-05 here). A
+payment covers one month from its own date: paid_until = last_paid_date + 1
+calendar month (month-length clamped). Past paid_until the manager gets
+BILLING_GRACE_DAYS warning days counted CONTINUOUSLY from paid_until+1 (or
+from max(start, activated_at) for never-payers), then is locked until a
+payment lands. Month rollovers never reset the count or the lock.
+admin/demo/active=0 are never affected; a toggled-ON ceo goes through the
+same warning→lock machine as a manager (2026-07-03), a toggled-OFF ceo stays
+exempt. Fail-open: unreadable rows or a row the sync hasn't touched for
+BILLING_STALE_DAYS days must never lock anyone.
 
 Dates are simulated via the BILLING_FAKE_TODAY env override (read per call by
 _billing_today) — no real data or clocks are edited.
@@ -38,6 +40,10 @@ GRACE = 5
 def client(monkeypatch):
     monkeypatch.setattr(app_module, 'BILLING_START_DATE', START)
     monkeypatch.setattr(app_module, 'BILLING_GRACE_DAYS', GRACE)
+    # Fixture rows carry one fixed updated_at while tests roam over weeks of
+    # fake dates; disarm the staleness guard here — it has its own test that
+    # sets a real threshold explicitly.
+    monkeypatch.setattr(app_module, 'BILLING_STALE_DAYS', 365)
     monkeypatch.setattr(app_module, 'SUMIT_PAYMENT_URL_SET', True)
     monkeypatch.setattr(app_module, 'SUMIT_PAYMENT_URL',
                         'https://pay.sumit.example/prod179/')
@@ -158,26 +164,71 @@ def test_locked_from_day6(client, monkeypatch):
     assert st['days_unpaid'] == 6
 
 
-def test_paid_this_month_ok(client, monkeypatch):
+def test_paid_covers_one_month_from_payment(client, monkeypatch):
     _set_row(last_paid_date='2026-07-08', last_status='paid')
-    assert _state(monkeypatch, '2026-07-20')['state'] == 'ok'
+    st = _state(monkeypatch, '2026-07-20')
+    assert st['state'] == 'ok' and st['paid_until'] == '2026-08-08'
 
 
-def test_month_rollover_restarts_grace(client, monkeypatch):
-    # paid July → ok in July; unpaid again in August, counted from Aug 1
-    _set_row(last_paid_date='2026-07-20', last_status='paid',
+def test_rollover_keeps_payer_ok_until_anniversary(client, monkeypatch):
+    # REGRESSION (live bug, 2026-08-01): a July payer flipped to warning on
+    # the morning of Aug 1. Paid Jul-6 must stay ok through the payment
+    # anniversary (Aug-6), then warn from Aug-7, day count continuous.
+    _set_row(last_paid_date='2026-07-06', last_status='paid',
              updated_at='2026-08-01 06:00')
-    st = _state(monkeypatch, '2026-08-03')
-    assert (st['state'], st['days_unpaid'], st['days_left']) == ('warning', 3, 3)
-    st = _state(monkeypatch, '2026-08-08')
-    assert st['state'] == 'locked'
+    st = _state(monkeypatch, '2026-08-01')
+    assert st['state'] == 'ok' and st['paid_until'] == '2026-08-06'
+    assert _state(monkeypatch, '2026-08-06')['state'] == 'ok'
+    st = _state(monkeypatch, '2026-08-07')
+    assert (st['state'], st['days_unpaid'], st['days_left']) == ('warning', 1, 5)
+    assert st['cycle_start'] == '2026-08-07'
+    st = _state(monkeypatch, '2026-08-11')
+    assert (st['state'], st['days_unpaid'], st['days_left']) == ('warning', 5, 1)
+    assert _state(monkeypatch, '2026-08-12')['state'] == 'locked'
+    # and the lock persists into September, still counting
+    st = _state(monkeypatch, '2026-09-02')
+    assert st['state'] == 'locked' and st['days_unpaid'] == 27
+
+
+def test_locked_never_paid_stays_locked_across_rollover(client, monkeypatch):
+    # REGRESSION (live bug, 2026-08-01): a never-paid manager locked in July
+    # came back unlocked on Aug 1. The unpaid count anchors at activation and
+    # NEVER resets on a month boundary.
+    _set_row(activated_at='2026-07-08')
+    st = _state(monkeypatch, '2026-07-13')
+    assert st['state'] == 'locked' and st['days_unpaid'] == 6
+    st = _state(monkeypatch, '2026-08-01')
+    assert st['state'] == 'locked' and st['days_unpaid'] == 25
+    assert st['cycle_start'] == '2026-07-08'
+    st = _state(monkeypatch, '2026-09-01')
+    assert st['state'] == 'locked' and st['days_unpaid'] == 56
+
+
+def test_paid_until_month_length_edges(client, monkeypatch):
+    from datetime import date as d
+    assert app_module._add_one_month(d(2026, 7, 31)) == d(2026, 8, 31)
+    assert app_module._add_one_month(d(2026, 8, 31)) == d(2026, 9, 30)
+    assert app_module._add_one_month(d(2027, 1, 30)) == d(2027, 2, 28)
+    assert app_module._add_one_month(d(2028, 1, 30)) == d(2028, 2, 29)  # leap
+    assert app_module._add_one_month(d(2026, 12, 15)) == d(2027, 1, 15)
+    # through the state machine: paid Jul-31 → ok through Aug-31
+    _set_row(last_paid_date='2026-07-31', last_status='paid',
+             updated_at='2026-08-30 06:00')
+    st = _state(monkeypatch, '2026-08-31')
+    assert st['state'] == 'ok' and st['paid_until'] == '2026-08-31'
+    st = _state(monkeypatch, '2026-09-01')
+    assert (st['state'], st['days_unpaid']) == ('warning', 1)
 
 
 def test_stale_row_fails_open(client, monkeypatch):
-    # row never touched this month (sync didn't run after rollover) → exempt
-    _set_row(last_paid_date='2026-07-20', last_status='paid',
+    # sync outage: a row untouched for BILLING_STALE_DAYS+ days must never
+    # warn/lock (fail-open) — but a PAID-UP manager is ok even on a stale row
+    monkeypatch.setattr(app_module, 'BILLING_STALE_DAYS', 3)
+    _set_row(last_paid_date='2026-06-20', last_status='unpaid',
              updated_at='2026-07-30 23:00')
     assert _state(monkeypatch, '2026-08-10')['state'] == 'exempt'
+    _set_row(last_paid_date='2026-08-01')
+    assert _state(monkeypatch, '2026-08-10')['state'] == 'ok'
 
 
 def test_toggled_mid_month_counts_from_toggle(client, monkeypatch):
@@ -319,7 +370,7 @@ def test_warning_banner_days_remaining(client, monkeypatch):
     resp = client.get('/')
     assert resp.status_code == 200
     html = resp.data.decode('utf-8')
-    assert 'המנוי טרם שולם החודש' in html
+    assert 'המנוי טרם שולם' in html
     assert 'בעוד 4 ימים' in html
     assert 'billing-warning-banner' in html
 
@@ -330,7 +381,7 @@ def test_exempt_manager_sees_no_banner(client, monkeypatch):
     resp = client.get('/')
     assert resp.status_code == 200
     html = resp.data.decode('utf-8')
-    assert 'המנוי טרם שולם החודש' not in html
+    assert 'המנוי טרם שולם' not in html
     assert 'billing-warning-banner' not in html
 
 
