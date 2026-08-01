@@ -89,7 +89,7 @@ def test_multibranch_maps_rows(monkeypatch):
     """Response rows are mapped to local branches via aviv_branch_id, not order."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
 
     # Deliberately swap order in the response.
@@ -113,7 +113,7 @@ def test_missing_branch_in_response(monkeypatch):
     """Branch absent from response → that branch fails; others still process."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
     # Only return branch 8; branch 3 is missing.
     monkeypatch.setattr(aviv_live, '_fetch_multi_status',
@@ -139,7 +139,7 @@ def test_single_login_one_call(monkeypatch):
     """N branches must trigger exactly ONE login + ONE multi-branch POST."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
 
     login_calls = {'n': 0}
     def fake_login():
@@ -164,7 +164,7 @@ def test_live_storage_unchanged(monkeypatch):
     """The fields written to live_sales match the legacy per-branch shape."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
 
     raw = {
@@ -201,7 +201,7 @@ def test_amount_prefers_payments_sum(monkeypatch):
     dealTotal misses additive tenders (Wolt) so the split is authoritative."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
 
     row = _live_status_row(3, 8932.42)
@@ -221,7 +221,7 @@ def test_amount_falls_back_to_dealtotal_without_payments(monkeypatch):
     """payments[] missing or empty → amount = dealTotal (legacy behavior)."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     monkeypatch.setattr(aviv_live, '_login_chain_account', lambda: 'tok')
 
     empty = _live_status_row(3, 1234.56)          # payments: []
@@ -247,7 +247,7 @@ def test_total_rest_failure_does_not_fallback_to_playwright(monkeypatch):
     """If the chain REST call fails entirely, NO Playwright is launched."""
     conn = _chain_db()
     _silence_notify(monkeypatch)
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
 
     def boom_login():
         raise Exception('connection refused')
@@ -267,7 +267,7 @@ def test_total_rest_failure_does_not_fallback_to_playwright(monkeypatch):
 
 def test_chain_outside_store_hours_silent_skip(monkeypatch):
     """Chain path obeys the store-hours guard like the per-branch path."""
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: False)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: False)
     def boom(*a, **k):
         raise AssertionError('must not work when outside hours')
     monkeypatch.setattr(aviv_live, '_login_chain_account', boom)
@@ -299,7 +299,7 @@ def _chain_tick(conn, monkeypatch, *, fail):
 def test_chain_single_blip_does_not_page(monkeypatch):
     """One failed tick then a good one → no ❌ page, no ✅ recovery."""
     conn = _chain_db()
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     calls = _capture_notify(monkeypatch)
 
     out = _chain_tick(conn, monkeypatch, fail=True)
@@ -313,7 +313,7 @@ def test_chain_single_blip_does_not_page(monkeypatch):
 def test_chain_pages_once_after_threshold(monkeypatch):
     """3 consecutive failed ticks → exactly one ❌ page; a 4th adds none."""
     conn = _chain_db()
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     calls = _capture_notify(monkeypatch)
 
     for _ in range(2):
@@ -332,7 +332,7 @@ def test_chain_pages_once_after_threshold(monkeypatch):
 def test_chain_recovery_after_page(monkeypatch):
     """First good tick after a page → one ✅ recovery; next good tick silent."""
     conn = _chain_db()
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     calls = _capture_notify(monkeypatch)
 
     for _ in range(3):
@@ -348,7 +348,7 @@ def test_chain_recovery_after_page(monkeypatch):
 def test_chain_no_recovery_without_page(monkeypatch):
     """2 failed ticks (below threshold) then success → fully silent."""
     conn = _chain_db()
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: True)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: True)
     calls = _capture_notify(monkeypatch)
 
     for _ in range(2):
@@ -368,7 +368,7 @@ def test_chain_timeout_is_30s():
 
 def test_aviv_live_skip_when_outside_hours_default(monkeypatch):
     """Scheduled call (no force) outside store hours → silent skip, no work."""
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: False)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: False)
 
     def _boom(*a, **k):
         raise AssertionError("must not touch DB / scrape when skipping")
@@ -388,7 +388,7 @@ def test_aviv_live_force_runs_outside_hours(monkeypatch):
     at the credential check — reaching it proves the store-hours guard was
     bypassed (it would otherwise have returned 'outside_hours' first).
     """
-    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda: False)
+    monkeypatch.setattr(aviv_live, '_is_store_hours', lambda *a, **k: False)
     monkeypatch.setattr(aviv_live, '_get_branch_config', lambda bid: {})
 
     result = aviv_live.run_aviv_live(1, force=True)
@@ -474,3 +474,73 @@ def test_run_agent_endpoint_no_force_for_bilboy(client, monkeypatch):
                      json={'branch_id': 1, 'agent': 'bilboy'})
     assert r.status_code == 200
     assert 'force' not in captured.get('kwargs', {})
+
+
+# ── per-branch store-hours override (BRANCH_SCHEDULE, 2026-08-01) ─────────
+# 9020 (רמת גן) is the only branch trading Friday evening + all Saturday +
+# past the chain weekday close. Everyone else keeps the chain default.
+
+from datetime import datetime as _dt  # noqa: E402
+
+
+def _il(y, m, d, hh, mm):
+    return _dt(y, m, d, hh, mm, tzinfo=aviv_live.IL_TZ)
+
+
+# 2026-08-07 = Friday, 2026-08-08 = Saturday, 2026-08-05 = Wednesday
+FRI_EVENING = _il(2026, 8, 7, 20, 0)
+FRI_LATE = _il(2026, 8, 7, 23, 45)
+SAT_MORNING = _il(2026, 8, 8, 10, 0)
+SAT_EVENING = _il(2026, 8, 8, 20, 0)
+WED_NOON = _il(2026, 8, 5, 12, 0)
+WED_LATE = _il(2026, 8, 5, 23, 15)
+WED_MIDNIGHTISH = _il(2026, 8, 5, 23, 58)
+
+
+def test_9020_scrapes_friday_evening_others_dont():
+    assert aviv_live._is_store_hours(9020, now=FRI_EVENING) is True
+    for bid in (126, 9001, 9011, 127, None):
+        assert aviv_live._is_store_hours(bid, now=FRI_EVENING) is False, bid
+    # but 9020's Friday still ends 23:30
+    assert aviv_live._is_store_hours(9020, now=FRI_LATE) is False
+
+
+def test_9020_scrapes_all_saturday_others_only_evening():
+    assert aviv_live._is_store_hours(9020, now=SAT_MORNING) is True
+    for bid in (126, 9001, 9011, None):
+        assert aviv_live._is_store_hours(bid, now=SAT_MORNING) is False, bid
+    # chain Saturday window (16:30–23:00) still applies to everyone
+    assert aviv_live._is_store_hours(9020, now=SAT_EVENING) is True
+    assert aviv_live._is_store_hours(126, now=SAT_EVENING) is True
+
+
+def test_9020_weekday_extended_past_chain_close():
+    # noon: everyone open
+    assert aviv_live._is_store_hours(9020, now=WED_NOON) is True
+    assert aviv_live._is_store_hours(126, now=WED_NOON) is True
+    # 23:15: chain closed at 23:00, 9020 still trading (until 23:55)
+    assert aviv_live._is_store_hours(9020, now=WED_LATE) is True
+    for bid in (126, 9001, 9011, None):
+        assert aviv_live._is_store_hours(bid, now=WED_LATE) is False, bid
+    assert aviv_live._is_store_hours(9020, now=WED_MIDNIGHTISH) is False
+
+
+def test_scheduled_run_gates_on_branch_schedule(monkeypatch):
+    """run_aviv_live consults the PER-BRANCH schedule: on a Friday evening a
+    chain branch silently skips while 9020 proceeds (to the credential
+    check — no aviv_user_id in this bare run, so it stops right after the
+    gate without any network)."""
+    import datetime as _dtmod
+
+    class _FakeDT(_dtmod.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return FRI_EVENING if tz else FRI_EVENING.replace(tzinfo=None)
+
+    monkeypatch.setattr(aviv_live, 'datetime', _FakeDT)
+    monkeypatch.setattr(aviv_live, '_get_branch_config',
+                        lambda bid: {'aviv_user_id': None})
+    res_chain = aviv_live.run_aviv_live(126)
+    assert res_chain.get('skipped') == 'outside_hours'
+    res_9020 = aviv_live.run_aviv_live(9020)
+    assert res_9020.get('skipped') == 'no_credentials'

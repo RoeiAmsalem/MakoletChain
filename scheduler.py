@@ -174,6 +174,16 @@ def scheduled_aviv():
     run_aviv_all()
 
 
+# 23:00–23:55 IL — late window for branches with extended hours (currently
+# only 9020, BRANCH_SCHEDULE in aviv_live). The per-branch store-hours guard
+# silently skips every branch already closed; chain-default branches get
+# exactly one extra in-hours tick at 23:00 (their schedule ends 23:00
+# inclusive) — it captures the 22:55–23:00 tail and costs ~1s/branch.
+@scheduler.scheduled_job('cron', hour=23, minute='*/5', id='aviv_late')
+def scheduled_aviv_late():
+    run_aviv_all()
+
+
 # Nightly 02:00 IL: bilboy + gmail for all branches
 @scheduler.scheduled_job('cron', hour=2, minute=0, id='nightly_sync')
 def scheduled_nightly():

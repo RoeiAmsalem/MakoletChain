@@ -102,26 +102,53 @@ STORE_SCHEDULE = {
     6: (6, 30, 23, 0),    # Sunday
 }
 
+# Per-branch schedule overrides — branches whose real trading hours differ
+# from the chain default above. Any branch not listed falls through to
+# STORE_SCHEDULE unchanged.
+# 9020 (רמת גן) is the ONLY branch trading Friday evenings + all of Saturday,
+# and it sells past the chain weekday close (amount still climbing at the
+# final 22:55 tick, verified on 2026-07-29/30; Fri 2026-07-31 rang ₪6,861 /
+# 110 tx after the 19:00 cutoff). The 23:00–23:55 ticks come from the
+# scheduler's aviv_late job; this guard keeps every other branch out of it.
+BRANCH_SCHEDULE = {
+    9020: {
+        0: (6, 30, 23, 55),   # Monday
+        1: (6, 30, 23, 55),   # Tuesday
+        2: (6, 30, 23, 55),   # Wednesday
+        3: (6, 30, 23, 55),   # Thursday
+        4: (6, 30, 23, 30),   # Friday — trades into the evening
+        5: (6, 30, 23, 55),   # Saturday — full day, same as weekdays
+        6: (6, 30, 23, 55),   # Sunday
+    },
+}
 
-def _is_store_hours() -> bool:
-    now = datetime.now(IL_TZ)
-    sh, sm, eh, em = STORE_SCHEDULE[now.weekday()]
+
+def _schedule_for(branch_id):
+    return BRANCH_SCHEDULE.get(branch_id, STORE_SCHEDULE)
+
+
+def _is_store_hours(branch_id=None, now=None) -> bool:
+    """Inside trading hours for this branch (chain default when branch_id is
+    None/unlisted). now is injectable for tests only."""
+    now = now or datetime.now(IL_TZ)
+    sh, sm, eh, em = _schedule_for(branch_id)[now.weekday()]
     start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
     end = now.replace(hour=eh, minute=em, second=0, microsecond=0)
     return start <= now <= end
 
 
-def get_next_opening() -> str:
+def get_next_opening(branch_id=None) -> str:
     """Return next store opening time as HH:MM string."""
     now = datetime.now(IL_TZ)
-    sh, sm, eh, em = STORE_SCHEDULE[now.weekday()]
+    schedule = _schedule_for(branch_id)
+    sh, sm, eh, em = schedule[now.weekday()]
     open_today = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
     # If before today's opening, return today's opening
     if now < open_today:
         return f"{sh:02d}:{sm:02d}"
     # Otherwise return tomorrow's opening
     tomorrow_wd = (now.weekday() + 1) % 7
-    tsh, tsm, _, _ = STORE_SCHEDULE[tomorrow_wd]
+    tsh, tsm, _, _ = schedule[tomorrow_wd]
     return f"{tsh:02d}:{tsm:02d}"
 
 
@@ -475,10 +502,10 @@ def run_aviv_live(branch_id: int, force: bool = False) -> dict:
     log = _setup_logger(branch_id)
     t0 = time.time()
 
-    if not force and not _is_store_hours():
+    if not force and not _is_store_hours(branch_id):
         log.info("Outside store hours, skipping")
         return {'success': True, 'amount': 0, 'transactions': 0, 'skipped': 'outside_hours'}
-    if force and not _is_store_hours():
+    if force and not _is_store_hours(branch_id):
         log.info("Manual force run outside store hours — bypassing guard")
 
     # Check credentials BEFORE creating agent_runs record
