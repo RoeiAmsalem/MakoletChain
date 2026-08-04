@@ -1066,13 +1066,20 @@ def upsert_z_report(conn, branch_id: int, target_date: str, z_number: int,
 def run_for_branch(branch_id: int, target_date: str | None = None,
                    conn: sqlite3.Connection | None = None,
                    chain_token: str | None = None,
-                   trigger_type: str = 'auto') -> dict:
+                   trigger_type: str = 'auto',
+                   filters_retry_seconds: float | None = None) -> dict:
     """Fetch + parse + upsert one branch's Z for target_date (default yesterday).
 
     If chain_token is provided, skip per-branch login and read aviv_branch_id
     from the branches table (chain-account mode). auth_source is derived
     here: 'chain' if chain_token was passed in, 'per_store' otherwise.
     trigger_type is recorded verbatim on the row.
+
+    filters_retry_seconds overrides the Z-list retry-through wall-clock budget.
+    None keeps the default FILTERS_RETRY_TOTAL_SECONDS (240s) — right for the
+    02:00 run riding Aviv's cold-cache warmup. The trailing backfill passes 0
+    (single attempt, fail-fast): a days-old Z is either already present or
+    genuinely absent, so a permanently-broken branch must not burn 240s per day.
     """
     target_date = target_date or _yesterday_il()
     auth_source = 'chain' if chain_token is not None else 'per_store'
@@ -1121,7 +1128,10 @@ def run_for_branch(branch_id: int, target_date: str | None = None,
         filters = None
         last_err: Exception | None = None
         fetch_t0 = time.time()
-        deadline = fetch_t0 + FILTERS_RETRY_TOTAL_SECONDS
+        retry_budget = (FILTERS_RETRY_TOTAL_SECONDS
+                        if filters_retry_seconds is None
+                        else filters_retry_seconds)
+        deadline = fetch_t0 + retry_budget
         attempt = 0
         while True:
             attempt += 1
@@ -1613,9 +1623,15 @@ def run_backfill_days(days: int = BACKFILL_TRAILING_DAYS,
                             'error': f'chain login failed: {str(e)[:160]}'}
             for d, bid in work:
                 try:
+                    # Fail-fast (single attempt): the 240s morning-warmup budget
+                    # is only for the 02:00 cold cache. A trailing re-fetch of a
+                    # days-old Z needs one clean shot — a broken branch (9013)
+                    # must not burn 240s/day, and a real transient just retries
+                    # on tomorrow's tick.
                     r = run_for_branch(bid, d, conn=conn,
                                        chain_token=chain_token,
-                                       trigger_type=trigger_type)
+                                       trigger_type=trigger_type,
+                                       filters_retry_seconds=0)
                     if r.get('ok'):
                         healed.append({'branch_id': bid, 'date': d})
                 except Exception:

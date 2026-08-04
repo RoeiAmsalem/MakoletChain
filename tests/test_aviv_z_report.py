@@ -1948,3 +1948,23 @@ def test_trailing_backfill_manual_run_stays_silent(monkeypatch, sample_pdf_bytes
                                trigger_type='manual')
     assert out['escalated'] == [], 'manual runs must not escalate'
     assert calls == [], 'manual runs must not brrr'
+
+
+def test_trailing_backfill_uses_failfast_budget(monkeypatch, sample_pdf_bytes):
+    """The trailing job re-fetches with a single-attempt (0s) budget so a
+    permanently-broken branch cannot burn the 240s morning budget per day."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'notify', lambda *a, **k: None)
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: _filters_for_dates(['2026-05-20']))
+    budgets: list = []
+    real = zr.run_for_branch
+    def spy(bid, td=None, conn=None, **kw):
+        budgets.append(kw.get('filters_retry_seconds'))
+        return real(bid, td, conn=conn, **kw)
+    monkeypatch.setattr(zr, 'run_for_branch', spy)
+
+    zr.run_backfill_days(days=1, end_date='2026-05-20', conn=conn)
+    assert budgets and all(b == 0 for b in budgets), \
+        f'trailing backfill must pass a 0s fail-fast budget; got {budgets}'
