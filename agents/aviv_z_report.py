@@ -1500,6 +1500,146 @@ def run_all_branches(target_date: str | None = None,
     return results
 
 
+# ---- Trailing multi-day backfill ------------------------------------------
+#
+# The primary run (02:00 IL), the missing_only backfill ticks (05:00–12:30 IL)
+# and the check-missing pass (13:00 IL) all target a single "yesterday". Once
+# that morning ends, the date is never re-attempted — so a branch whose Aviv
+# Z-list transiently 400'd all morning (9002/9007 on 2026-07-24) is abandoned
+# even though the Z becomes fetchable at Aviv hours later. check-missing only
+# alerts; it never re-fetches.
+#
+# This trailing job re-fetches every still-missing, still-tradeable Z across a
+# rolling N-day window once a day, so such a branch self-heals the next morning
+# once Aviv recovers. It is deliberately cheap: days already fully captured
+# yield no work (no Aviv login), and branches history says are closed that
+# weekday are skipped entirely (never re-probed, never alerted).
+#
+# A gap that survives the WHOLE window is not transient — the Z was never
+# closed at Aviv (126 on 2026-07-29). When the oldest day ages out still
+# missing, it escalates ONCE to 'z_absent_at_source', distinct from the
+# transient 'z_fetch_fail' / 'missing_z' signals, so it gets triaged as
+# operational rather than retried silently forever.
+BACKFILL_TRAILING_DAYS = 14
+
+
+def _escalate_absent_at_source(conn, target_date: str) -> list[int]:
+    """brrr 🟠 once for each branch still missing a Z on target_date after the
+    full trailing window, excluding expected-closed weekdays.
+
+    Called for the day aging out of the horizon: a branch still uncovered there
+    has been retried every day for the whole window and never appeared at Aviv,
+    so the cause is operational (a Z that was never closed) rather than a
+    transient fetch failure. Deduped once per (branch, date) via z_alert_log.
+    Coverage = a real z_report_902 row OR a positive daily_sales amount, same
+    definition check_missing_z uses.
+    """
+    bids = _branch_ids_for_date(conn, target_date, missing_only=False,
+                                chain_mode=USE_CHAIN_AUTH)
+    covered = {r['branch_id'] for r in conn.execute(
+        'SELECT branch_id FROM z_report_902 '
+        'WHERE date=? AND z_number IS NOT NULL', (target_date,))}
+    covered |= {r['branch_id'] for r in conn.execute(
+        'SELECT branch_id FROM daily_sales '
+        'WHERE date=? AND amount > 0', (target_date,))}
+    missing = [b for b in bids
+               if b not in covered and not _expected_closed(conn, b, target_date)]
+    fresh = [b for b in missing
+             if _alert_once(conn, b, target_date, 'z_absent_at_source')]
+    if fresh:
+        names = _branch_names(conn, fresh)
+        lines = [f'{b} ({names.get(b, "?")})' for b in fresh]
+        notify(f'Z absent at source for {len(fresh)} branch(es) — {target_date}',
+               f'Still no Z after the full {BACKFILL_TRAILING_DAYS}-day retry '
+               'window — the Z was likely never closed at Aviv (operational, '
+               'not a fetch failure): ' + ', '.join(lines))
+    return fresh
+
+
+def run_backfill_days(days: int = BACKFILL_TRAILING_DAYS,
+                      end_date: str | None = None,
+                      conn: sqlite3.Connection | None = None,
+                      trigger_type: str = 'auto') -> dict:
+    """Re-fetch (not just alert) every still-missing Z across a trailing window.
+
+    Walks the `days` calendar days ending at `end_date` (default yesterday IL)
+    and, for each, re-attempts only the branches that are still missing a REAL
+    Z AND are not expected-closed that weekday. A single chain login is shared
+    across the whole run.
+
+    Cost by construction:
+      * a fully-captured day contributes zero work → no Aviv call;
+      * a branch that already has a real Z is skipped (missing_only) → no call;
+      * a Saturday-/weekday-closed branch is filtered by _expected_closed() →
+        never re-probed and never alerted;
+      * a genuinely-missing tradeable day costs one pull attempt.
+
+    When the OLDEST day in the window is still missing for a not-expected-closed
+    branch, that branch has exhausted the retry horizon → escalated once as
+    'z_absent_at_source' (auto runs only; manual CLI runs stay silent).
+
+    Returns {'window': [oldest, newest], 'days', 'healed': [...], 'escalated'}.
+    """
+    end = end_date or _yesterday_il()
+    end_d = date.fromisoformat(end)
+    owns_conn = conn is None
+    if owns_conn:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+    try:
+        target_dates = [(end_d - timedelta(days=k)).isoformat()
+                        for k in range(days)]
+
+        # Build the exact per-day work list: missing (no real Z) AND tradeable
+        # (not expected-closed). Closed days never enter the list, so they are
+        # neither re-probed nor counted.
+        work: list[tuple[str, int]] = []
+        for d in target_dates:
+            for bid in _branch_ids_for_date(conn, d, missing_only=True,
+                                            chain_mode=USE_CHAIN_AUTH):
+                if not _expected_closed(conn, bid, d):
+                    work.append((d, bid))
+
+        healed: list[dict] = []
+        if work:
+            chain_token: str | None = None
+            if USE_CHAIN_AUTH:
+                try:
+                    chain_token = _refresh(_login_chain_account())
+                except Exception as e:
+                    log.error('trailing backfill: chain login failed: %s', e)
+                    return {'window': [target_dates[-1], target_dates[0]],
+                            'days': days, 'healed': [], 'escalated': [],
+                            'error': f'chain login failed: {str(e)[:160]}'}
+            for d, bid in work:
+                try:
+                    r = run_for_branch(bid, d, conn=conn,
+                                       chain_token=chain_token,
+                                       trigger_type=trigger_type)
+                    if r.get('ok'):
+                        healed.append({'branch_id': bid, 'date': d})
+                except Exception:
+                    log.exception('trailing backfill failed for branch %d '
+                                  'date %s', bid, d)
+
+        # Escalate the day aging out of the window (auto runs only).
+        escalated: list[int] = []
+        if trigger_type == 'auto':
+            try:
+                escalated = _escalate_absent_at_source(conn, target_dates[-1])
+            except Exception:
+                log.exception('escalate_absent_at_source failed')
+
+        log.info('trailing backfill %s..%s: %d work item(s), healed=%s, '
+                 'escalated=%s', target_dates[-1], target_dates[0],
+                 len(work), healed, escalated)
+        return {'window': [target_dates[-1], target_dates[0]], 'days': days,
+                'healed': healed, 'escalated': escalated}
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 if __name__ == '__main__':
     import argparse
     import sys
@@ -1521,12 +1661,24 @@ if __name__ == '__main__':
                     help='No fetching: post-backfill completeness check for '
                          '--date (default yesterday). brrr any branch still '
                          'without revenue, excluding expected-closed weekdays.')
+    ap.add_argument('--backfill-days', type=int, nargs='?',
+                    const=BACKFILL_TRAILING_DAYS, default=None, metavar='N',
+                    help='Trailing re-fetch of the last N days ending at --date '
+                         f'(default {BACKFILL_TRAILING_DAYS}) — re-attempts '
+                         'every still-missing, tradeable Z, not just alerts. '
+                         'Skips expected-closed days; escalates gaps that '
+                         'survive the whole window to z_absent_at_source.')
     args = ap.parse_args()
 
     trigger = 'manual' if args.manual else 'auto'
 
     if args.check_missing:
         out = check_missing_z(args.date)
+        print(out)
+        sys.exit(0)
+    elif args.backfill_days is not None:
+        out = run_backfill_days(args.backfill_days, end_date=args.date,
+                                trigger_type=trigger)
         print(out)
         sys.exit(0)
     elif args.branch_id:

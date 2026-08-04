@@ -1766,3 +1766,185 @@ def test_build_submit_body_xls_outputtype():
     assert xls_body['outputType'] == 'XLS'
     # Filters must be identical between PDF and XLS for the same Z.
     assert pdf_body['filters'] == xls_body['filters']
+
+
+# ── trailing multi-day backfill (run_backfill_days) ────────────────────────
+
+def _backfill_db():
+    """In-memory DB for the trailing-backfill tests: branches + z_report_902 +
+    daily_sales + z_alert_log (migration 036), one active per-branch store."""
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.executescript('''
+        CREATE TABLE branches (
+            id INTEGER PRIMARY KEY, name TEXT, active INTEGER DEFAULT 1,
+            aviv_user_id TEXT, aviv_password TEXT
+        );
+        CREATE TABLE daily_sales (
+            branch_id INTEGER, date TEXT, amount REAL,
+            transactions INTEGER DEFAULT 0, source TEXT, fetched_at TEXT,
+            UNIQUE(branch_id, date)
+        );
+        CREATE TABLE z_report_902 (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL,
+            z_number INTEGER, amount REAL, transactions INTEGER,
+            avg_per_txn REAL, payment_breakdown TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            trigger_type TEXT, auth_source TEXT,
+            UNIQUE(branch_id, date)
+        );
+        CREATE TABLE z_alert_log (
+            branch_id INTEGER NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL,
+            sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(branch_id, date, kind)
+        );
+    ''')
+    conn.execute("INSERT INTO branches (id, name, aviv_user_id, aviv_password) "
+                 "VALUES (126, 'Einstein', 'e_u', 'e_p')")
+    conn.commit()
+    return conn
+
+
+def _filters_for_dates(dates):
+    """Aviv filters body that resolves a distinct Z for each date in `dates`."""
+    return {'data': [{'value': [
+        {'key': 2500 + i, 'value': f'{d} 23:59:59'}
+        for i, d in enumerate(dates)]}]}
+
+
+def _spy_run_for_branch_dates(monkeypatch):
+    """Record (branch_id, date) for every run_for_branch call."""
+    seen: list[tuple] = []
+    real = zr.run_for_branch
+    def spy(bid, td=None, conn=None, **kw):
+        seen.append((bid, td))
+        return real(bid, td, conn=conn, **kw)
+    monkeypatch.setattr(zr, 'run_for_branch', spy)
+    return seen
+
+
+def test_trailing_backfill_self_heals_transient_miss(monkeypatch, sample_pdf_bytes):
+    """A branch that missed its own morning is re-fetched by the trailing window
+    on a later day and lands — the 9002/9007 2026-07-24 recovery scenario."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'notify', lambda *a, **k: None)
+    dates = ['2026-05-18', '2026-05-19', '2026-05-20']
+    # Aviv now has the Z for every day in the window (it recovered).
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _filters_for_dates(dates))
+
+    out = zr.run_backfill_days(days=3, end_date='2026-05-20', conn=conn)
+
+    # The OLDEST missed day (2026-05-18) now carries a real Z.
+    row = conn.execute("SELECT z_number, amount FROM z_report_902 "
+                       "WHERE branch_id=126 AND date='2026-05-18'").fetchone()
+    assert row is not None and row['z_number'] is not None, \
+        'trailing backfill must re-fetch and land the previously-missing Z'
+    assert {'branch_id': 126, 'date': '2026-05-18'} in out['healed']
+    assert out['escalated'] == [], 'a healed day must not escalate'
+
+
+def test_trailing_backfill_skips_real_z_days(monkeypatch, sample_pdf_bytes):
+    """A day already covered by a real Z is never re-fetched (no Aviv call);
+    only genuinely-missing days cost a pull."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'notify', lambda *a, **k: None)
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: _filters_for_dates(['2026-05-18', '2026-05-20']))
+    # 2026-05-19 already has a real Z → must be skipped.
+    conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
+                 "VALUES (126, '2026-05-19', 2401, 9000.00)")
+    conn.commit()
+
+    seen = _spy_run_for_branch_dates(monkeypatch)
+    zr.run_backfill_days(days=3, end_date='2026-05-20', conn=conn)
+
+    attempted_dates = {d for (_b, d) in seen}
+    assert '2026-05-19' not in attempted_dates, \
+        f'covered day must not be re-fetched; attempted {sorted(attempted_dates)}'
+    assert attempted_dates == {'2026-05-18', '2026-05-20'}, \
+        f'only the two missing days should be pulled; got {sorted(attempted_dates)}'
+
+
+def test_trailing_backfill_fully_covered_window_costs_nothing(monkeypatch, sample_pdf_bytes):
+    """When every day is already captured, no branch is attempted at all."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    monkeypatch.setattr(zr, 'notify', lambda *a, **k: None)
+    for d in ('2026-05-18', '2026-05-19', '2026-05-20'):
+        conn.execute("INSERT INTO z_report_902 (branch_id, date, z_number, amount) "
+                     "VALUES (126, ?, 2401, 9000.00)", (d,))
+    conn.commit()
+
+    seen = _spy_run_for_branch_dates(monkeypatch)
+    out = zr.run_backfill_days(days=3, end_date='2026-05-20', conn=conn)
+    assert seen == [], f'a fully-covered window must do zero fetches; got {seen}'
+    assert out['healed'] == [] and out['escalated'] == []
+
+
+def test_trailing_backfill_does_not_hammer_expected_closed(monkeypatch, sample_pdf_bytes):
+    """A branch history says is closed that weekday is neither re-probed nor
+    escalated — no Aviv call, no z_absent_at_source alert."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    notes: list = []
+    monkeypatch.setattr(zr, 'notify', lambda *a, **k: notes.append(a))
+    monkeypatch.setattr(zr, 'fetch_902_filters', lambda b, t: _filters_for_dates([]))
+    # Make 126 expected-closed on 2026-05-18: a probed sentinel one week back,
+    # no real Z in the lookback window.
+    zr.record_closed_day(conn, 126, '2026-05-11')
+
+    seen = _spy_run_for_branch_dates(monkeypatch)
+    out = zr.run_backfill_days(days=1, end_date='2026-05-18', conn=conn)
+
+    assert seen == [], f'expected-closed branch must not be re-probed; got {seen}'
+    assert out['escalated'] == [], 'expected-closed day must not escalate'
+    assert notes == [], 'no brrr alert for an expected-closed branch'
+    absent = conn.execute(
+        "SELECT COUNT(*) c FROM z_alert_log WHERE kind='z_absent_at_source'"
+    ).fetchone()['c']
+    assert absent == 0
+
+
+def test_trailing_backfill_escalates_absent_at_source_once(monkeypatch, sample_pdf_bytes):
+    """A tradeable branch missing across the whole window (Aviv never has the Z)
+    escalates to z_absent_at_source exactly once — the 126 2026-07-29 class."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    calls: list = []
+    monkeypatch.setattr(zr, 'notify', lambda title, msg: calls.append(title))
+    # Filters resolve nothing for any target date → every attempt sentinels.
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: _filters_for_dates(['2020-01-01']))
+
+    out1 = zr.run_backfill_days(days=3, end_date='2026-05-20', conn=conn)
+    assert out1['healed'] == [], 'nothing should heal when Aviv has no Z'
+    assert out1['escalated'] == [126], \
+        f'oldest still-missing tradeable day must escalate; got {out1["escalated"]}'
+    absent = conn.execute(
+        "SELECT branch_id, date, kind FROM z_alert_log "
+        "WHERE kind='z_absent_at_source'").fetchall()
+    assert [(r['branch_id'], r['date']) for r in absent] == [(126, '2026-05-18')]
+    assert sum('absent at source' in t for t in calls) == 1
+
+    # Second run: dedup — no new escalation, no second brrr.
+    out2 = zr.run_backfill_days(days=3, end_date='2026-05-20', conn=conn)
+    assert out2['escalated'] == [], 'escalation must fire once, then dedup'
+    assert sum('absent at source' in t for t in calls) == 1, \
+        'z_absent_at_source must brrr exactly once across re-runs'
+
+
+def test_trailing_backfill_manual_run_stays_silent(monkeypatch, sample_pdf_bytes):
+    """A manual (operator) trailing run heals but never escalates/alerts."""
+    conn = _backfill_db()
+    _stub_success_path(monkeypatch, sample_pdf_bytes)
+    calls: list = []
+    monkeypatch.setattr(zr, 'notify', lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(zr, 'fetch_902_filters',
+                        lambda b, t: _filters_for_dates(['2020-01-01']))
+
+    out = zr.run_backfill_days(days=3, end_date='2026-05-20', conn=conn,
+                               trigger_type='manual')
+    assert out['escalated'] == [], 'manual runs must not escalate'
+    assert calls == [], 'manual runs must not brrr'
