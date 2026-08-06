@@ -967,11 +967,20 @@ def goods():
         g['docs'].append(d)
     groups = sorted(groups_map.values(), key=lambda g: g['total'], reverse=True)
 
+    # Manual adjustments (goods_adjustments) — added to the headline goods figure
+    # (סה"כ סחורה) that feeds גולמי, shown as a labeled line. The document table +
+    # supplier groups keep the raw doc `total` untouched (per policy).
+    adjustments, adjustments_total = _goods_adjustments(branch_id, month, db)
+    goods_total = round(total + adjustments_total, 2)
+
     ctx.update({
         'docs': docs,
         'groups': groups,
         'view_mode': view_mode,
         'total': total,
+        'adjustments': adjustments,
+        'adjustments_total': adjustments_total,
+        'goods_total': goods_total,
         'total_before_vat': total_before_vat,
         'invoices_total': invoices_total,
         'delivery_total': delivery_total,
@@ -1088,6 +1097,36 @@ def api_goods_doc_detail(row_id):
     })
 
 
+def _goods_adjustments(branch_id, month, db):
+    """Manual monthly goods adjustments (goods_adjustments table) for branch+month.
+
+    Returns (rows, total). These are added to the goods figure that feeds
+    גולמי / profit and surfaced as a labeled line ("התאמות ידניות") — never as
+    fake documents, and never in the supplier/budget/document listings.
+    """
+    rows = db.execute(
+        "SELECT id, label, amount, created_by, created_at FROM goods_adjustments "
+        "WHERE branch_id = ? AND month = ? ORDER BY id",
+        (branch_id, month)
+    ).fetchall()
+    rows = [dict(r) for r in rows]
+    total = round(sum(float(r['amount'] or 0) for r in rows), 2)
+    return rows, total
+
+
+def _goods_total(branch_id, month, db):
+    """The goods figure that feeds גולמי / profit: BilBoy documents + manual
+    adjustments. Supplier/budget/document listings use the raw goods_documents
+    sum, NOT this — only the P&L/גולמי headline number carries adjustments."""
+    docs = db.execute(
+        "SELECT COALESCE(SUM(amount), 0) FROM goods_documents "
+        "WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ?",
+        (branch_id, month)
+    ).fetchone()[0]
+    _, adj = _goods_adjustments(branch_id, month, db)
+    return round(float(docs or 0) + adj, 2)
+
+
 def _goods_doc_context(branch_id, month, db):
     """Per-supplier goods aggregation for one branch + month, byte-identical to
     the /goods route's own grouping (same query, same amount_before_vat basis,
@@ -1129,10 +1168,18 @@ def _goods_doc_context(branch_id, month, db):
         g['docs'].append(d)
     groups = sorted(groups_map.values(), key=lambda g: g['total'], reverse=True)
 
+    # Manual adjustments — added to the headline goods figure (feeds גולמי),
+    # exposed as a labeled line. Supplier groups keep the raw doc `total`.
+    adjustments, adjustments_total = _goods_adjustments(branch_id, month, db)
+    goods_total = round(total + adjustments_total, 2)
+
     return {
         'docs': docs,
         'groups': groups,
         'total': total,
+        'adjustments': adjustments,
+        'adjustments_total': adjustments_total,
+        'goods_total': goods_total,
         'total_before_vat': total_before_vat,
         'invoices_total': invoices_total,
         'delivery_total': delivery_total,
@@ -1713,12 +1760,10 @@ def api_summary():
         (branch_id, month)
     ).fetchone()[0]
 
-    # Goods from goods_documents
-    goods = db.execute(
-        "SELECT COALESCE(SUM(amount), 0) FROM goods_documents "
-        "WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ?",
-        (branch_id, month)
-    ).fetchone()[0]
+    # Goods = BilBoy documents + manual adjustments (goods_adjustments). The
+    # adjustments feed גולמי / profit here; the /goods listing shows them as a
+    # separate labeled line. Supplier/budget views stay on the raw doc sum.
+    goods = _goods_total(branch_id, month, db)
 
     # Ensure monthly carry-forward before totals
     _ensure_monthly_expenses(branch_id, month, db)
@@ -2185,12 +2230,7 @@ def api_network_overview():
         revenue = round(float(row['revenue'] or 0), 2)
         txn = int(row['txn'] or 0)
 
-        goods = db.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM goods_documents "
-            "WHERE branch_id=? AND strftime('%Y-%m',doc_date)=?",
-            (bid, current_month)
-        ).fetchone()[0]
-        goods = round(float(goods or 0), 2)
+        goods = _goods_total(bid, current_month, db)
 
         _ensure_monthly_expenses(bid, current_month, db)
         fix_data = _get_fixed_total(bid, current_month, revenue, db)
@@ -2303,10 +2343,7 @@ def api_history():
             "SELECT COALESCE(SUM(amount), 0) FROM daily_sales WHERE branch_id = ? AND strftime('%Y-%m', date) = ?",
             (branch_id, ms)
         ).fetchone()[0]
-        gds = db.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM goods_documents WHERE branch_id = ? AND strftime('%Y-%m', doc_date) = ?",
-            (branch_id, ms)
-        ).fetchone()[0]
+        gds = _goods_total(branch_id, ms, db)
         _ensure_monthly_expenses(branch_id, ms, db)
         fix_data = _get_fixed_total(branch_id, ms, inc, db)
         sal_data = _calculate_salary_cost(branch_id, ms)
@@ -4486,6 +4523,101 @@ def ops_dismiss_alert():
     db = get_db()
     db.execute("UPDATE agent_runs SET dismissed = 1 WHERE id = ?", (alert_id,))
     db.commit()
+    return jsonify({'ok': True})
+
+
+# ── Manual goods adjustments (admin-only) ─────────────────────────────────
+# A small monthly goods-adjustment per branch. Added to the goods total that
+# feeds גולמי / profit (see _goods_total), shown as a labeled line on /goods —
+# never as a fake document, never in supplier/budget views. Audit: created_by
+# is stamped and every mutation is _record_event-logged.
+
+def _valid_month(m):
+    """True for a 'YYYY-MM' string with a real month (01-12). No regex import."""
+    parts = (m or '').split('-')
+    if len(parts) != 2:
+        return False
+    y, mo = parts
+    return (len(y) == 4 and y.isdigit()
+            and len(mo) == 2 and mo.isdigit() and 1 <= int(mo) <= 12)
+
+
+@app.route('/admin/goods-adjustments')
+@_admin_required
+def admin_goods_adjustments():
+    db = get_db()
+    rows = db.execute(
+        "SELECT ga.id, ga.branch_id, b.name AS branch_name, ga.month, ga.label, "
+        "       ga.amount, ga.created_by, u.name AS created_by_name, ga.created_at "
+        "FROM goods_adjustments ga "
+        "LEFT JOIN branches b ON b.id = ga.branch_id "
+        "LEFT JOIN users u ON u.id = ga.created_by "
+        "ORDER BY ga.month DESC, ga.branch_id"
+    ).fetchall()
+    branches = db.execute(
+        "SELECT id, name FROM branches WHERE active = 1 ORDER BY id"
+    ).fetchall()
+    ctx = _page_context('admin_goods_adjustments')
+    return render_template(
+        'admin_goods_adjustments.html',
+        adjustments=[dict(r) for r in rows],
+        branches=[dict(b) for b in branches],
+        **ctx,
+    )
+
+
+@app.route('/admin/goods-adjustments/save', methods=['POST'])
+@_admin_required
+def admin_goods_adjustments_save():
+    data = request.get_json(silent=True) or request.form
+    try:
+        branch_id = int(data.get('branch_id'))
+        amount = float(data.get('amount'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'branch_id and amount required'}), 400
+    month = (data.get('month') or '').strip()
+    label = (data.get('label') or '').strip()
+    if not _valid_month(month):
+        return jsonify({'error': 'month must be YYYY-MM'}), 400
+    if not label:
+        return jsonify({'error': 'label required'}), 400
+
+    db = get_db()
+    adj_id = data.get('id')
+    if adj_id:
+        db.execute(
+            "UPDATE goods_adjustments SET branch_id=?, month=?, label=?, amount=?, "
+            "created_by=? WHERE id=?",
+            (branch_id, month, label, amount, session.get('user_id'), int(adj_id)),
+        )
+    else:
+        db.execute(
+            "INSERT INTO goods_adjustments (branch_id, month, label, amount, created_by) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(branch_id, month, label) DO UPDATE SET "
+            "  amount=excluded.amount, created_by=excluded.created_by",
+            (branch_id, month, label, amount, session.get('user_id')),
+        )
+    db.commit()
+    _record_event('goods_adjustment_save', branch_id=branch_id)
+    return jsonify({'ok': True})
+
+
+@app.route('/admin/goods-adjustments/delete', methods=['POST'])
+@_admin_required
+def admin_goods_adjustments_delete():
+    data = request.get_json(silent=True) or request.form
+    adj_id = data.get('id')
+    if not adj_id:
+        return jsonify({'error': 'missing id'}), 400
+    db = get_db()
+    row = db.execute(
+        "SELECT branch_id FROM goods_adjustments WHERE id=?", (int(adj_id),)
+    ).fetchone()
+    db.execute("DELETE FROM goods_adjustments WHERE id=?", (int(adj_id),))
+    db.commit()
+    _record_event('goods_adjustment_delete',
+                  branch_id=row['branch_id'] if row else None)
     return jsonify({'ok': True})
 
 

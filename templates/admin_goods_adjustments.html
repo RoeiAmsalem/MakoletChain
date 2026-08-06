@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}התאמת קניות — קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    .adj-container { max-width:1000px; margin:0 auto; padding:1.5rem; }
+    .adj-header { margin-bottom:1.25rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+    .adj-header h1 { font-size:1.5rem; font-weight:700; margin:0; }
+    .adj-nav { display:flex; gap:0.5rem; margin-right:auto; }
+    .adj-nav a { font-size:0.82rem; padding:0.35rem 0.8rem; border-radius:6px; color:var(--text-secondary); text-decoration:none; border:1px solid var(--card-border); }
+    .adj-nav a:hover { background:rgba(255,255,255,0.06); color:white; }
+    .adj-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); padding:1.25rem; margin-bottom:1.25rem; box-shadow:var(--shadow); }
+    .adj-form { display:grid; grid-template-columns:1.4fr 0.9fr 1.8fr 0.9fr auto; gap:0.6rem; align-items:end; }
+    .adj-form label { display:block; font-size:0.75rem; color:var(--text-muted); margin-bottom:0.25rem; }
+    .adj-form input, .adj-form select { width:100%; padding:0.5rem 0.6rem; border-radius:6px; border:1px solid var(--card-border); background:var(--bg); color:var(--text-primary); font-size:0.9rem; }
+    .adj-btn { padding:0.55rem 1rem; border-radius:6px; border:none; background:var(--accent); color:white; font-weight:600; cursor:pointer; font-size:0.9rem; }
+    .adj-btn.secondary { background:transparent; border:1px solid var(--card-border); color:var(--text-secondary); }
+    .adj-btn.danger { background:transparent; border:1px solid rgba(239,68,68,0.4); color:#fca5a5; }
+    table.adj-table { width:100%; border-collapse:collapse; font-size:0.88rem; }
+    table.adj-table th, table.adj-table td { padding:0.55rem 0.6rem; border-bottom:1px solid var(--card-border); text-align:right; }
+    table.adj-table th { color:var(--text-muted); font-weight:600; font-size:0.78rem; }
+    .adj-amount { direction:ltr; text-align:left; font-weight:600; }
+    .adj-hint { font-size:0.78rem; color:var(--text-muted); margin-top:0.4rem; }
+    @media (max-width:700px){ .adj-form { grid-template-columns:1fr 1fr; } }
+</style>
+{% endblock %}
+{% block content %}
+<div class="adj-container">
+    <div class="adj-header">
+        <h1>✍️ התאמת קניות</h1>
+        <div class="adj-nav">
+            <a href="/ops">← ניהול</a>
+            <a href="/admin/branches">סניפים</a>
+        </div>
+    </div>
+
+    <div class="adj-card">
+        <form class="adj-form" onsubmit="saveAdj(event)">
+            <input type="hidden" id="adj-id">
+            <div>
+                <label>סניף</label>
+                <select id="adj-branch">
+                    {% for b in branches %}<option value="{{ b.id }}">{{ b.id }} — {{ b.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>חודש (YYYY-MM)</label>
+                <input type="text" id="adj-month" placeholder="2026-07" maxlength="7">
+            </div>
+            <div>
+                <label>תיאור</label>
+                <input type="text" id="adj-label" placeholder="סחורה דרך זיכיונות המכולת">
+            </div>
+            <div>
+                <label>סכום ₪ (כולל מע"מ)</label>
+                <input type="number" id="adj-amount" step="0.01" placeholder="0.00">
+            </div>
+            <button type="submit" class="adj-btn">שמור</button>
+        </form>
+        <div class="adj-hint">ההתאמה נכנסת ל"סה"כ סחורה" ולרווח הגולמי של הסניף לאותו חודש, ומופיעה כשורה נפרדת ("התאמות ידניות"). אינה משנה את רשימות המסמכים/הספקים/התקציב.</div>
+    </div>
+
+    <div class="adj-card">
+        <table class="adj-table">
+            <thead><tr><th>סניף</th><th>חודש</th><th>תיאור</th><th>סכום</th><th>נוצר ע"י</th><th></th></tr></thead>
+            <tbody>
+            {% for a in adjustments %}
+                <tr>
+                    <td>{{ a.branch_id }} — {{ a.branch_name or '?' }}</td>
+                    <td>{{ a.month }}</td>
+                    <td>{{ a.label }}</td>
+                    <td class="adj-amount">₪ {{ '{:,.2f}'.format(a.amount) }}</td>
+                    <td style="color:var(--text-muted)">{{ a.created_by_name or 'מערכת' }}</td>
+                    <td style="text-align:left;white-space:nowrap">
+                        <button class="adj-btn secondary" onclick='editAdj({{ a|tojson }})'>ערוך</button>
+                        <button class="adj-btn danger" onclick="delAdj({{ a.id }})">מחק</button>
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="6" style="color:var(--text-muted);text-align:center;padding:1.5rem">אין התאמות עדיין</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function editAdj(a){
+    document.getElementById('adj-id').value = a.id;
+    document.getElementById('adj-branch').value = a.branch_id;
+    document.getElementById('adj-month').value = a.month;
+    document.getElementById('adj-label').value = a.label;
+    document.getElementById('adj-amount').value = a.amount;
+    window.scrollTo({top:0,behavior:'smooth'});
+}
+async function saveAdj(e){
+    e.preventDefault();
+    const body = {
+        id: document.getElementById('adj-id').value || null,
+        branch_id: document.getElementById('adj-branch').value,
+        month: document.getElementById('adj-month').value.trim(),
+        label: document.getElementById('adj-label').value.trim(),
+        amount: document.getElementById('adj-amount').value,
+    };
+    const r = await fetch('/admin/goods-adjustments/save', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const j = await r.json();
+    if(r.ok){ location.reload(); } else { alert(j.error || 'שגיאה'); }
+}
+async function delAdj(id){
+    if(!confirm('למחוק את ההתאמה?')) return;
+    const r = await fetch('/admin/goods-adjustments/delete', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})});
+    if(r.ok){ location.reload(); } else { alert('שגיאה'); }
+}
+</script>
+{% endblock %}
