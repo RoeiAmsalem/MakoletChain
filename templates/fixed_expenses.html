@@ -423,18 +423,22 @@ function renderTable(tbody, exps) {
     const elecSource = elec ? elec.source : 'none';
     const hasElec = elecSource !== 'none' && elec && elec.amount > 0;
     if (!exps.length && !hasElec) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#94a3b8">אין הוצאות. לחץ "+ הוסף הוצאה".</td></tr>'; updateTotals(exps); return; }
-    let html = exps.map(e => `
+    let html = exps.map(e => {
+        const isSystem = e.source && e.source !== 'manual';
+        const actions = isSystem
+            ? '<span class="type-badge type-badge--auto" title="נכתב אוטומטית מסנכרון ביל-בוי — לא ניתן לעריכה">מתעדכן אוטומטית</span>'
+            : `<button class="btn-icon" onclick="openEditModal(${e.id})">✏️</button>
+            <button onclick="deleteExpense(${e.id})" class="btn-delete-icon">🗑️</button>`;
+        return `
     <tr id="row-${e.id}">
         <td style="font-weight:600">${e.name}</td>
         <td>${getTypeBadge(e)}</td>
         <td class="money fixed" style="font-size:1rem">
             <span>${formatMoney(e.amount)}</span>
         </td>
-        <td><div class="actions-cell">
-            <button class="btn-icon" onclick="openEditModal(${e.id})">✏️</button>
-            <button onclick="deleteExpense(${e.id})" class="btn-delete-icon">🗑️</button>
-        </div></td>
-    </tr>`).join('');
+        <td><div class="actions-cell">${actions}</div></td>
+    </tr>`;
+    }).join('');
     if (hasElec) {
         const tilde = elecSource === 'estimate' ? '~' : '';
         const isManual = elecSource === 'manual';

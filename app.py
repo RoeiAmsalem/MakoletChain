@@ -3698,6 +3698,12 @@ def get_branch_start_month(branch_id: int, db=None) -> tuple:
     return (y, m)
 
 
+# Fixed-expense row names owned by nightly agents (fixed_expenses.source !=
+# 'manual'). Managers cannot create/edit/delete rows with these names — the
+# system writes them (see agents/bilboy.py sync_wolt_fees).
+SYSTEM_EXPENSE_NAMES = ('עמלות Wolt',)
+
+
 def _get_fixed_total(branch_id: int, month: str, income: float, db, mtd_factor: float = None) -> dict:
     """Sum fixed expenses for a branch+month. % rows calculated live from income.
     Returns dict: {fixed_only, electricity: {amount, source, estimate_basis}, total}.
@@ -3709,7 +3715,8 @@ def _get_fixed_total(branch_id: int, month: str, income: float, db, mtd_factor: 
     rows and % מהכנסות rows (e.g. franchise זיכיונות, already actual MTD) are NOT
     pro-rated. The default keys are unchanged regardless of mtd_factor."""
     rows = db.execute(
-        'SELECT amount, pct_value, expense_type FROM fixed_expenses WHERE branch_id=? AND month=?',
+        'SELECT amount, pct_value, expense_type, source FROM fixed_expenses '
+        'WHERE branch_id=? AND month=?',
         (branch_id, month)
     ).fetchall()
     monthly_fixed = 0.0   # חודשי fixed-amount rows → pro-ratable in MTD mode
@@ -3717,9 +3724,12 @@ def _get_fixed_total(branch_id: int, month: str, income: float, db, mtd_factor: 
     for r in rows:
         if r['pct_value'] and r['pct_value'] > 0:
             other_fixed += income * r['pct_value'] / 100
-        elif r['expense_type'] == 'monthly':
+        elif (r['expense_type'] == 'monthly'
+              and (r['source'] or 'manual') == 'manual'):
             monthly_fixed += r['amount']
         else:
+            # System rows (e.g. עמלות Wolt, source='bilboy_wolt') are already
+            # actual MTD — pro-rating them would understate; treat like % rows.
             other_fixed += r['amount']
     fixed_sum = round(monthly_fixed + other_fixed, 2)
     y, m = map(int, month.split('-'))
@@ -3739,9 +3749,17 @@ def _get_fixed_total(branch_id: int, month: str, income: float, db, mtd_factor: 
 
 
 def _ensure_monthly_expenses(branch_id: int, month: str, db):
-    """Carry forward 'חודשי' expenses from the most recent prior month if target month is empty."""
+    """Carry forward 'חודשי' expenses from the most recent prior month if target month is empty.
+
+    System rows (source != 'manual', e.g. the nightly עמלות Wolt row) are
+    invisible to this function twice over: they don't count as "the month has
+    rows" (else a system row landing on the 1st would block the manual
+    carry-forward), and they are never copied forward (the sync recomputes
+    them from actual billing each night).
+    """
     existing = db.execute(
-        'SELECT COUNT(*) FROM fixed_expenses WHERE branch_id=? AND month=?',
+        "SELECT COUNT(*) FROM fixed_expenses WHERE branch_id=? AND month=? "
+        "AND COALESCE(source,'manual')='manual'",
         (branch_id, month)
     ).fetchone()[0]
     if existing > 0:
@@ -3749,6 +3767,7 @@ def _ensure_monthly_expenses(branch_id: int, month: str, db):
     prev = db.execute(
         '''SELECT DISTINCT month FROM fixed_expenses
            WHERE branch_id=? AND month < ? AND expense_type='monthly'
+           AND COALESCE(source,'manual')='manual'
            ORDER BY month DESC LIMIT 1''',
         (branch_id, month)
     ).fetchone()
@@ -3756,7 +3775,8 @@ def _ensure_monthly_expenses(branch_id: int, month: str, db):
         return
     rows = db.execute(
         '''SELECT name, amount, expense_type, pct_value
-           FROM fixed_expenses WHERE branch_id=? AND month=? AND expense_type='monthly' ''',
+           FROM fixed_expenses WHERE branch_id=? AND month=? AND expense_type='monthly'
+           AND COALESCE(source,'manual')='manual' ''',
         (branch_id, prev['month'])
     ).fetchall()
     for r in rows:
@@ -3803,8 +3823,8 @@ def api_fixed_expenses_list():
             if live and live['amount']:
                 income += live['amount']
     rows = db.execute(
-        "SELECT id, name, amount, expense_type, pct_value, locked FROM fixed_expenses "
-        "WHERE branch_id = ? AND month = ?",
+        "SELECT id, name, amount, expense_type, pct_value, locked, source "
+        "FROM fixed_expenses WHERE branch_id = ? AND month = ?",
         (branch_id, month)
     ).fetchall()
     result = []
@@ -3829,6 +3849,10 @@ def api_fixed_expenses_create():
     pct_value = data.get('pct_value')
     if not name:
         return jsonify({'error': 'name required'}), 400
+    # Reserved system-row names (written nightly by agents) — a manual row here
+    # would block the system upsert on the UNIQUE(branch,month,name) key.
+    if name in SYSTEM_EXPENSE_NAMES:
+        return jsonify({'error': 'שם שמור למערכת — נכתב אוטומטית'}), 400
     # % expenses: never store a stale amount — always computed live from income
     if pct_value and float(pct_value) > 0:
         amount = 0
@@ -3848,13 +3872,18 @@ def api_fixed_expenses_update(exp_id):
     data = request.get_json()
     db = get_db()
     row = db.execute(
-        'SELECT branch_id, name, amount, expense_type, pct_value FROM fixed_expenses WHERE id=?',
+        'SELECT branch_id, name, amount, expense_type, pct_value, source '
+        'FROM fixed_expenses WHERE id=?',
         (exp_id,)
     ).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     if row['branch_id'] != get_branch_id():
         return jsonify({'error': 'forbidden'}), 403
+    if (row['source'] or 'manual') != 'manual':
+        # System-managed row (e.g. עמלות Wolt) — nobody edits it; the nightly
+        # sync owns the value.
+        return jsonify({'error': 'שורה מנוהלת אוטומטית — לא ניתנת לעריכה'}), 403
     name = data.get('name', row['name'])
     amount = float(data.get('amount', row['amount']))
     expense_type = data.get('expense_type', row['expense_type'])
@@ -3873,13 +3902,19 @@ def api_fixed_expenses_update(exp_id):
 @app.route('/api/fixed-expenses/<int:exp_id>', methods=['DELETE'])
 @login_required
 def api_fixed_expenses_delete(exp_id):
-    """Delete a fixed expense."""
+    """Delete a fixed expense. System rows (source != 'manual'): admin only, audited."""
     db = get_db()
-    row = db.execute('SELECT branch_id FROM fixed_expenses WHERE id=?', (exp_id,)).fetchone()
+    row = db.execute(
+        'SELECT branch_id, source FROM fixed_expenses WHERE id=?', (exp_id,)
+    ).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     if row['branch_id'] != get_branch_id():
         return jsonify({'error': 'forbidden'}), 403
+    if (row['source'] or 'manual') != 'manual':
+        if session.get('user_role') != 'admin':
+            return jsonify({'error': 'שורה מנוהלת אוטומטית — לא ניתנת למחיקה'}), 403
+        _record_event('fixed_expense_system_delete', branch_id=row['branch_id'])
     db.execute("DELETE FROM fixed_expenses WHERE id = ?", (exp_id,))
     db.commit()
     return jsonify({'ok': True})
