@@ -15,9 +15,16 @@
 <section class="goods-kpis">
     <div class="kpi-card kpi-card--goods">
         <div class="kpi-header"><span class="kpi-icon">🛒</span><span class="kpi-label">סה"כ סחורה</span></div>
-        <span class="kpi-value" style="color:white">{{ '₪\u202F{:,.2f}'.format(total) }}</span>
-        <span style="font-size:0.8rem;color:rgba(255,255,255,0.6)">{{ count }} מסמכים</span>
+        <span class="kpi-value" style="color:white">{{ '₪\u202F{:,.2f}'.format(goods_total if goods_total is defined else total) }}</span>
+        <span style="font-size:0.8rem;color:rgba(255,255,255,0.6)">{{ count }} מסמכים{% if adjustments_total is defined and adjustments_total %} + התאמות{% endif %}</span>
     </div>
+    {% if adjustments_total is defined and adjustments_total %}
+    <div class="kpi-card" style="background:linear-gradient(135deg,#4c1d95,#3730a3);border-color:rgba(139,92,246,0.3)">
+        <div class="kpi-header"><span class="kpi-icon">✍️</span><span class="kpi-label">התאמות ידניות</span></div>
+        <span class="kpi-value" style="color:#c4b5fd">{{ '₪ {:,.2f}'.format(adjustments_total) }}</span>
+        <span style="font-size:0.75rem;color:rgba(196,181,253,0.7)">{% for a in adjustments %}{{ a.label }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
+    </div>
+    {% endif %}
     <div class="kpi-card" style="background:linear-gradient(135deg,#1e3a5f,#15294a);border-color:rgba(59,130,246,0.25)">
         <div class="kpi-header"><span class="kpi-icon">📄</span><span class="kpi-label">חשבוניות</span></div>
         <span class="kpi-value" style="color:#93c5fd">{{ '₪\u202F{:,.2f}'.format(invoices_total) }}</span>
