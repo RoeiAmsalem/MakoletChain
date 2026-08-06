@@ -59,6 +59,157 @@ CHAIN_TOKEN_ENV = 'BILBOY_CHAIN_TOKEN'
 KNOWN_STATUSES = {3, 5, 7, 9}
 EXCLUDED_STATUSES = {9}
 
+# ── Wolt fee extraction (זיכיונות המכולת type-3 invoices) ────────────────────
+# Wolt commissions are billed to each store via the franchise supplier, whose
+# docs are otherwise excluded from goods entirely. The fee lines carry BilBoy
+# CATEGORY codes in catalogNumber (61/62/63/67/69 — captured live from the
+# 9020/9018/9015 itemization), with names like:
+#   עמלת וולט 17% + מע"מ · וואלט + עמלה 17%+ מעמ · דמי שירות קבועים וולט + 3.8
+#   למשלוח · קמפיין וולט · דמי שירות עמלה 10%
+# A line is a Wolt fee if its category code matches OR its name mentions
+# וולט/וואלט (belt and braces — the 10% service-fee line has no וולט in the
+# name but always sits on a pure-Wolt doc and carries a Wolt category code).
+# These lines are bucket-B operating fees: NEVER goods, NEVER the 5% royalty.
+WOLT_LINE_CATS = {'61', '62', '63', '67', '69'}
+WOLT_EXPENSE_NAME = 'עמלות Wolt'
+WOLT_EXPENSE_SOURCE = 'bilboy_wolt'
+
+
+def is_wolt_fee_line(item: dict) -> bool:
+    cat = str(item.get('catalogNumber') or item.get('barcode') or '').strip()
+    name = str(item.get('name') or '')
+    return cat in WOLT_LINE_CATS or 'וולט' in name or 'וואלט' in name
+
+
+def extract_wolt_fee_total(docs: list) -> float:
+    """Incl-VAT Wolt fee total across franchise type-3 docs with line items.
+
+    Each doc: {'totalWithVat', 'totalWithoutVat', 'items': [{name,
+    catalogNumber, total}]} — line totals are ex-VAT. A doc whose Wolt lines
+    sum to its own totalWithoutVat (±₪1) is a pure-Wolt invoice → use its
+    totalWithVat verbatim (this is what makes the audited anchors land to the
+    shekel). A mixed doc contributes its Wolt lines scaled by the doc's own
+    VAT ratio.
+    """
+    total = 0.0
+    for d in docs:
+        items = d.get('items') or []
+        wolt_ex = sum(float(it.get('total') or 0)
+                      for it in items if is_wolt_fee_line(it))
+        if not wolt_ex:
+            continue
+        twv = float(d.get('totalWithVat') or 0)
+        two = float(d.get('totalWithoutVat') or 0)
+        if two and abs(wolt_ex - two) <= 1.0:
+            total += twv
+        elif two:
+            total += wolt_ex * (twv / two)
+        else:
+            total += wolt_ex
+    return round(total, 2)
+
+
+def upsert_wolt_fee_expense(conn, branch_id: int, month: str, amount: float) -> str:
+    """Write the system-managed 'עמלות Wolt' fixed-expense row for branch+month.
+
+    amount > 0  → insert-or-overwrite OUR row (source='bilboy_wolt'). The ON
+                  CONFLICT WHERE guard means a manual row that happens to share
+                  the name is NEVER hijacked — we detect and report 'blocked'.
+    amount == 0 → delete our row if present (a no-Wolt branch shows nothing).
+    Idempotent by construction; the nightly recompute makes the row grow MTD.
+    """
+    amount = round(float(amount or 0), 2)
+    if amount > 0.005:
+        conn.execute(
+            "INSERT INTO fixed_expenses "
+            "(branch_id, month, name, amount, expense_type, pct_value, locked, source) "
+            "VALUES (?, ?, ?, ?, 'monthly', NULL, 1, ?) "
+            "ON CONFLICT(branch_id, month, name) DO UPDATE SET "
+            "  amount=excluded.amount, locked=1, source=excluded.source "
+            "  WHERE fixed_expenses.source=?",
+            (branch_id, month, WOLT_EXPENSE_NAME, amount,
+             WOLT_EXPENSE_SOURCE, WOLT_EXPENSE_SOURCE))
+        conn.commit()
+        row = conn.execute(
+            "SELECT source FROM fixed_expenses WHERE branch_id=? AND month=? AND name=?",
+            (branch_id, month, WOLT_EXPENSE_NAME)).fetchone()
+        src = row['source'] if row else None
+        return 'upserted' if src == WOLT_EXPENSE_SOURCE else 'blocked_by_manual_row'
+    cur = conn.execute(
+        "DELETE FROM fixed_expenses WHERE branch_id=? AND month=? AND name=? AND source=?",
+        (branch_id, month, WOLT_EXPENSE_NAME, WOLT_EXPENSE_SOURCE))
+    conn.commit()
+    return 'deleted' if cur.rowcount else 'none'
+
+
+def fetch_wolt_fee_docs(session, bb_branch_id: str, franchise_ids: list,
+                        from_date: str, to_date: str, log) -> tuple:
+    """Fetch the franchise supplier's type-3 invoices with line items.
+
+    Returns (docs, api_calls). Only type-3 invoices are fetched in detail —
+    Wolt fees are always billed on type-3 (delivery notes/credits never carry
+    them), which keeps the added BilBoy cost to 1 headers call + one detail
+    call per franchise invoice (~5-10/branch/month).
+    """
+    if not franchise_ids:
+        return [], 0
+    calls = 0
+    headers = _api_get(session, '/customer/docs/headers', params={
+        'suppliers': ','.join(franchise_ids),
+        'branches': bb_branch_id,
+        'from': f'{from_date}T00:00:00',
+        'to': f'{to_date}T00:00:00',
+    })
+    calls += 1
+    hlist = headers if isinstance(headers, list) else (
+        headers.get('data') or headers.get('docs') or headers.get('headers') or [])
+    docs = []
+    for h in hlist:
+        if h.get('type') != 3 or h.get('status') in EXCLUDED_STATUSES:
+            continue
+        doc_id = h.get('id')
+        if not doc_id:
+            continue
+        try:
+            raw = _api_get(session, '/customer/doc',
+                           params={'docId': doc_id}, timeout=15)
+            calls += 1
+        except Exception as e:
+            log.warning("wolt-fees: doc detail failed for %s: %s",
+                        doc_id, str(e)[:120])
+            continue
+        body = (raw or {}).get('body') or {}
+        docs.append({
+            'totalWithVat': h.get('totalWithVat'),
+            'totalWithoutVat': h.get('totalWithoutVat'),
+            'items': [{'name': it.get('name'),
+                       'catalogNumber': it.get('catalogNumber') or it.get('barcode'),
+                       'total': it.get('total')}
+                      for it in (body.get('items') or [])],
+        })
+    return docs, calls
+
+
+def sync_wolt_fees(session, bb_branch_id: str, branch_id: int,
+                   franchise_ids: list, from_date: str, to_date: str,
+                   month: str, log) -> dict:
+    """Recompute + upsert the month's Wolt fee row from the franchise docs."""
+    docs, calls = fetch_wolt_fee_docs(session, bb_branch_id, franchise_ids,
+                                      from_date, to_date, log)
+    amount = extract_wolt_fee_total(docs)
+    conn = _get_db()
+    try:
+        action = upsert_wolt_fee_expense(conn, branch_id, month, amount)
+    finally:
+        conn.close()
+    log.info("wolt-fees: branch=%d month=%s docs=%d amount=₪%.2f action=%s (+%d BilBoy calls)",
+             branch_id, month, len(docs), amount, action, calls)
+    if action == 'blocked_by_manual_row':
+        log.warning("wolt-fees: manual row named %r exists for branch=%d month=%s — system row NOT written",
+                    WOLT_EXPENSE_NAME, branch_id, month)
+    return {'amount': amount, 'action': action, 'api_calls': calls,
+            'docs': len(docs)}
+
 
 def _get_db():
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -200,12 +351,15 @@ def run_bilboy(branch_id: int) -> dict:
         })
         suppliers = raw.get('suppliers') if isinstance(raw, dict) else raw
         keep_ids = []
+        franchise_ids = []          # kept OUT of goods; used for Wolt fee extraction
         if suppliers:
             for s in suppliers:
                 name = s.get('title') or s.get('name') or s.get('supplierName') or ''
                 sid = str(s.get('id') or s.get('supplierId') or '')
                 if franchise_supplier and franchise_supplier in name:
                     log.info("Filtered out franchise supplier: %s", name)
+                    if sid:
+                        franchise_ids.append(sid)
                     continue
                 if sid:
                     keep_ids.append(sid)
@@ -370,6 +524,17 @@ def run_bilboy(branch_id: int) -> dict:
         recon_ok = '✅' if diff <= 10 else '❌'
         log.info("Reconciliation: branch=%d month=%s raw=₪%.2f accepted=₪%.2f excluded_status9=₪%.2f unknown=₪%.2f %s",
                  branch_id, month_str, raw_sum, accepted_sum, excluded_sum, unknown_sum, recon_ok)
+
+        # ── Wolt fee row (system fixed-expense) — never fails the sync ──
+        # Recomputes the current month's עמלות Wolt from the franchise docs
+        # and upserts the source='bilboy_wolt' row. MTD semantics: the row
+        # grows as new franchise invoices land during the month.
+        try:
+            sync_wolt_fees(session, bb_branch_id, branch_id, franchise_ids,
+                           from_date, to_date, month_str, log)
+        except Exception as e:
+            log.warning("wolt-fees sync failed (goods sync unaffected): %s",
+                        str(e)[:200])
 
         if diff > 10:
             status = 'warning'
