@@ -1,7 +1,17 @@
 # בטל מנוי — phase-2 spec (cancel button on /account)
 
-Phase-1 research: 2026-07-03. **This is a spec — no write code exists yet.**
-This will be MakoletChain's FIRST write against SUMIT.
+Phase-1 research: 2026-07-03. Phase-2 IMPLEMENTED on dev/staging 2026-08-07
+(commit ce8cfbf; tests/test_billing_cancel.py, 23 tests). Differences from
+this spec as written: the render-time recurring check was dropped (zero SUMIT
+calls at render — the link shows for active+paid+not-cancelled managers and
+the click-time flow resolves fresh); customer resolution uses the matched
+billing_payment_resolutions row (the cached receipt-join) instead of a live
+join; migration is 045 (not 038); SUMIT-error responses are HTTP 500, not
+502 (Cloudflare swallows origin 502 bodies). Real recurring items verified
+live 2026-08-07: גל 2126101210 / יובל 2227741450 / דניס 2137873119 (₪179.9
+"קופה שקופה", product 2087758337, Status=Active). The empirical
+double-cancel/bogus-id/foreign-id matrix (scripts/cancel_empirical_probe.py)
+still requires a disposable test subscription BEFORE the prod port.
 
 ## SUMIT API findings (from the official swagger + live read-only probes)
 
