@@ -146,6 +146,75 @@ def unsubscribe_trigger(url):
     return _post_trigger("/triggers/triggers/unsubscribe/", URL=url)
 
 
+# ── Recurring (הוראת קבע) — list + the ONE sanctioned financial write ───────
+# The manager-facing cancel button (docs/billing_cancel_spec.md) needs two
+# endpoints that the generic _post deliberately refuses (both contain
+# 'recurring', a write-token):
+#   /billing/recurring/listforcustomer/  — READ: a customer's standing orders
+#   /billing/recurring/cancel/           — WRITE: cancel ONE standing order
+# They go through their own private two-endpoint path, like _post_trigger:
+# the read allowlist and write-tripwire above stay exactly as strict as
+# before, and nothing else can ride in on this exception. The cancel is the
+# FIRST and ONLY financial write this codebase issues against SUMIT.
+_RECURRING_ENDPOINTS = {
+    "/billing/recurring/listforcustomer/",
+    "/billing/recurring/cancel/",
+}
+
+# RecurringCustomerItem.Status values that mean the standing order is DEAD —
+# anything else (Active/GracePeriod/PendingRetry/...) is live/cancellable.
+# From the swagger enum, re-verified 2026-08-07.
+_RECURRING_DEAD_STATUSES = {1, 9, 13}   # Cancelled / FinishedExpired / CancelledByCustomer
+_RECURRING_DEAD_NAMES = {"Cancelled", "FinishedExpired", "CancelledByCustomer"}
+
+
+def _post_recurring(endpoint, **body):
+    creds = _credentials()
+    if creds is None:
+        raise SumitNotConnected("SUMIT_API_KEY / SUMIT_ORG_ID not configured")
+    if endpoint not in _RECURRING_ENDPOINTS:
+        raise RuntimeError(f"SUMIT recurring client refused endpoint: {endpoint}")
+    _count_call()
+    resp = requests.post(BASE + endpoint, json={"Credentials": creds, **body},
+                         headers={"Content-Type": "application/json"}, timeout=TIMEOUT)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def recurring_item_is_live(item):
+    """True when a RecurringCustomerItem will keep charging (not cancelled /
+    expired). Status arrives as an int per the swagger enum; tolerate the
+    string names defensively."""
+    status = item.get("Status")
+    if isinstance(status, str):
+        return status not in _RECURRING_DEAD_NAMES
+    return status not in _RECURRING_DEAD_STATUSES
+
+
+def list_recurring_for_customer(customer_id, include_inactive=False):
+    """READ: a SUMIT customer's recurring (standing-order) items. Customer is
+    passed as {ID} ONLY — Typed_Customer auto-creates entities when handed
+    name/email, so nothing else may ever go in that object."""
+    data = _post_recurring("/billing/recurring/listforcustomer/",
+                           Customer={"ID": int(customer_id)},
+                           IncludeInactive=bool(include_inactive))
+    if data.get("Status") != 0:
+        raise RuntimeError(data.get("UserErrorMessage") or "recurring list failed")
+    return ((data.get("Data") or {}).get("RecurringItems")) or []
+
+
+def cancel_recurring(customer_id, recurring_item_id):
+    """WRITE: cancel ONE standing order — the single sanctioned SUMIT write.
+
+    Both ids must already be resolved server-side from the session user's own
+    tag (never from request input). Customer is {ID} only (see above). Returns
+    the raw envelope: Status == 0 is success; the caller must ALSO verify with
+    a fresh list_recurring_for_customer read before trusting it."""
+    return _post_recurring("/billing/recurring/cancel/",
+                           Customer={"ID": int(customer_id)},
+                           RecurringCustomerItemID=int(recurring_item_id))
+
+
 def _first(val):
     """SUMIT CRM entity properties come back as 1-element lists; unwrap them."""
     if isinstance(val, list):

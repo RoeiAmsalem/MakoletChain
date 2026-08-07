@@ -7,6 +7,7 @@ import secrets
 import select
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, date, timedelta, timezone
@@ -1587,6 +1588,13 @@ def account():
     bst = _billing_state(user_id, session.get('user_role'),
                          session.get('user_email'), db)
 
+    billing_cancelled = bool(mb['cancelled_at']) if mb else False
+    # The modest "ביטול מנוי" link: active + inside the paid window + not
+    # already cancelled + an actual manager (admin/demo have no subscription).
+    can_cancel = bool(billing_active and paid_this_month
+                      and not billing_cancelled
+                      and session.get('user_role') == 'manager')
+
     # The OG-* params are DISPLAY-ONLY (the redirect target configured in
     # SUMIT's page settings points back here with them): never proof of
     # payment and never mutate state — paid/unpaid still comes exclusively
@@ -1598,6 +1606,8 @@ def account():
         payment_doc_number=og_doc_number,
         sync_pending=(sync_state == 'pending'),
         billing_locked=(bst['state'] == 'locked'),
+        billing_cancelled=billing_cancelled,
+        can_cancel=can_cancel,
         billing_active=billing_active,
         paid_this_month=paid_this_month,
         paid_until=(paid_until.isoformat() if paid_until else None),
@@ -1608,6 +1618,189 @@ def account():
         admin_no_billing=(session.get('user_role') in ROLES_ALL_BRANCHES
                           and mb is None),
         **ctx)
+
+
+# ── Subscription cancel (the FIRST intentional SUMIT write) ───────────────
+# Design: cancel stops FUTURE charges only; access stays until paid_until.
+# The cancel call may ONLY ever target a recurring id resolved server-side
+# from the session user's own tag — request-body ids are never read.
+
+_CANCEL_MIN_INTERVAL = 60          # one cancel attempt per user per minute
+_cancel_attempt_last = {}          # user_id -> monotonic ts (single worker: -w 1)
+_cancel_attempt_lock = threading.Lock()
+
+
+def _log_cancel_attempt(db, user_id, customer_id, item_id, ok, api_status,
+                        message):
+    """Audit row for EVERY cancel attempt, success or failure."""
+    db.execute(
+        "INSERT INTO billing_cancellations (user_id, requested_at, "
+        "sumit_customer_id, recurring_item_id, ok, api_status, message) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (user_id, _now_il().strftime('%Y-%m-%d %H:%M:%S'), customer_id,
+         item_id, 1 if ok else 0, api_status, (message or '')[:400]))
+    db.commit()
+
+
+@app.route('/account/cancel')
+@login_required
+def account_cancel_confirm():
+    """Confirm screen before the cancel. Only reachable while eligible —
+    anything else bounces back to /account."""
+    db = get_db()
+    user_id = session['user_id']
+    mb = db.execute("SELECT * FROM manager_billing WHERE user_id=?",
+                    (user_id,)).fetchone()
+    pu = _paid_until(mb['last_paid_date']) if mb else None
+    eligible = bool(mb and mb['active'] and not mb['cancelled_at']
+                    and pu and _billing_today() <= pu
+                    and session.get('user_role') == 'manager')
+    if not eligible:
+        return redirect('/account')
+    return render_template('account_cancel.html',
+                           paid_until=pu.isoformat(),
+                           **_page_context('account'))
+
+
+@app.route('/api/account/cancel-subscription', methods=['POST'])
+@login_required
+def api_account_cancel_subscription():
+    """Cancel the SESSION user's SUMIT standing order.
+
+    Target resolution is sacred: tag = str(session user id) → matched payment
+    resolution → SUMIT customer id → their ONE live recurring item. Nothing in
+    the request body is ever read, so a forged body cannot redirect the
+    cancel. Steps: resolve → list (exactly one live item required) → cancel →
+    VERIFY with a fresh read → only then write cancelled_at locally. Any
+    SUMIT-side failure changes nothing locally (fail-open stays intact).
+    """
+    from utils import sumit
+    from utils.notify import notify
+    user_id = session['user_id']
+    if session.get('user_role') != 'manager':
+        return jsonify({'error': 'רק חשבון מנהל יכול לבטל מנוי'}), 403
+    db = get_db()
+    mb = db.execute(
+        "SELECT mb.*, u.name AS user_name, u.email AS user_email "
+        "FROM manager_billing mb JOIN users u ON u.id = mb.user_id "
+        "WHERE mb.user_id=?", (user_id,)).fetchone()
+    if not mb or not mb['active']:
+        return jsonify({'error': 'אין מנוי פעיל לחשבון זה'}), 400
+    if mb['cancelled_at']:
+        # Idempotent: a second confirm on an already-cancelled subscription is
+        # a friendly no-op, not an error (and costs zero SUMIT calls).
+        return jsonify({'ok': True, 'already_cancelled': True,
+                        'message': 'המנוי כבר בוטל'})
+    with _cancel_attempt_lock:
+        now = time.monotonic()
+        last = _cancel_attempt_last.get(user_id)
+        if last is not None and now - last < _CANCEL_MIN_INTERVAL:
+            return jsonify({'error': 'ניסיון ביטול נוסף יתאפשר בעוד דקה'}), 429
+        _cancel_attempt_last[user_id] = now
+
+    # SACRED: the tag comes from the session ONLY — never from the request.
+    tag = str(user_id)
+    assert tag == str(session['user_id'])
+    name = mb['user_name'] or mb['user_email']
+    paid_until = _paid_until(mb['last_paid_date'])
+    pu_str = paid_until.isoformat() if paid_until else '—'
+
+    def _fail(code, msg, customer_id=None, item_id=None, api_status=None,
+              alert=None):
+        _log_cancel_attempt(db, user_id, customer_id, item_id, False,
+                            api_status, alert or msg)
+        if alert:
+            notify('Subscription cancel failed',
+                   f'{name} (uid {user_id}): {alert}', medium=True)
+        return jsonify({'error': msg}), code
+
+    row = db.execute(
+        "SELECT customer_id FROM billing_payment_resolutions "
+        "WHERE tag=? AND resolution='matched' AND customer_id IS NOT NULL "
+        "ORDER BY payment_id DESC LIMIT 1", (tag,)).fetchone()
+    if row is None:
+        return _fail(404,
+                     'לא אותר המנוי במערכת הסליקה. פנו אלינו ונטפל בביטול באופן ידני.',
+                     alert='no matched SUMIT customer for their tag — '
+                           'cancel manually in SUMIT if requested.')
+    customer_id = row['customer_id']
+
+    try:
+        items = sumit.list_recurring_for_customer(customer_id)
+    except Exception as e:
+        return _fail(502, 'שגיאה בתקשורת עם מערכת הסליקה. נסו שוב בעוד מספר דקות.',
+                     customer_id, alert=f'recurring list failed: {e}')
+    live = [it for it in items if sumit.recurring_item_is_live(it)]
+    if not live:
+        return _fail(404,
+                     'לא נמצאה הוראת קבע פעילה לביטול. ייתכן שהמנוי כבר בוטל, או שהתשלום אינו הוראת קבע — פנו אלינו ונסדיר זאת.',
+                     customer_id,
+                     alert='0 live recurring items on their SUMIT customer.')
+    if len(live) > 1:
+        return _fail(409,
+                     'נמצאו כמה הוראות קבע בחשבון — פנו אלינו ונטפל בביטול באופן ידני.',
+                     customer_id,
+                     alert=f'{len(live)} live recurring items — refusing to '
+                           f'guess which to cancel.')
+    item_id = live[0].get('ID')
+
+    try:
+        res = sumit.cancel_recurring(customer_id, item_id)
+    except Exception as e:
+        return _fail(502, 'שגיאה בתקשורת עם מערכת הסליקה. נסו שוב בעוד מספר דקות.',
+                     customer_id, item_id, alert=f'cancel call failed: {e}')
+    if res.get('Status') != 0:
+        return _fail(502, 'מערכת הסליקה סירבה לבטל — פנו אלינו ונטפל בביטול באופן ידני.',
+                     customer_id, item_id, api_status=res.get('Status'),
+                     alert=f'SUMIT refused the cancel: '
+                           f'{res.get("UserErrorMessage")!r}')
+
+    # Verification read: the item must no longer be live. If SUMIT accepted
+    # the cancel but still lists the item as live, the state is ambiguous —
+    # treat as failure (no local write) and alert; Roei checks in SUMIT.
+    verify_note = ''
+    try:
+        after = sumit.list_recurring_for_customer(customer_id)
+        if any(it.get('ID') == item_id and sumit.recurring_item_is_live(it)
+               for it in after):
+            return _fail(502, 'הביטול לא נקלט במערכת הסליקה — פנו אלינו ונוודא שהמנוי בוטל.',
+                         customer_id, item_id, api_status=0,
+                         alert='cancel returned Status=0 but the item is '
+                               'STILL live on the verification read — check '
+                               'in SUMIT.')
+    except Exception as e:
+        # cancel itself succeeded (Status=0); a failed verify read alone
+        # doesn't undo that — note it in the audit row.
+        verify_note = f' (verify read failed: {e})'
+
+    today_iso = _billing_today().isoformat()
+    db.execute(
+        "UPDATE manager_billing SET cancelled_at=?, cancelled_recurring_id=?, "
+        "updated_at=? WHERE user_id=?",
+        (today_iso, item_id, _now_il().strftime('%Y-%m-%d %H:%M'), user_id))
+    _log_cancel_attempt(db, user_id, customer_id, item_id, True, 0,
+                        f'cancelled; access until {pu_str}{verify_note}')
+    notify('Subscription cancelled',
+           f'Manager {name} (uid {user_id}) cancelled their subscription — '
+           f'future charges stopped; access until {pu_str}.')
+
+    # Confirmation email to the manager — best-effort, never fails the cancel.
+    try:
+        scripts_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'scripts')
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import billing_reminder
+        if not billing_reminder._dry_run():
+            billing_reminder._send_email(
+                mb['user_email'], name,
+                subject=billing_reminder.CANCELLED_SUBJECT,
+                body=billing_reminder.CANCELLED_BODY.replace(
+                    '{paid_until}', pu_str))
+    except Exception as e:
+        app.logger.error(f'cancel confirmation email failed (uid {user_id}): {e}')
+
+    return jsonify({'ok': True, 'paid_until': pu_str})
 
 
 # ── Shared helpers ────────────────────────────────────────────
@@ -5667,10 +5860,19 @@ def _run_billing_sync(db, allow_skip=False):
             "SELECT user_id, sumit_tag FROM manager_billing").fetchall():
         tag = row['sumit_tag']
         if tag in paid_by_tag:
+            # A payment dated on/after cancelled_at = the manager re-subscribed
+            # through their link: clear the cancel and everything resumes. An
+            # OLDER payment (the one that predates the cancel) never clears it.
             db.execute(
                 "UPDATE manager_billing SET last_paid_date=?, last_status='paid', "
-                "updated_at=? WHERE user_id=?",
-                (paid_by_tag[tag], now_iso, row['user_id']))
+                "updated_at=?, "
+                "cancelled_recurring_id = CASE WHEN cancelled_at IS NOT NULL "
+                "  AND ? >= cancelled_at THEN NULL ELSE cancelled_recurring_id END, "
+                "cancelled_at = CASE WHEN cancelled_at IS NOT NULL "
+                "  AND ? >= cancelled_at THEN NULL ELSE cancelled_at END "
+                "WHERE user_id=?",
+                (paid_by_tag[tag], now_iso, paid_by_tag[tag], paid_by_tag[tag],
+                 row['user_id']))
             matched += 1
         else:
             db.execute(
@@ -5850,10 +6052,14 @@ def _billing_alert_pass(db):
     from utils.notify import notify
     today = _billing_today().isoformat()
     sent = []
+    # cancelled_at IS NULL: a manager who cancelled gets exactly ONE alert (🟡
+    # from the cancel endpoint itself) and is never nagged again — no warning/
+    # lock transitions. Re-subscribing clears the flag and alerts resume.
     for row in db.execute(
             "SELECT mb.user_id, mb.alert_state, u.name, u.email, u.role "
             "FROM manager_billing mb JOIN users u ON u.id = mb.user_id "
-            "WHERE mb.active = 1 AND u.active = 1").fetchall():
+            "WHERE mb.active = 1 AND u.active = 1 "
+            "AND mb.cancelled_at IS NULL").fetchall():
         st = _billing_state(row['user_id'], row['role'], row['email'], db)
         new = _billing_alert_state_of(st)
         prev = row['alert_state']
@@ -5992,11 +6198,26 @@ def _billing_state(user_id, role, email, db=None):
         db = db or get_db()
         mb = db.execute(
             "SELECT active, last_paid_date, last_status, activated_at, "
-            "updated_at FROM manager_billing WHERE user_id=?",
+            "updated_at, cancelled_at FROM manager_billing WHERE user_id=?",
             (user_id,)).fetchone()
         if not mb or not mb['active']:
             return {'state': 'exempt'}
         paid_until = _paid_until(mb['last_paid_date'])
+        if mb['cancelled_at']:
+            # Manager-initiated cancel: access until paid_until, then a DIRECT
+            # lock — no grace window, and the reminder/lock-email + layer-C
+            # passes skip cancelled rows entirely (they filter on
+            # cancelled_at). cancelled_at is local data (set by our own
+            # endpoint), so no staleness guard applies. A payment dated on/
+            # after cancelled_at clears the flag (re-subscribe) in the sync.
+            if paid_until and today <= paid_until:
+                return {'state': 'cancelled',
+                        'paid_until': paid_until.isoformat()}
+            cycle_start = (paid_until + timedelta(days=1)) if paid_until \
+                else date.fromisoformat(mb['cancelled_at'][:10])
+            return {'state': 'locked', 'cancelled': True,
+                    'days_unpaid': max((today - cycle_start).days + 1, 1),
+                    'cycle_start': cycle_start.isoformat()}
         if paid_until and today <= paid_until:
             return {'state': 'ok', 'paid_until': paid_until.isoformat()}
         # 'unpaid' is only trustworthy if the SUMIT sync (or the admin
@@ -6089,7 +6310,14 @@ def admin_billing():
             'warning': f"אזהרה · {st.get('days_left')} ימים",
             'locked': 'נעול',
             'exempt': 'פטור',
+            'cancelled': 'בוטל',
         }.get(state, state)
+        cancelled_at = mb['cancelled_at'] if mb else None
+        if cancelled_at:
+            # Surface the cancel in both phases: still-active window
+            # (state 'cancelled') and after lapse (state 'locked' w/ flag).
+            state = 'cancelled'
+            state_label = f'בוטל {cancelled_at}'
         managers.append({
             'user_id': u['id'],
             'name': u['name'],
@@ -6239,7 +6467,13 @@ def api_admin_billing_assign_payment():
         (str(user_id), now_iso[:10], admin_id, now_iso, payment_id))
     db.execute(
         "UPDATE manager_billing SET last_paid_date=?, last_status='paid', "
-        "updated_at=? WHERE user_id=?", (paid_date, now_iso, user_id))
+        "updated_at=?, "
+        "cancelled_recurring_id = CASE WHEN cancelled_at IS NOT NULL "
+        "  AND ? >= cancelled_at THEN NULL ELSE cancelled_recurring_id END, "
+        "cancelled_at = CASE WHEN cancelled_at IS NOT NULL "
+        "  AND ? >= cancelled_at THEN NULL ELSE cancelled_at END "
+        "WHERE user_id=?",
+        (paid_date, now_iso, paid_date, paid_date, user_id))
     db.commit()
     app.logger.info(
         f'billing assign: payment {payment_id} -> user {user_id} '

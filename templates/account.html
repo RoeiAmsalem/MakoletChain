@@ -38,6 +38,11 @@
     .contact-btn:hover { background:rgba(255,255,255,0.09); color:white; }
     .contact-btn svg { width:22px; height:22px; }
 
+    /* modest, deliberately quiet — a text link, not a button */
+    .cancel-link-row { text-align:center; margin-top:0.9rem; }
+    .cancel-link-row a { font-size:0.78rem; color:var(--text-muted); text-decoration:none; border-bottom:1px dotted rgba(255,255,255,0.25); }
+    .cancel-link-row a:hover { color:var(--text-secondary); }
+
     @media (max-width: 480px) {
         .account-container { padding:0.75rem; }
         .account-hero .kpi-value { font-size:1.32rem; }
@@ -99,6 +104,20 @@
         <div class="kpi-label">סטטוס מנוי</div>
         <div class="kpi-value">אין מנוי לחשבון אדמין</div>
     </div>
+    {% elif billing_cancelled and billing_active and paid_this_month %}
+    <div class="kpi-card kpi-card--neutral account-hero">
+        <div class="kpi-label">סטטוס מנוי</div>
+        <div class="kpi-value">
+            המנוי בוטל — פעיל עד {{ paid_until }}
+        </div>
+        <div class="hero-sub">
+            החיוב החודשי הופסק. ניתן לחדש את המנוי בכל שלב.
+        </div>
+        <div class="hero-meta">
+            <span>תשלום אחרון: <b>{{ last_paid_date }}</b></span>
+            <span>דמי מנוי: <b>₪{{ fee }}</b>/חודש</span>
+        </div>
+    </div>
     {% elif billing_active and paid_this_month %}
     <div class="kpi-card kpi-card--profit account-hero">
         <div class="kpi-label">סטטוס מנוי</div>
@@ -140,7 +159,11 @@
     {% if payment_link %}
     <a class="pay-btn" href="{{ payment_link }}" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        {% if billing_cancelled %}
+        חידוש מנוי
+        {% else %}
         לתשלום / עדכון אמצעי תשלום
+        {% endif %}
     </a>
     <div class="pay-note">
         הקישור נפתח בדף תשלום מאובטח של SUMIT
@@ -148,6 +171,13 @@
     {% else %}
     <div class="pay-placeholder">
         קישור תשלום יוגדר בקרוב
+    </div>
+    {% endif %}
+    {% if can_cancel %}
+    <div class="cancel-link-row">
+        <a href="/account/cancel">
+        ביטול מנוי
+        </a>
     </div>
     {% endif %}
     {% endif %}

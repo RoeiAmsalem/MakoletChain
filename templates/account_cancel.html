@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}ביטול מנוי — קופה שקופה{% endblock %}
+{% block head %}
+<style>
+    .cancel-container { max-width:560px; margin:0 auto; padding:1.5rem; }
+    .cancel-container h1 { font-size:1.35rem; font-weight:700; margin:0 0 1.1rem; }
+    .cancel-card { background:var(--card); border:1px solid var(--card-border); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.25rem 1.4rem; }
+    .cancel-text { font-size:0.95rem; line-height:1.7; color:var(--text-secondary); }
+    .cancel-text b { color:var(--text-light); }
+    .cancel-actions { display:flex; gap:0.7rem; margin-top:1.25rem; }
+    .cancel-confirm-btn { flex:1; min-height:48px; border:1px solid rgba(239,68,68,0.5); background:rgba(239,68,68,0.12); color:#fca5a5; font-weight:700; font-size:0.92rem; border-radius:10px; cursor:pointer; touch-action:manipulation; }
+    .cancel-confirm-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .cancel-back-btn { flex:1; display:flex; align-items:center; justify-content:center; min-height:48px; background:var(--accent); color:white; text-decoration:none; font-weight:700; font-size:0.92rem; border-radius:10px; touch-action:manipulation; }
+    .cancel-error { display:none; margin-top:0.9rem; font-size:0.85rem; color:#fca5a5; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cancel-container">
+    <h1>
+    ביטול מנוי
+    </h1>
+    <div class="cancel-card">
+        <div class="cancel-text">
+            המנוי יבוטל.
+            <br>
+            הגישה נשמרת עד <b>{{ paid_until }}</b>.
+            <br>
+            לאחר מכן החיוב החודשי ייפסק והגישה תושהה.
+            <br><br>
+            לבטל?
+        </div>
+        <div class="cancel-actions">
+            <button type="button" class="cancel-confirm-btn" id="cancelConfirmBtn">
+            כן, בטל את המנוי
+            </button>
+            <a class="cancel-back-btn" href="/account">
+            חזרה
+            </a>
+        </div>
+        <div class="cancel-error" id="cancelError"></div>
+    </div>
+</div>
+<script>
+document.getElementById('cancelConfirmBtn').addEventListener('click', async function () {
+    const btn = this, err = document.getElementById('cancelError');
+    btn.disabled = true;
+    err.style.display = 'none';
+    try {
+        const r = await fetch('/api/account/cancel-subscription', {method: 'POST'});
+        const data = await r.json();
+        if (r.ok && data.ok) {
+            location.href = '/account';
+            return;
+        }
+        err.textContent = data.error || 'שגיאה — נסו שוב';
+        err.style.display = 'block';
+    } catch (e) {
+        err.textContent = 'שגיאת תקשורת — נסו שוב';
+        err.style.display = 'block';
+    }
+    btn.disabled = false;
+});
+</script>
+{% endblock %}

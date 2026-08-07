@@ -105,6 +105,29 @@ https://app.makoletdashboard.com/account
 '''
 
 
+# ── Cancel-confirmation email (sent inline by the /account cancel endpoint,
+# not by any cron job). {paid_until} is substituted by the caller BEFORE
+# _send_email formats {name}.
+
+CANCELLED_SUBJECT = 'קופה שקופה — המנוי בוטל'
+
+CANCELLED_BODY = '''\
+שלום {name},
+
+המנוי שלך במערכת קופה שקופה בוטל לבקשתך. לא יבוצעו חיובים נוספים.
+
+הגישה למערכת נשמרת עד {paid_until}. לאחר מכן הגישה תושהה.
+
+ניתן לחדש את המנוי בכל שלב דרך עמוד החשבון:
+https://app.makoletdashboard.com/account
+
+לשאלות או בעיות: kupashkufaa@gmail.com | 052-3455860
+
+תודה,
+קופה שקופה
+'''
+
+
 def _smtp_creds():
     return (os.environ.get('BILLING_GMAIL_USER', '').strip(),
             os.environ.get('BILLING_GMAIL_APP_PASSWORD', '').strip())
@@ -178,11 +201,15 @@ def _email_pass(db, *, label, flag_col, subject, body, selects, fail_title):
     sent, would_send, failed = [], [], []
     skipped_already_sent = 0
 
+    # cancelled_at IS NULL: a cancelled manager is never nagged — no reminder
+    # before their lapse, no lock email at it. They got their one confirmation
+    # mail at cancel time; re-subscribing clears the flag and emails resume.
     for row in db.execute(
             f"SELECT mb.user_id, mb.{flag_col} AS flag, "
             "u.name, u.email, u.role "
             "FROM manager_billing mb JOIN users u ON u.id = mb.user_id "
-            "WHERE mb.active = 1 AND u.active = 1").fetchall():
+            "WHERE mb.active = 1 AND u.active = 1 "
+            "AND mb.cancelled_at IS NULL").fetchall():
         st = _billing_state(row['user_id'], row['role'], row['email'], db)
         if not selects(st):
             continue

@@ -78,11 +78,13 @@ def client(monkeypatch):
             conn.execute(
                 'INSERT INTO user_branches (user_id, branch_id) VALUES (?, ?)',
                 (uid, BRANCH))
-    # U_MGR billed-active + unpaid, row already touched this (real) month
+    # U_MGR billed-active + unpaid, row freshly synced (TODAY, not month-start:
+    # the paid_until-machine staleness guard is BILLING_STALE_DAYS-based, so a
+    # month-01 stamp goes stale after the 4th of every real month)
     conn.execute(
         "INSERT INTO manager_billing (user_id, sumit_tag, fee, active, "
         "last_status, updated_at) VALUES (?, ?, 179, 1, 'unpaid', ?)",
-        (U_MGR, str(U_MGR), f'{MONTH_REAL}-01 08:00'))
+        (U_MGR, str(U_MGR), f'{TODAY_REAL} 08:00'))
     conn.execute(
         "INSERT INTO manager_billing (user_id, sumit_tag, fee, active) "
         "VALUES (?, ?, 179, 0)", (U_OFF, str(U_OFF)))
