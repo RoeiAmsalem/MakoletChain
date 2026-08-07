@@ -244,7 +244,7 @@ def test_sumit_refusal_no_local_write(client, monkeypatch):
                 notify_spy=[])
     _login(client, 'mgr@test.com')
     resp = client.post('/api/account/cancel-subscription')
-    assert resp.status_code == 502
+    assert resp.status_code == 500
     assert _row()['cancelled_at'] is None
     assert _cancel_log()[-1]['ok'] == 0
 
@@ -254,7 +254,7 @@ def test_verify_read_still_live_no_local_write(client, monkeypatch):
                 items_after=[LIVE_ITEM], notify_spy=[])
     _login(client, 'mgr@test.com')
     resp = client.post('/api/account/cancel-subscription')
-    assert resp.status_code == 502
+    assert resp.status_code == 500
     assert _row()['cancelled_at'] is None
 
 

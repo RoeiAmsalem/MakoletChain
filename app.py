@@ -1705,6 +1705,9 @@ def api_account_cancel_subscription():
     paid_until = _paid_until(mb['last_paid_date'])
     pu_str = paid_until.isoformat() if paid_until else '—'
 
+    # SUMIT-side failures return 500, NOT 502: Cloudflare replaces origin
+    # 502/504 bodies with its own error page, so the friendly Hebrew message
+    # would never reach the browser (observed live on staging, 2026-08-07).
     def _fail(code, msg, customer_id=None, item_id=None, api_status=None,
               alert=None):
         _log_cancel_attempt(db, user_id, customer_id, item_id, False,
@@ -1728,7 +1731,7 @@ def api_account_cancel_subscription():
     try:
         items = sumit.list_recurring_for_customer(customer_id)
     except Exception as e:
-        return _fail(502, 'שגיאה בתקשורת עם מערכת הסליקה. נסו שוב בעוד מספר דקות.',
+        return _fail(500, 'שגיאה בתקשורת עם מערכת הסליקה. נסו שוב בעוד מספר דקות.',
                      customer_id, alert=f'recurring list failed: {e}')
     live = [it for it in items if sumit.recurring_item_is_live(it)]
     if not live:
@@ -1747,10 +1750,10 @@ def api_account_cancel_subscription():
     try:
         res = sumit.cancel_recurring(customer_id, item_id)
     except Exception as e:
-        return _fail(502, 'שגיאה בתקשורת עם מערכת הסליקה. נסו שוב בעוד מספר דקות.',
+        return _fail(500, 'שגיאה בתקשורת עם מערכת הסליקה. נסו שוב בעוד מספר דקות.',
                      customer_id, item_id, alert=f'cancel call failed: {e}')
     if res.get('Status') != 0:
-        return _fail(502, 'מערכת הסליקה סירבה לבטל — פנו אלינו ונטפל בביטול באופן ידני.',
+        return _fail(500, 'מערכת הסליקה סירבה לבטל — פנו אלינו ונטפל בביטול באופן ידני.',
                      customer_id, item_id, api_status=res.get('Status'),
                      alert=f'SUMIT refused the cancel: '
                            f'{res.get("UserErrorMessage")!r}')
@@ -1763,7 +1766,7 @@ def api_account_cancel_subscription():
         after = sumit.list_recurring_for_customer(customer_id)
         if any(it.get('ID') == item_id and sumit.recurring_item_is_live(it)
                for it in after):
-            return _fail(502, 'הביטול לא נקלט במערכת הסליקה — פנו אלינו ונוודא שהמנוי בוטל.',
+            return _fail(500, 'הביטול לא נקלט במערכת הסליקה — פנו אלינו ונוודא שהמנוי בוטל.',
                          customer_id, item_id, api_status=0,
                          alert='cancel returned Status=0 but the item is '
                                'STILL live on the verification read — check '
