@@ -35,7 +35,9 @@ def post(endpoint, **body):
     return r.json()
 
 
-db = sqlite3.connect(os.path.join(APP_DIR, 'db', 'makolet_chain.db'))
+# Optional argv[1] = alternate DB path (e.g. prod's copy) — SELECT-only either way.
+db_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(APP_DIR, 'db', 'makolet_chain.db')
+db = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
 db.row_factory = sqlite3.Row
 rows = db.execute("""
     SELECT mb.user_id, u.name, mb.sumit_tag, mb.last_paid_date,
