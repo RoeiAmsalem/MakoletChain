@@ -49,13 +49,13 @@ def main():
     print(f"KNOWN_STATUSES={sorted(KNOWN_STATUSES)}  EXCLUDED={sorted(EXCLUDED_STATUSES)}\n")
 
     sup = _api_get(session, '/customer/suppliers',
-                   params={'customerBranchId': bb})
-    slist = sup if isinstance(sup, list) else (sup.get('data') or [])
+                   params={'customerBranchId': bb, 'all': 'true'})
+    slist = sup.get('suppliers') if isinstance(sup, dict) else sup
     all_ids, franchise_ids = [], []
     name_by_id = {}
-    for s in slist:
+    for s in (slist or []):
         sid = str(s.get('id') or s.get('supplierId') or '')
-        nm = (s.get('name') or s.get('supplierName') or '').strip()
+        nm = (s.get('title') or s.get('name') or s.get('supplierName') or '').strip()
         if not sid:
             continue
         all_ids.append(sid)
