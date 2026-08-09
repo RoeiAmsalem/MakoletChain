@@ -55,8 +55,19 @@ CHAIN_TOKEN_ENV = 'BILBOY_CHAIN_TOKEN'
 #   5 = accepted/processed
 #   7 = replacement invoice (visible in BilBoy UI — keep)
 #   9 = superseded original (hidden in BilBoy UI — drop)
+#  11 = settled/archived (KEEP — see below)
 # Unknown statuses are dropped and alerted via brrr so we notice new lifecycle states.
-KNOWN_STATUSES = {3, 5, 7, 9}
+#
+# Status 11 (added 2026-08-09): BilBoy moves a doc to 11 once its month is
+# closed out — it is an AGING state, not a cancellation. Evidence from branch
+# 9020 רמת גן: Apr 63 docs/₪195,422.58, May 76/₪196,477.74, Jun 72/₪218,201.72
+# all status 11, while the still-open July had ZERO. The docs are ordinary
+# invoices from mainstream suppliers (תנובה, שטראוס, טמפו, פיליפ מוריס,
+# גלוברנדס) with normal positive amounts plus their type-4 credits, and they
+# were counted in goods_documents before BilBoy flipped them. Dropping them
+# understated June COGS for 9020 by ₪218,201.72 the moment the month was
+# re-pulled — and would silently do the same to every branch as each month ages.
+KNOWN_STATUSES = {3, 5, 7, 9, 11}
 EXCLUDED_STATUSES = {9}
 
 # ── Wolt fee extraction (זיכיונות המכולת type-3 invoices) ────────────────────
