@@ -126,7 +126,7 @@ def main():
         print(f"\n  ref={d.get('refNumber') or d.get('ref')} "
               f"date={str(d.get('date'))[:10]} type={d.get('type')} "
               f"status={d.get('status')} total=₪{float(d.get('totalWithVat') or 0):,.2f}")
-        if not want_items or d.get('type') != 3:
+        if not want_items or d.get('type') not in (2, 3):
             continue
         try:
             raw = _api_get(session, '/customer/doc',
@@ -134,8 +134,7 @@ def main():
         except Exception as e:
             print(f'      (detail failed: {e})')
             continue
-        doc = raw.get('data') if isinstance(raw, dict) and 'data' in raw else raw
-        items = (doc or {}).get('items') or []
+        items = ((raw or {}).get('body') or {}).get('items') or []
         for it in items:
             mark = 'WOLT>' if is_wolt_fee_line(it) else '     '
             print(f"      {mark} {(it.get('name') or '')[:52]:<52} "
