@@ -105,6 +105,34 @@ def main():
         if len(rows) > 15:
             print(f"  ... {len(rows) - 15} more")
 
+    # ── doc TYPE breakdown (ALLOWED_DOC_TYPES = {2,3,4,5}; others dropped) ──
+    from agents.bilboy import ALLOWED_DOC_TYPES
+    print('\n' + '=' * 72)
+    print('DOC HEADERS BY TYPE (kept statuses only, franchise excluded)')
+    keptrows = [h for h in hlist
+                if h.get('status') not in EXCLUDED_STATUSES
+                and not (franchise and franchise in (h.get('supplierName') or ''))]
+    bytype2 = defaultdict(lambda: [0, 0.0])
+    for h in keptrows:
+        b = bytype2[h.get('type')]
+        b[0] += 1
+        b[1] += float(h.get('totalWithVat') or 0)
+    print(f"{'type':>5} {'docs':>5} {'amount':>14}  verdict")
+    for t in sorted(bytype2, key=lambda x: (x is None, x)):
+        n, amt = bytype2[t]
+        v = 'kept' if t in ALLOWED_DOC_TYPES else '>>> DROPPED (wrong type) <<<'
+        print(f"{str(t):>5} {n:>5} {amt:>14,.2f}  {v}")
+    for t in sorted(bytype2, key=lambda x: (x is None, x)):
+        if t in ALLOWED_DOC_TYPES:
+            continue
+        print(f"\n--- DROPPED TYPE {t} ---")
+        for r in sorted([h for h in keptrows if h.get('type') == t],
+                        key=lambda x: -abs(float(x.get('totalWithVat') or 0)))[:20]:
+            print(f"  ref={r.get('refNumber') or r.get('number')} "
+                  f"date={str(r.get('date'))[:10]} status={r.get('status')} "
+                  f"total={float(r.get('totalWithVat') or 0):>12,.2f} "
+                  f"supplier={(r.get('supplierName') or '').strip()[:34]}")
+
     # ── franchise supplier detail ──
     print('\n' + '=' * 72)
     print(f'FRANCHISE SUPPLIER DOCS ({franchise}) — NEVER imported to goods')
