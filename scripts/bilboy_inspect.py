@@ -84,7 +84,7 @@ def main():
     print(f"{'status':>7} {'docs':>5} {'amount':>14}  verdict")
     for st in sorted(by_status, key=lambda x: (x is None, x)):
         rows = by_status[st]
-        amt = sum(float(r.get('total') or 0) for r in rows)
+        amt = sum(float(r.get('totalWithVat') or 0) for r in rows)
         if st in EXCLUDED_STATUSES:
             v = 'EXCLUDED (superseded)'
         elif st in KNOWN_STATUSES:
@@ -98,11 +98,10 @@ def main():
             continue
         print(f"\n--- UNKNOWN STATUS {st}: {len(rows)} docs ---")
         for r in sorted(rows, key=lambda x: str(x.get('date')))[:15]:
-            sid = str(r.get('supplierId') or r.get('supplier') or '')
-            print(f"  ref={r.get('refNumber') or r.get('ref')} "
+            print(f"  ref={r.get('refNumber') or r.get('number')} "
                   f"date={str(r.get('date'))[:10]} type={r.get('type')} "
-                  f"total={float(r.get('total') or 0):>11,.2f} "
-                  f"supplier={name_by_id.get(sid, sid)}")
+                  f"total={float(r.get('totalWithVat') or 0):>11,.2f} "
+                  f"supplier={(r.get('supplierName') or '').strip()[:34]}")
         if len(rows) > 15:
             print(f"  ... {len(rows) - 15} more")
 
@@ -110,23 +109,23 @@ def main():
     print('\n' + '=' * 72)
     print(f'FRANCHISE SUPPLIER DOCS ({franchise}) — NEVER imported to goods')
     fdocs = [h for h in hlist
-             if str(h.get('supplierId') or h.get('supplier') or '') in franchise_ids]
+             if franchise and franchise in (h.get('supplierName') or '')]
     if not fdocs:
         print('  none in this window')
-    ftot = sum(float(d.get('total') or 0) for d in fdocs)
+    ftot = sum(float(d.get('totalWithVat') or 0) for d in fdocs)
     print(f"  {len(fdocs)} docs, total ₪{ftot:,.2f}")
     bytype = defaultdict(lambda: [0, 0.0])
     for d in fdocs:
         b = bytype[(d.get('type'), d.get('status'))]
         b[0] += 1
-        b[1] += float(d.get('total') or 0)
+        b[1] += float(d.get('totalWithVat') or 0)
     for (t, st), (n, amt) in sorted(bytype.items(), key=lambda kv: str(kv[0])):
         print(f"    type={t} status={st}: {n} docs  ₪{amt:,.2f}")
 
     for d in sorted(fdocs, key=lambda x: str(x.get('date'))):
         print(f"\n  ref={d.get('refNumber') or d.get('ref')} "
               f"date={str(d.get('date'))[:10]} type={d.get('type')} "
-              f"status={d.get('status')} total=₪{float(d.get('total') or 0):,.2f}")
+              f"status={d.get('status')} total=₪{float(d.get('totalWithVat') or 0):,.2f}")
         if not want_items or d.get('type') != 3:
             continue
         try:
