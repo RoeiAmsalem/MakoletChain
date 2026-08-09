@@ -618,8 +618,20 @@ if __name__ == '__main__':
         class _DateOverride(date):
             @classmethod
             def today(cls):
+                # run_bilboy uses today() as the window END (from = the 1st).
+                # For a PAST month that end must be the month's last day —
+                # clamping to the real today's day-of-month truncated the
+                # window (e.g. re-pulling July on Aug 9 fetched Jul 1-9) and,
+                # because the sync is full-month delete + reinsert, silently
+                # DESTROYED the rest of the month. Only the current month is
+                # clamped, where a future end date is meaningless anyway.
                 from calendar import monthrange
-                day = min(_orig_today().day, monthrange(args.year, args.month)[1])
+                last = monthrange(args.year, args.month)[1]
+                now = _orig_today()
+                if (args.year, args.month) < (now.year, now.month):
+                    day = last
+                else:
+                    day = min(now.day, last)
                 return date(args.year, args.month, day)
         globals()['date'] = _DateOverride
 
