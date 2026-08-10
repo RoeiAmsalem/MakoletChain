@@ -141,8 +141,15 @@ daily_sales:
   branch_id, date, amount, transactions, source (z_report/provisional)
 
 goods_documents:
-  branch_id, ref_number, supplier_id, supplier_name, doc_type, doc_date,
-  amount, month, status
+  branch_id, doc_date, supplier, ref_number, amount, doc_type,
+  total_without_vat, paid, bilboy_status, bilboy_doc_id
+  UNIQUE(branch_id, ref_number, supplier, doc_date)  -- migration 046
+  -- There is no `month` column: month is derived as substr(doc_date,1,7).
+  -- The old UNIQUE(branch_id, ref_number) spanned every month while the sync
+  -- deletes+reinserts ONE month with INSERT OR REPLACE, so a ref number reused
+  -- by another supplier evicted the older document (134 docs / ₪214,406.92).
+  -- bilboy_doc_id is NOT a usable key: 7% of rows have none, and BilBoy has
+  -- been seen reusing one UUID for two different documents.
 
 fixed_expenses:
   branch_id, name, amount, expense_type (חודשי/חד פעמי/% מהכנסות),
