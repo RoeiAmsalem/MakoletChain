@@ -469,11 +469,15 @@ def run_bilboy(branch_id: int) -> dict:
                 'bilboy_doc_id': doc.get('id'),
             })
 
-        # Dedup by ref_number
+        # Dedup on exactly the key the table is UNIQUE on (migration 046):
+        # ref_number + supplier + doc_date (branch_id is fixed for this run).
+        # Keying on ref_number alone was the in-run twin of the eviction bug —
+        # it silently dropped a second supplier's document that happened to
+        # reuse the same number, before the DB ever saw it.
         seen = set()
         deduped = []
         for r in records:
-            key = r['ref_number']
+            key = (r['ref_number'], r['supplier'], r['doc_date'])
             if key in seen:
                 continue
             seen.add(key)

@@ -51,7 +51,10 @@ CREATE TABLE IF NOT EXISTS goods_documents (
   ref_number TEXT,
   amount REAL,
   doc_type INTEGER,
-  UNIQUE(branch_id, ref_number)
+  -- Widened by migration 046: ref_number alone is NOT unique per branch
+  -- (BilBoy numbers restart per supplier), and the nightly INSERT OR REPLACE
+  -- then evicted the older month's document.
+  UNIQUE(branch_id, ref_number, supplier, doc_date)
 );
 
 CREATE TABLE IF NOT EXISTS fixed_expenses (
