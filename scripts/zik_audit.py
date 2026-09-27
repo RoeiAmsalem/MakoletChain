@@ -143,7 +143,7 @@ FEE_RULES = [  # (fee type, regex on line name)
     ('catalog', r'ניהול קטלוג'),
     ('פרסום', r'קרן פרסום'),
     ('דיוור', r'דיוור'),
-    ('אקו"ם', r'אקו"?ם'),
+    ('אקו"ם', r'(?<![א-ת])אקו"?ם'),
     ('שילוט', r'שילוט'),
     ('כספומט', r'כספומט'),
 ]
@@ -191,8 +191,8 @@ def classify(it, h, ctx):
     if 'תמלוגים' in name:
         return 'ROYALTY', 'R4 name contains תמלוגים', ''
     for fee, rx in FEE_RULES:
-        if re.search(rx, name):
-            return f'FEE:{fee}', f'R5 fee keyword /{rx}/', ''
+        if h.get('type') in (3, 4) and re.search(rx, name):   # never on delivery notes
+            return f'FEE:{fee}', f'R5 fee keyword /{rx}/ on invoice/credit', ''
     if 'הפרשי מחיר' in name or 'זיכוי' in name or 'מימוש' in name:
         if total <= 0:
             return 'CREDIT', 'R6 הפרשי מחיר/מימוש/זיכוי, amount ≤ 0', ''
