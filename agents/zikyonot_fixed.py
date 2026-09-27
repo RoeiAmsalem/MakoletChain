@@ -56,6 +56,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import requests
 
 from utils.notify import notify
+from utils.sync_window import il_today, months_to_sync
 
 API_BASE = "https://app.billboy.co.il:5050/api"
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'db', 'makolet_chain.db')
@@ -97,7 +98,7 @@ KNOWN_EXCLUDE_KEYWORDS = [
 
 
 def _il_today() -> date:
-    return datetime.now(IL_TZ).date()
+    return il_today()
 
 
 def _get_db():
@@ -129,15 +130,20 @@ def _api_get(session, path, params=None, timeout=30):
     return resp.json()
 
 
-def _classify_line(name: str, barcode: str):
+def _classify_line(name: str, barcode: str, catalog: str = ''):
     """Return (managed_canonical_name | None, reason).
 
-    reason ∈ {'managed','known_exclude','goods','zero','unrecognized'}.
+    reason ∈ {'managed','wolt','known_exclude','goods','zero','unrecognized'}.
+    'wolt' = a Wolt fee line (same rule as the bilboy.py extractor, which owns
+    the 'עמלות Wolt' row) — known, never persisted to zik_unclassified.
     """
+    from agents.bilboy import is_wolt_fee_line
     nm = name or ''
     for canon, kws in MANAGED_ITEMS:
         if any(kw in nm for kw in kws):
             return canon, 'managed'
+    if is_wolt_fee_line({'name': nm, 'catalogNumber': catalog, 'barcode': barcode}):
+        return None, 'wolt'
     if any(kw in nm for kw in KNOWN_EXCLUDE_KEYWORDS):
         return None, 'known_exclude'
     if (barcode or '').strip():
@@ -291,14 +297,14 @@ def run_zikyonot_fixed(branch_id: int, year: int = None, month: int = None) -> d
                 net = float(ln.get('total') or 0)
                 barcode = ln.get('barcode') or ''
                 has_vat = bool(ln.get('hasVat'))
-                canon, reason = _classify_line(nm, barcode)
+                canon, reason = _classify_line(nm, barcode, ln.get('catalogNumber') or '')
                 if reason == 'managed':
                     amt = net * (1.0 + vat_rate) if (STORE_WITH_VAT and has_vat) else net
                     buckets[canon] += amt
                     n_managed_lines += 1
                     log.info("  matched %r → %s net=%.2f -> %.2f (ref=%s)",
                              nm, canon, net, amt, ref)
-                elif reason == 'known_exclude':
+                elif reason in ('known_exclude', 'wolt'):
                     n_known += 1
                 elif reason == 'goods':
                     n_goods += 1
@@ -394,15 +400,12 @@ def run_zikyonot_fixed(branch_id: int, year: int = None, month: int = None) -> d
 
 
 def run_zikyonot_fixed_nightly(branch_id: int) -> list:
-    """Nightly entry point. Always refreshes the CURRENT month; on days 1–7 (IL)
-    also refreshes the PREVIOUS month, since franchise invoices post late
-    (e.g. May's rent posted June 2) — this avoids needing manual backfill."""
-    results = [run_zikyonot_fixed(branch_id)]
-    t = _il_today()
-    if t.day <= 7:
-        py, pm = (t.year, t.month - 1) if t.month > 1 else (t.year - 1, 12)
-        results.append(run_zikyonot_fixed(branch_id, year=py, month=pm))
-    return results
+    """Nightly entry point: every month in utils.sync_window.months_to_sync —
+    the CURRENT month, plus the PREVIOUS month on days 1..BILBOY_PREV_MONTH_DAYS
+    (IL, default 7), since franchise invoices post late (e.g. May's rent posted
+    June 2) — this avoids needing manual backfill."""
+    return [run_zikyonot_fixed(branch_id, year=int(m[:4]), month=int(m[5:]))
+            for m in reversed(months_to_sync(_il_today()))]
 
 
 if __name__ == '__main__':

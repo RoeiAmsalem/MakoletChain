@@ -20,6 +20,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 import requests
 
 from utils.notify import notify
+from utils.sync_window import il_today, month_bounds, months_to_sync, prev_month
 from utils.text import clean_supplier_name
 
 
@@ -82,25 +83,38 @@ EXCLUDED_STATUSES = {9}
 # name but always sits on a pure-Wolt doc and carries a Wolt category code).
 # These lines are bucket-B operating fees: NEVER goods, NEVER the 5% royalty.
 WOLT_LINE_CATS = {'61', '62', '63', '67', '69'}
+# Category codes that NEVER count even if the name matched: 65 is the iPad
+# hardware line that rides on the same franchise invoices (seen Aug 2026).
+WOLT_EXCLUDED_CATS = {'65'}
 WOLT_EXPENSE_NAME = 'עמלות Wolt'
 WOLT_EXPENSE_SOURCE = 'bilboy_wolt'
+# Wolt fees arrive on invoices (3) and are reversed on credit notes (4).
+WOLT_DOC_TYPES = {3, 4}
+# 3 open · 5 accepted · 7 replacement · 11 settled/archived. 9 (superseded)
+# never counts; any other status is skipped and logged.
+WOLT_COUNTED_STATUSES = {3, 5, 7, 11}
+# A manager-entered row whose name contains any of these is (probably) the
+# same money: the system row is NOT written and brrr is alerted instead.
+WOLT_MANUAL_NAME_HINTS = ('וולט', 'וואלט', 'wolt', 'עמלות מכירה', 'משלוחים')
 
 
 def is_wolt_fee_line(item: dict) -> bool:
     cat = str(item.get('catalogNumber') or item.get('barcode') or '').strip()
+    if cat in WOLT_EXCLUDED_CATS:
+        return False
     name = str(item.get('name') or '')
     return cat in WOLT_LINE_CATS or 'וולט' in name or 'וואלט' in name
 
 
 def extract_wolt_fee_total(docs: list) -> float:
-    """Incl-VAT Wolt fee total across franchise type-3 docs with line items.
+    """Incl-VAT Wolt fee total across franchise invoice/credit docs.
 
-    Each doc: {'totalWithVat', 'totalWithoutVat', 'items': [{name,
-    catalogNumber, total}]} — line totals are ex-VAT. A doc whose Wolt lines
-    sum to its own totalWithoutVat (±₪1) is a pure-Wolt invoice → use its
-    totalWithVat verbatim (this is what makes the audited anchors land to the
-    shekel). A mixed doc contributes its Wolt lines scaled by the doc's own
-    VAT ratio.
+    Each doc: {'type', 'totalWithVat', 'totalWithoutVat', 'items': [{name,
+    catalogNumber, total}]} — line totals are ex-VAT. Only the Wolt lines
+    count, scaled by the doc's own VAT ratio (totalWithVat/totalWithoutVat),
+    so a pure-Wolt invoice lands exactly on its incl-VAT total and a mixed
+    doc contributes only its Wolt share. A type-4 credit note always REDUCES
+    the total (BilBoy sends it negative; the sign is forced defensively).
     """
     total = 0.0
     for d in docs:
@@ -111,26 +125,39 @@ def extract_wolt_fee_total(docs: list) -> float:
             continue
         twv = float(d.get('totalWithVat') or 0)
         two = float(d.get('totalWithoutVat') or 0)
-        if two and abs(wolt_ex - two) <= 1.0:
-            total += twv
-        elif two:
-            total += wolt_ex * (twv / two)
-        else:
-            total += wolt_ex
+        amt = wolt_ex * (twv / two) if two else wolt_ex
+        if d.get('type') == 4:
+            amt = -abs(amt)
+        total += amt
     return round(total, 2)
+
+
+def _manual_wolt_like_rows(conn, branch_id: int, month: str) -> list:
+    """Names of non-system fixed_expenses rows for branch+month that look like
+    Wolt fees (see WOLT_MANUAL_NAME_HINTS)."""
+    rows = conn.execute(
+        "SELECT name FROM fixed_expenses WHERE branch_id=? AND month=? "
+        "AND COALESCE(source, 'manual') != ?",
+        (branch_id, month, WOLT_EXPENSE_SOURCE)).fetchall()
+    return [r[0] for r in rows
+            if any(h in (r[0] or '').lower() for h in WOLT_MANUAL_NAME_HINTS)]
 
 
 def upsert_wolt_fee_expense(conn, branch_id: int, month: str, amount: float) -> str:
     """Write the system-managed 'עמלות Wolt' fixed-expense row for branch+month.
 
-    amount > 0  → insert-or-overwrite OUR row (source='bilboy_wolt'). The ON
-                  CONFLICT WHERE guard means a manual row that happens to share
-                  the name is NEVER hijacked — we detect and report 'blocked'.
-    amount == 0 → delete our row if present (a no-Wolt branch shows nothing).
-    Idempotent by construction; the nightly recompute makes the row grow MTD.
+    amount > 0  → insert-or-overwrite OUR row (source='bilboy_wolt'), UNLESS a
+                  manager row looks like the same money (fuzzy name, see
+                  WOLT_MANUAL_NAME_HINTS) → nothing written, 'blocked_by_manual_row'.
+                  The ON CONFLICT WHERE guard is the second lock: a manual row
+                  sharing the exact name is never hijacked.
+    amount <= 0 → delete our row if present (a no-Wolt branch shows nothing).
+    Only ever writes/deletes source='bilboy_wolt' rows. Idempotent.
     """
     amount = round(float(amount or 0), 2)
     if amount > 0.005:
+        if _manual_wolt_like_rows(conn, branch_id, month):
+            return 'blocked_by_manual_row'
         conn.execute(
             "INSERT INTO fixed_expenses "
             "(branch_id, month, name, amount, expense_type, pct_value, locked, source) "
@@ -144,7 +171,7 @@ def upsert_wolt_fee_expense(conn, branch_id: int, month: str, amount: float) -> 
         row = conn.execute(
             "SELECT source FROM fixed_expenses WHERE branch_id=? AND month=? AND name=?",
             (branch_id, month, WOLT_EXPENSE_NAME)).fetchone()
-        src = row['source'] if row else None
+        src = row[0] if row else None
         return 'upserted' if src == WOLT_EXPENSE_SOURCE else 'blocked_by_manual_row'
     cur = conn.execute(
         "DELETE FROM fixed_expenses WHERE branch_id=? AND month=? AND name=? AND source=?",
@@ -155,16 +182,17 @@ def upsert_wolt_fee_expense(conn, branch_id: int, month: str, amount: float) -> 
 
 def fetch_wolt_fee_docs(session, bb_branch_id: str, franchise_ids: list,
                         from_date: str, to_date: str, log) -> tuple:
-    """Fetch the franchise supplier's type-3 invoices with line items.
+    """Fetch the franchise supplier's invoices + credit notes with line items.
 
-    Returns (docs, api_calls). Only type-3 invoices are fetched in detail —
-    Wolt fees are always billed on type-3 (delivery notes/credits never carry
-    them), which keeps the added BilBoy cost to 1 headers call + one detail
-    call per franchise invoice (~5-10/branch/month).
+    Returns (docs, api_calls, detail_failures). Cost: 1 headers call + one
+    detail call per counted type-3/4 franchise doc (~5-15/branch/month).
+    Docs are windowed by their DATE, so an invoice dated the 31st but issued
+    days later still lands in its date's month.
     """
     if not franchise_ids:
-        return [], 0
+        return [], 0, 0
     calls = 0
+    failures = 0
     headers = _api_get(session, '/customer/docs/headers', params={
         'suppliers': ','.join(franchise_ids),
         'branches': bb_branch_id,
@@ -176,7 +204,13 @@ def fetch_wolt_fee_docs(session, bb_branch_id: str, franchise_ids: list,
         headers.get('data') or headers.get('docs') or headers.get('headers') or [])
     docs = []
     for h in hlist:
-        if h.get('type') != 3 or h.get('status') in EXCLUDED_STATUSES:
+        if h.get('type') not in WOLT_DOC_TYPES:
+            continue
+        status = h.get('status')
+        if status not in WOLT_COUNTED_STATUSES:
+            if status not in EXCLUDED_STATUSES:
+                log.warning("wolt-fees: skipping doc ref=%s with unknown status %s",
+                            h.get('refNumber'), status)
             continue
         doc_id = h.get('id')
         if not doc_id:
@@ -186,11 +220,13 @@ def fetch_wolt_fee_docs(session, bb_branch_id: str, franchise_ids: list,
                            params={'docId': doc_id}, timeout=15)
             calls += 1
         except Exception as e:
+            failures += 1
             log.warning("wolt-fees: doc detail failed for %s: %s",
                         doc_id, str(e)[:120])
             continue
         body = (raw or {}).get('body') or {}
         docs.append({
+            'type': h.get('type'),
             'totalWithVat': h.get('totalWithVat'),
             'totalWithoutVat': h.get('totalWithoutVat'),
             'items': [{'name': it.get('name'),
@@ -198,28 +234,93 @@ def fetch_wolt_fee_docs(session, bb_branch_id: str, franchise_ids: list,
                        'total': it.get('total')}
                       for it in (body.get('items') or [])],
         })
-    return docs, calls
+    return docs, calls, failures
 
 
 def sync_wolt_fees(session, bb_branch_id: str, branch_id: int,
-                   franchise_ids: list, from_date: str, to_date: str,
-                   month: str, log) -> dict:
-    """Recompute + upsert the month's Wolt fee row from the franchise docs."""
-    docs, calls = fetch_wolt_fee_docs(session, bb_branch_id, franchise_ids,
-                                      from_date, to_date, log)
+                   franchise_ids: list, month: str, log,
+                   branch_name: str = None) -> dict:
+    """Recompute + upsert one month's Wolt fee row from the franchise docs
+    (full calendar month). A partial read (any doc-detail failure) writes
+    nothing — a transient glitch must never shrink or delete a good row."""
+    from_date, to_date = month_bounds(month)
+    docs, calls, failures = fetch_wolt_fee_docs(
+        session, bb_branch_id, franchise_ids, from_date, to_date, log)
     amount = extract_wolt_fee_total(docs)
-    conn = _get_db()
-    try:
-        action = upsert_wolt_fee_expense(conn, branch_id, month, amount)
-    finally:
-        conn.close()
+    bname = branch_name or f'Branch {branch_id}'
+    if failures:
+        action = 'skipped_partial_read'
+    else:
+        conn = _get_db()
+        try:
+            action = upsert_wolt_fee_expense(conn, branch_id, month, amount)
+            blockers = (_manual_wolt_like_rows(conn, branch_id, month)
+                        if action == 'blocked_by_manual_row' else [])
+        finally:
+            conn.close()
+        if action == 'blocked_by_manual_row':
+            log.warning("wolt-fees: manager row(s) %s look like Wolt fees for "
+                        "branch=%d month=%s — system row NOT written",
+                        blockers, branch_id, month)
+            notify(f"⚠️ Wolt fees — {bname}",
+                   f"{month}: BilBoy Wolt fees ₪{amount:,.2f} NOT written — a "
+                   f"manager expense row looks like the same money "
+                   f"({', '.join(blockers) or WOLT_EXPENSE_NAME}). Review "
+                   f"fixed expenses to avoid double counting.")
     log.info("wolt-fees: branch=%d month=%s docs=%d amount=₪%.2f action=%s (+%d BilBoy calls)",
              branch_id, month, len(docs), amount, action, calls)
-    if action == 'blocked_by_manual_row':
-        log.warning("wolt-fees: manual row named %r exists for branch=%d month=%s — system row NOT written",
-                    WOLT_EXPENSE_NAME, branch_id, month)
-    return {'amount': amount, 'action': action, 'api_calls': calls,
-            'docs': len(docs)}
+    return {'month': month, 'amount': amount, 'action': action,
+            'api_calls': calls, 'docs': len(docs), 'detail_failures': failures}
+
+
+def check_prev_month_wolt(session, bb_branch_id: str, branch_id: int,
+                          franchise_ids: list, month: str, log,
+                          branch_name: str = None) -> dict:
+    """Outside the re-read window: if the previous month still has NO Wolt
+    row but BilBoy now holds a Wolt invoice for it, alert — never write
+    (a month outside the window is written only by the backfill script)."""
+    conn = _get_db()
+    try:
+        row = conn.execute(
+            "SELECT amount FROM fixed_expenses WHERE branch_id=? AND month=? "
+            "AND name=? AND source=?",
+            (branch_id, month, WOLT_EXPENSE_NAME, WOLT_EXPENSE_SOURCE)).fetchone()
+        manual = _manual_wolt_like_rows(conn, branch_id, month)
+    finally:
+        conn.close()
+    if (row and float(row[0] or 0) > 0) or manual:
+        return {'month': month, 'checked': False}
+    from_date, to_date = month_bounds(month)
+    docs, calls, _ = fetch_wolt_fee_docs(
+        session, bb_branch_id, franchise_ids, from_date, to_date, log)
+    amount = extract_wolt_fee_total(docs)
+    if amount > 0.005:
+        bname = branch_name or f'Branch {branch_id}'
+        log.warning("wolt-fees: %s still ₪0 but BilBoy has ₪%.2f Wolt fees for branch=%d",
+                    month, amount, branch_id)
+        notify(f"⚠️ Wolt fees missing — {bname}",
+               f"{month} Wolt fees still ₪0 on the dashboard but BilBoy has "
+               f"₪{amount:,.2f} — arrived after the re-read window. Run "
+               f"scripts/backfill_wolt_fees.py --months {month} "
+               f"--branches {branch_id} --apply.")
+    return {'month': month, 'checked': True, 'amount': amount, 'api_calls': calls}
+
+
+def sync_wolt_fees_window(session, bb_branch_id: str, branch_id: int,
+                          franchise_ids: list, log, today_il: date = None,
+                          branch_name: str = None) -> list:
+    """Nightly Wolt entry point: sync every month in months_to_sync(today IL)
+    — [prev, current] on days 1..BILBOY_PREV_MONTH_DAYS, else [current] plus
+    a read-only late-invoice check on the previous month."""
+    today_il = today_il or il_today()
+    months = months_to_sync(today_il)
+    results = [sync_wolt_fees(session, bb_branch_id, branch_id, franchise_ids,
+                              m, log, branch_name) for m in months]
+    if len(months) == 1:
+        results.append(check_prev_month_wolt(
+            session, bb_branch_id, branch_id, franchise_ids,
+            prev_month(months[0]), log, branch_name))
+    return results
 
 
 def _get_db():
@@ -380,6 +481,12 @@ def run_bilboy(branch_id: int) -> dict:
             return {'success': True, 'docs_count': 0, 'total_amount': 0}
 
         # Full month date range
+        # TODO(goods window): goods still reads only the current month (and by
+        # the server's UTC date), so status-7 reissues and late invoices that
+        # BilBoy adds for last month after the 1st are never picked up. Once
+        # migration 046 (UNIQUE branch+ref+supplier+date) is on prod, move goods
+        # onto utils.sync_window.months_to_sync — the same mechanism the Wolt
+        # rows use below — re-pulling each month in the list.
         today = date.today()
         from_date = date(today.year, today.month, 1).isoformat()
         to_date = today.isoformat()
@@ -536,13 +643,15 @@ def run_bilboy(branch_id: int) -> dict:
         log.info("Reconciliation: branch=%d month=%s raw=₪%.2f accepted=₪%.2f excluded_status9=₪%.2f unknown=₪%.2f %s",
                  branch_id, month_str, raw_sum, accepted_sum, excluded_sum, unknown_sum, recon_ok)
 
-        # ── Wolt fee row (system fixed-expense) — never fails the sync ──
-        # Recomputes the current month's עמלות Wolt from the franchise docs
-        # and upserts the source='bilboy_wolt' row. MTD semantics: the row
-        # grows as new franchise invoices land during the month.
+        # ── Wolt fee rows (system fixed-expense) — never fails the sync ──
+        # Own window, independent of the goods window above: months_to_sync
+        # (Israel date) re-reads the PREVIOUS month on days 1-7, because Wolt
+        # invoices are dated the 31st but issued in the next month's first
+        # days. MTD semantics within a month: the row grows as invoices land.
         try:
-            sync_wolt_fees(session, bb_branch_id, branch_id, franchise_ids,
-                           from_date, to_date, month_str, log)
+            sync_wolt_fees_window(session, bb_branch_id, branch_id,
+                                  franchise_ids, log,
+                                  branch_name=branch.get('name'))
         except Exception as e:
             log.warning("wolt-fees sync failed (goods sync unaffected): %s",
                         str(e)[:200])
