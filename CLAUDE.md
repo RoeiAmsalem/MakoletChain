@@ -227,6 +227,16 @@ prevents browsers from serving stale CSS/JS after deploy.
 - Reconciliation diff > 500 → brrr warning. On 401 → brrr alert,
   `agent_runs.status=error`.
 - Suppliers must be batched in chunks of 30 (URL length limit).
+- **Re-read window** — `utils/sync_window.months_to_sync(today_il)`: `[prev, current]`
+  on days 1..`BILBOY_PREV_MONTH_DAYS` (default 7, Israel date), else `[current]`.
+  Used by the `עמלות Wolt` rows (Wolt invoices are dated the 31st, issued next
+  month) and `zikyonot_fixed`. Goods still reads current month only — moves onto
+  the same helper once migration 046 is on prod (TODO in `run_bilboy`).
+- Wolt row (`fixed_expenses.source='bilboy_wolt'`): franchise type 3+4 docs,
+  statuses 3/5/7/11, lines cat 61/62/63/67/69 or וולט/וואלט (never cat 65),
+  VAT-scaled. A manager row named like וולט/Wolt/עמלות מכירה/משלוחים blocks the
+  write + brrr. Prev month still ₪0 after day 7 with a BilBoy invoice → brrr
+  (fix with `scripts/backfill_wolt_fees.py`, which always checks its anchors).
 
 #### BilBoy chain mapping (one token, 18 branches)
 
