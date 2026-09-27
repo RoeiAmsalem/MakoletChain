@@ -324,15 +324,15 @@ def report(month):
         out = [f"{b} {per_branch[b]['name']}"]
         roy_gap = round(roy - model, 2) if roy else 0.0
         if not roy:
-            st = 'NO_ROYALTY_INVOICE'
+            roy_st = 'NO_ROYALTY_INVOICE'
         elif not sales:
-            st = 'NO_SALES_DATA'          # model is 5% of ₪0 — revenue gap, not royalty
+            roy_st = 'NO_SALES_DATA'          # model is 5% of ₪0 — revenue gap, not royalty
         elif abs(roy_gap) <= max(1.0, model * 0.01):
-            st = 'ALREADY_COUNTED'
+            roy_st = 'ALREADY_COUNTED'
         else:
-            st = 'MODEL_DIFFERS'
+            roy_st = 'MODEL_DIFFERS'
         out.append(f"  ROYALTY real ₪{roy:,.2f} vs model {pct:g}%×sales ₪{sales:,.2f} = ₪{model:,.2f} "
-                   f"→ gap ₪{roy_gap:,.2f} [{st}]")
+                   f"→ gap ₪{roy_gap:,.2f} [{roy_st}]")
         fee_missing = fee_over = 0.0
         for f in sorted({l['class'] for l in bl if l['class'].startswith('FEE:')}):
             real = gsum([l for l in bl if l['class'] == f])
@@ -365,7 +365,7 @@ def report(month):
         out.append(f'  GOODS_NEW ₪{gnew:,.2f} | goods_adjustments ₪{adj:,.2f} → {gst}')
         print('\n'.join(out))
         money[b] = {'name': per_branch[b]['name'], 'royalty_gap': roy_gap,
-                    'roy_status': st,
+                    'roy_status': roy_st,
                     'fees_missing': round(fee_missing, 2),
                     'fees_manual_higher': round(fee_over, 2),
                     'wolt_missing': round(wx - wamt, 2) if wolt else 0.0,
