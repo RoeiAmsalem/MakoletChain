@@ -323,10 +323,17 @@ def report(month):
         roy = gsum([l for l in bl if l['class'] == 'ROYALTY'])
         out = [f"{b} {per_branch[b]['name']}"]
         roy_gap = round(roy - model, 2) if roy else 0.0
-        st = 'ALREADY_COUNTED' if roy and abs(roy_gap) <= 1 else ('PARTIAL' if roy else 'n/a')
+        if not roy:
+            st = 'NO_ROYALTY_INVOICE'
+        elif not sales:
+            st = 'NO_SALES_DATA'          # model is 5% of ₪0 — revenue gap, not royalty
+        elif abs(roy_gap) <= max(1.0, model * 0.01):
+            st = 'ALREADY_COUNTED'
+        else:
+            st = 'MODEL_DIFFERS'
         out.append(f"  ROYALTY real ₪{roy:,.2f} vs model {pct:g}%×sales ₪{sales:,.2f} = ₪{model:,.2f} "
                    f"→ gap ₪{roy_gap:,.2f} [{st}]")
-        fee_missing = 0.0
+        fee_missing = fee_over = 0.0
         for f in sorted({l['class'] for l in bl if l['class'].startswith('FEE:')}):
             real = gsum([l for l in bl if l['class'] == f])
             keys = FEE_FIXED_NAMES[f[4:]]
@@ -338,7 +345,10 @@ def report(month):
                 st = 'ALREADY_COUNTED'; miss = 0.0
             else:
                 st = 'PARTIAL'; miss = round(real - have_amt, 2)
-            fee_missing += miss
+            if miss > 0:
+                fee_missing += miss
+            else:
+                fee_over += miss          # manual row larger than franchise line — review
             names = ','.join(f"{r['name']}({r['source']})" for r in have) or '-'
             out.append(f'  {f:<13} real ₪{real:>10,.2f} | fixed_expenses ₪{have_amt:>10,.2f} [{names}] → {st} {miss:,.2f}')
         wolt = gsum([l for l in bl if l['class'] == 'SKIP_WOLT'])
@@ -355,7 +365,9 @@ def report(month):
         out.append(f'  GOODS_NEW ₪{gnew:,.2f} | goods_adjustments ₪{adj:,.2f} → {gst}')
         print('\n'.join(out))
         money[b] = {'name': per_branch[b]['name'], 'royalty_gap': roy_gap,
+                    'roy_status': st,
                     'fees_missing': round(fee_missing, 2),
+                    'fees_manual_higher': round(fee_over, 2),
                     'wolt_missing': round(wx - wamt, 2) if wolt else 0.0,
                     'goods_new': round(gnew - adj, 2),
                     'credit': gsum([l for l in bl if l['class'] == 'CREDIT']),
@@ -364,17 +376,21 @@ def report(month):
 
     # ── TASK 4 money ──
     print('\nTASK 4 — MISSING money that should hit profit (gross ₪; + = more cost)')
-    cols = ['royalty_gap', 'fees_missing', 'wolt_missing', 'goods_new', 'equipment', 'credit', 'unknown']
+    cols = ['royalty_gap', 'fees_missing', 'wolt_missing', 'goods_new', 'equipment', 'credit',
+            'fees_manual_higher', 'unknown']
+    in_total = ['fees_missing', 'wolt_missing', 'goods_new', 'equipment', 'credit']
     print(f"{'branch':<26}" + ''.join(f'{c:>14}' for c in cols) + f"{'TOTAL*':>14}")
     tot = defaultdict(float)
-    for b, mrow in sorted(money.items(), key=lambda kv: -sum(kv[1][c] for c in cols[:-1])):
-        t = sum(mrow[c] for c in cols[:-1])
+    for b, mrow in sorted(money.items(), key=lambda kv: -(sum(kv[1][c] for c in in_total))):
+        t = sum(mrow[c] for c in in_total) + (
+            mrow['royalty_gap'] if mrow['roy_status'] == 'MODEL_DIFFERS' else 0)
         for c in cols:
             tot[c] += mrow[c]
         tot['T'] += t
-        print(f"{b:>5} {mrow['name'][:20]:<20}" + ''.join(f'{mrow[c]:>14,.2f}' for c in cols) + f'{t:>14,.2f}')
+        print(f"{b:>5} {mrow['name'][:20]:<20}" + ''.join(f'{mrow[c]:>14,.2f}' for c in cols) + f"{t:>14,.2f}  {mrow['roy_status']}")
     print(f"{'CHAIN':<26}" + ''.join(f'{tot[c]:>14,.2f}' for c in cols) + f"{tot['T']:>14,.2f}")
-    print('* TOTAL excludes UNKNOWN (never guessed into a bucket)')
+    print('* TOTAL = fees_missing+wolt+goods_new+equipment+credit (+royalty_gap only when '
+          'MODEL_DIFFERS). Excludes UNKNOWN, fees_manual_higher (review), NO_SALES royalty.')
 
     json.dump({'lines': lines, 'money': money}, open(f'/tmp/zik_audit_{month}_report.json', 'w'),
               ensure_ascii=False)
