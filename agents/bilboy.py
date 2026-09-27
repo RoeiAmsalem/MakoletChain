@@ -85,6 +85,13 @@ WOLT_COUNTED_STATUSES = {3, 5, 7, 11}
 # A manager-entered row whose name contains any of these is (probably) the
 # same money: the system row is NOT written and brrr is alerted instead.
 WOLT_MANUAL_NAME_HINTS = ('וולט', 'וואלט', 'wolt', 'עמלות מכירה', 'משלוחים')
+# Manager rows that match a hint above but were REVIEWED and confirmed NOT to
+# be Wolt fees. Exact (branch_id, name) pairs only — the same name at another
+# branch, or any other name at this branch, still blocks + alerts.
+WOLT_GUARD_CONFIRMED_NOT_WOLT = {
+    # reviewed 2026-09-27 by Roei: 9016 קריית טבעון, ₪158/mo, not Wolt
+    (9016, 'עמלות מכירה'),
+}
 
 
 def is_wolt_fee_line(item: dict) -> bool:
@@ -123,13 +130,15 @@ def extract_wolt_fee_total(docs: list) -> float:
 
 def _manual_wolt_like_rows(conn, branch_id: int, month: str) -> list:
     """Names of non-system fixed_expenses rows for branch+month that look like
-    Wolt fees (see WOLT_MANUAL_NAME_HINTS)."""
+    Wolt fees (see WOLT_MANUAL_NAME_HINTS), minus the reviewed exact
+    (branch_id, name) pairs in WOLT_GUARD_CONFIRMED_NOT_WOLT."""
     rows = conn.execute(
         "SELECT name FROM fixed_expenses WHERE branch_id=? AND month=? "
         "AND COALESCE(source, 'manual') != ?",
         (branch_id, month, WOLT_EXPENSE_SOURCE)).fetchall()
     return [r[0] for r in rows
-            if any(h in (r[0] or '').lower() for h in WOLT_MANUAL_NAME_HINTS)]
+            if any(h in (r[0] or '').lower() for h in WOLT_MANUAL_NAME_HINTS)
+            and (branch_id, r[0]) not in WOLT_GUARD_CONFIRMED_NOT_WOLT]
 
 
 def upsert_wolt_fee_expense(conn, branch_id: int, month: str, amount: float) -> str:

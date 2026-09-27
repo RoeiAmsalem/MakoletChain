@@ -340,26 +340,26 @@ def wolt_env(client, monkeypatch):
     monkeypatch.setattr(bilboy_module, 'notify',
                         lambda title, msg, **kw: sent.append((title, msg)))
 
-    def run(docs, today):
+    def run(docs, today, branch_id=1):
         fake = _FakeBilBoy(docs)
         monkeypatch.setattr(bilboy_module, '_api_get', fake)
-        res = sync_wolt_fees_window(None, '170', 1, ['13'], _LOG,
+        res = sync_wolt_fees_window(None, '170', branch_id, ['13'], _LOG,
                                     today_il=today, branch_name='אלפא')
         return fake, res
     return run, sent
 
 
-def _rows(month=None):
+def _rows(month=None, branch_id=1):
     conn = _db()
-    q = "SELECT month, name, amount, source FROM fixed_expenses WHERE branch_id=1"
+    q = "SELECT month, name, amount, source FROM fixed_expenses WHERE branch_id=?"
     rows = [dict(r) for r in conn.execute(q + (" AND month=?" if month else ""),
-                                          ((month,) if month else ()))]
+                                          ((branch_id, month) if month else (branch_id,)))]
     conn.close()
     return rows
 
 
-def _wolt(month):
-    r = [x for x in _rows(month) if x['source'] == WOLT_EXPENSE_SOURCE]
+def _wolt(month, branch_id=1):
+    r = [x for x in _rows(month, branch_id) if x['source'] == WOLT_EXPENSE_SOURCE]
     return r[0]['amount'] if r else None
 
 
@@ -481,6 +481,52 @@ def test_fuzzy_manager_row_blocks_write_and_alerts(wolt_env, manual_name):
     assert rows == [{'month': '2026-09', 'name': manual_name, 'amount': 777,
                      'source': 'manual'}]
     assert len(sent) == 1 and 'NOT written' in sent[0][1]
+
+
+def _manual(branch_id, name, month='2026-09', amount=158):
+    conn = _db()
+    conn.execute("INSERT INTO fixed_expenses (branch_id, month, name, amount, "
+                 "expense_type, source) VALUES (?, ?, ?, ?, 'monthly', 'manual')",
+                 (branch_id, month, name, amount))
+    conn.commit()
+    conn.close()
+
+
+_SEP_INV = [_hdr('i', '2026-09-10', 118.0, 100.0, [(_W61, 100.0)])]
+
+
+def test_reviewed_allowlist_pair_is_exact():
+    assert (9016, 'עמלות מכירה') in bilboy_module.WOLT_GUARD_CONFIRMED_NOT_WOLT
+
+
+def test_9016_reviewed_row_does_not_block(wolt_env):
+    run, sent = wolt_env
+    _manual(9016, 'עמלות מכירה')
+    _, res = run(_SEP_INV, date(2026, 9, 20), branch_id=9016)
+    assert res[0]['action'] == 'upserted'
+    assert _wolt('2026-09', 9016) == 118.0
+    assert {'month': '2026-09', 'name': 'עמלות מכירה', 'amount': 158,
+            'source': 'manual'} in _rows('2026-09', 9016)
+    assert sent == []
+
+
+def test_same_name_other_branch_still_blocks(wolt_env):
+    run, sent = wolt_env
+    _manual(9017, 'עמלות מכירה')
+    _, res = run(_SEP_INV, date(2026, 9, 20), branch_id=9017)
+    assert res[0]['action'] == 'blocked_by_manual_row'
+    assert _wolt('2026-09', 9017) is None
+    assert len(sent) == 1 and 'NOT written' in sent[0][1]
+
+
+def test_9016_other_wolt_name_still_blocks(wolt_env):
+    run, sent = wolt_env
+    _manual(9016, 'עמלות מכירה')
+    _manual(9016, 'וולט', amount=900)
+    _, res = run(_SEP_INV, date(2026, 9, 20), branch_id=9016)
+    assert res[0]['action'] == 'blocked_by_manual_row'
+    assert _wolt('2026-09', 9016) is None
+    assert len(sent) == 1 and 'וולט' in sent[0][1] and 'עמלות מכירה' not in sent[0][1]
 
 
 def test_prev_month_still_zero_after_day_7_with_invoice_alerts(wolt_env):
