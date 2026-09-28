@@ -38,17 +38,30 @@ def strip_store_suffix(name: str, branch_name: str = '') -> str:
     return _clean_name(name, branch_name)
 
 
-def _check_alias(csv_name: str, branch_id: int, db_employees: list):
-    """Check employee_aliases table for a match. Returns (emp_id, confidence, name, rate) or None."""
+def _check_alias(csv_name: str, branch_id: int, db_employees: list, branch_name: str = ''):
+    """Check employee_aliases table for a match. Returns (emp_id, confidence, name, rate) or None.
+
+    Tries the raw name first, then the store-suffix-stripped name. Aliases are
+    saved from pending rows, which store strip_store_suffix(raw) — so a raw Aviv
+    name like 'קוראפ עובד זר רמת גן' must also be looked up as 'קוראפ עובד זר'.
+    """
+    candidates = [csv_name.strip()]
+    stripped = _clean_name(csv_name, branch_name)
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
         conn.row_factory = sqlite3.Row
-        alias = conn.execute(
-            '''SELECT ea.employee_id FROM employee_aliases ea
-               JOIN employees e ON e.id = ea.employee_id
-               WHERE ea.branch_id=? AND ea.alias_name=? AND e.active=1''',
-            (branch_id, csv_name.strip())
-        ).fetchone()
+        alias = None
+        for cand in candidates:
+            alias = conn.execute(
+                '''SELECT ea.employee_id FROM employee_aliases ea
+                   JOIN employees e ON e.id = ea.employee_id
+                   WHERE ea.branch_id=? AND ea.alias_name=? AND e.active=1''',
+                (branch_id, cand)
+            ).fetchone()
+            if alias:
+                break
         conn.close()
         if alias:
             emp_id = alias['employee_id']
@@ -68,7 +81,7 @@ def match_employee_name(csv_name: str, db_employees: list, branch_name: str = ''
     """
     # Check aliases first
     if branch_id:
-        alias_match = _check_alias(csv_name, branch_id, db_employees)
+        alias_match = _check_alias(csv_name, branch_id, db_employees, branch_name)
         if alias_match:
             return alias_match
 
