@@ -517,6 +517,19 @@ def update_employee_hours(branch_id: int, month: str, parsed: list[dict], conn) 
             # matcher (and manager UI) actually compares against. Matched-path
             # already does this implicitly via match_employee_name → _clean_name.
             stored_name = strip_store_suffix(raw_name, branch_name) or raw_name
+            # A manager already decided on this name (resolved row this month,
+            # or an alias saved on approve/add) — never re-flag it.
+            already_decided = conn.execute(
+                '''SELECT 1 FROM employee_match_pending
+                   WHERE branch_id=? AND month=? AND csv_name=? AND resolved=1
+                   UNION ALL
+                   SELECT 1 FROM employee_aliases
+                   WHERE branch_id=? AND alias_name IN (?, ?)
+                   LIMIT 1''',
+                (branch_id, month, stored_name,
+                 branch_id, stored_name, raw_name.strip())).fetchone()
+            if already_decided:
+                continue
             existing = conn.execute(
                 '''SELECT id FROM employee_match_pending
                    WHERE branch_id=? AND month=? AND csv_name=? AND resolved=0''',
