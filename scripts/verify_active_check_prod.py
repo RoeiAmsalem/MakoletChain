@@ -29,6 +29,9 @@ for name in os.listdir(REPO):
     if name not in ('db', '.git'):
         os.symlink(os.path.join(REPO, name), os.path.join(tmp, name))
 os.makedirs(os.path.join(tmp, 'db'))
+for name in os.listdir(os.path.join(REPO, 'db')):
+    if not name.startswith('makolet_chain.db'):     # schema.sql etc.
+        os.symlink(os.path.join(REPO, 'db', name), os.path.join(tmp, 'db', name))
 snap = os.path.join(tmp, 'db', 'makolet_chain.db')
 src = sqlite3.connect(f"file:{os.path.join(REPO, 'db', 'makolet_chain.db')}?mode=ro",
                       uri=True)
