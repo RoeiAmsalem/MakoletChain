@@ -257,6 +257,44 @@ def _record_event(event_type, page=None, branch_id=None, duration_seconds=None):
             pass
 
 
+_ACTIVE_CHECK_EXEMPT_PATHS = ('/login', '/logout', '/health',
+                              '/forgot-password', '/reset-password')
+
+
+@app.before_request
+def _enforce_active_user():
+    """Deactivation must end EXISTING sessions, not just block new logins.
+
+    The login query requires users.active=1, but a 30-day remember-me cookie
+    outlives that check — so every request re-reads the flag. Missing row or
+    active=0 → session cleared; pages → /login, API/JSON → 401.
+
+    Registered BEFORE _track_page_view and _billing_paywall so a blocked
+    request writes no page_view. FAIL-OPEN: if the lookup itself errors (DB
+    locked etc.) the request goes through — a DB hiccup must never log out
+    every user.
+    """
+    if 'user_id' not in session:
+        return
+    path = request.path
+    if path.startswith('/static/') or path in _ACTIVE_CHECK_EXEMPT_PATHS:
+        return
+    try:
+        row = get_db().execute('SELECT active FROM users WHERE id = ?',
+                               (session['user_id'],)).fetchone()
+    except Exception as e:
+        app.logger.warning(f"_enforce_active_user lookup failed (fail-open): {e}")
+        return
+    if row is not None and row['active']:
+        return
+    app.logger.info(f"active-check: ended session for user {session.get('user_id')} "
+                    f"({'deleted' if row is None else 'inactive'})")
+    session.clear()
+    if path.startswith('/api/') or request.is_json:
+        return jsonify({'error': 'יש להתחבר מחדש', 'redirect': '/login'}), 401
+    return redirect(url_for('login'))
+
+
 @app.before_request
 def _track_page_view():
     """Track authenticated GETs to HTML pages. Skips API, static, beacons."""
